@@ -1,0 +1,325 @@
+const DailyLectureReport = require("../models/dailyLectureReport");
+const Trainer = require("../models/trainersModel");
+const TrainerCenterAllocation = require("../models/trainersCenterAllocationModel");
+const MasterTrainerModel = require("../models/masterTrainersModel");
+const User = require("../models/userModel");
+const Center = require("../models/center");
+const Course = require("../models/course");
+const TrainingBatch = require("../models/trainingBatcheModel");
+const CenterDates = require("../models/centersDatesModel");
+const { Op } = require("sequelize");
+const Holiday = require("../models/holidaysModel");
+const Attendance = require("../models/attendanceModel");
+const createReport = async (req, res) => {
+  try {
+    const {
+      t_id,
+      tb_id,
+      dlr_date,
+      dlr_title,
+      dlr_topics,
+      dlr_practical,
+      dlr_assignment,
+      dlr_challenges,
+      dlr_month,
+    } = req.body;
+
+    // Normalize and validate date format (should be YYYY-MM-DD)
+    const dateRegex = /^\d{4}-\d{2}-\d{2}$/;
+    if (!dateRegex.test(dlr_date)) {
+      return res.status(400).json({ error: "Invalid date format. Expected YYYY-MM-DD" });
+    }
+
+    const reportDate = new Date(dlr_date);
+    if (isNaN(reportDate.getTime())) {
+      return res.status(400).json({ error: "Invalid date format" });
+    }
+
+    // Check if date is in the future
+    const today = new Date();
+    today.setHours(0, 0, 0, 0);
+    const checkDate = new Date(dlr_date);
+    checkDate.setHours(0, 0, 0, 0);
+    
+    if (checkDate > today) {
+      return res
+        .status(400)
+        .json({ error: "Future dates are not allowed for reports" });
+    }
+
+    const trainer = await Trainer.findOne({ where: { user_id: t_id } });
+    if (!trainer) {
+      return res.status(404).json({ message: "Trainer not found" });
+    }
+
+    const trainerCenter = await TrainerCenterAllocation.findOne({
+      where: { t_id: trainer.t_id, tb_id },
+    });
+
+    if (!trainerCenter) {
+      return res
+        .status(404)
+        .json({ message: "Trainer is not allocated to this batch" });
+    }
+
+    const center_id = trainerCenter.center_id;
+    const course_id = trainerCenter.course_id;
+    const reportData = {
+      t_id: trainer.t_id,
+      center_id,
+      course_id,
+      tb_id,
+      dlr_date,
+      dlr_title,
+      dlr_topics,
+      dlr_practical,
+      dlr_assignment,
+      dlr_challenges,
+      dlr_month,
+    };
+
+    // Check if report already exists for this trainer, batch, and date
+    // Use exact string comparison for date (both in YYYY-MM-DD format)
+    const existingReport = await DailyLectureReport.findOne({
+      where: {
+        t_id: trainer.t_id,
+        tb_id,
+        dlr_date: dlr_date.trim(), // Ensure no whitespace
+      },
+    });
+
+    if (existingReport) {
+      return res.status(400).json({
+        success: false,
+        message: `Report for this date ${dlr_date} is already submitted`,
+      });
+    }
+    const report = await DailyLectureReport.create(reportData);
+
+    res.status(201).json({
+      success: true,
+      message: `Report created successfully for date ${dlr_date}`,
+      data: report,
+    });
+  } catch (error) {
+    console.error("Report creation error:", error);
+    if (error.name === "SequelizeUniqueConstraintError") {
+      return res
+        .status(400)
+        .json({ error: "A report for this date and batch already exists" });
+    }
+
+    res.status(400).json({ error: error.message });
+  }
+};
+
+const getAllReports = async (req, res) => {
+  try {
+    const { tb_id, t_id, userType, center_id, course_id } = req.params;
+    
+    // 1. Set the base conditions for the specific Center and Batch selected
+    const conditions = {
+      tb_id: parseInt(tb_id),
+      center_id: parseInt(center_id),
+    };
+
+    // 2. Apply Role-Specific Filters
+    if (userType === "trainer") {
+      // Trainer: Lock to their specific trainer ID so they only see their own reports
+      const trainer = await Trainer.findOne({ where: { user_id: t_id } });
+      if (!trainer) {
+        return res.status(404).json({ message: "Trainer not found" });
+      }
+      conditions.t_id = trainer.t_id;
+      conditions.course_id = parseInt(course_id);
+
+    } else if (userType === "MasterTrainer") {
+      // Master Trainer: Show all reports at the selected center 
+      // for the master trainer's assigned course
+      const mt = await MasterTrainerModel.findOne({ where: { user_id: t_id } });
+      if (!mt) {
+        return res.status(404).json({ message: "Master Trainer not found" });
+      }
+
+      // Filter by the master trainer's course ID
+      // This will show reports from all trainers teaching this course at this center
+      conditions.course_id = mt.mt_course_id;
+
+    } else {
+      // Admin/SuperAdmin/CenterManager: Use the exact center_id and course_id passed
+      conditions.course_id = parseInt(course_id);
+    }
+
+    // 3. Fetch specific Center Dates for progress calculations
+    const centerDates = await CenterDates.findOne({
+      where: { 
+        tb_id: parseInt(tb_id),
+        center_id: parseInt(center_id),
+      },
+    });
+
+    if (!centerDates) {
+      return res.status(200).json({ 
+        message: "This center has no scheduled classes",
+        reports: []
+      });
+    }
+
+    const centerBatchStartDate = centerDates.tb_start;
+    const centerBatchEndDate = centerDates.tb_end;
+
+    const startDate = new Date(centerBatchStartDate).toISOString().split("T")[0];
+    const today = new Date();
+    const tbEndDate = new Date(centerBatchEndDate);
+    
+    let endDateObj = tbEndDate;
+    if (today < tbEndDate) {
+      endDateObj = today;
+    }
+    const endDate = endDateObj.toISOString().split("T")[0];
+    
+    const workingDays = [];
+    let iterDate = new Date(startDate);
+    const lastDate = new Date(endDate);
+    
+    while (iterDate <= lastDate) {
+      const dayOfWeek = iterDate.getDay();
+      if (dayOfWeek !== 0 && dayOfWeek !== 6) { // Skip Weekends
+        workingDays.push(iterDate.toISOString().split("T")[0]);
+      }
+      iterDate.setDate(iterDate.getDate() + 1);
+    }
+
+    const holidays = await Holiday.findAll({
+      where: {
+        tb_id: parseInt(tb_id),
+        h_date: { [Op.between]: [startDate, endDate] },
+      },
+      attributes: ["h_date"],
+      raw: true,
+    });
+    
+    const holidaySet = new Set(holidays.map((h) => {
+      if (typeof h.h_date === 'string' && h.h_date.includes('T')) return h.h_date.split('T')[0];
+      return new Date(h.h_date).toISOString().split('T')[0];
+    }));
+
+    // 4. Fetch the specific reports!
+    const reports = await DailyLectureReport.findAll({
+      where: conditions,
+      include: [
+        {
+          model: Center,
+          as: "centers",
+          attributes: ["center_id", "center_name"],
+        },
+        {
+          model: Course,
+          as: "courses",
+          attributes: ["course_id", "course_name"],
+        },
+        {
+          model: Trainer,
+          as: "trainers",
+          attributes: ["t_id", "user_id"],
+          include: [
+            {
+              model: User,
+              as: "user",
+              attributes: ["user_name", "user_profile_photo"],
+            },
+          ],
+        },
+        {
+          model: TrainingBatch,
+          as: "training_batches",
+          attributes: ["tb_id", "tb_name"],
+        },
+      ],
+      order: [["dlr_date", "DESC"]], // Show newest reports first
+    });
+
+    const reportDateSet = new Set(reports.map((r) => r.dlr_date));
+
+    const missingReportDates = workingDays.filter(
+      (date) => !holidaySet.has(date) && !reportDateSet.has(date)
+    );
+    const submittedReportDates = workingDays.filter((date) =>
+      reportDateSet.has(date)
+    );
+
+    if (reports.length > 0) {
+      const totalDays = workingDays.filter(date => !holidaySet.has(date)).length;
+      const submittedDays = submittedReportDates.length;
+      const reportPercentage = totalDays > 0 ? ((submittedDays / totalDays) * 100).toFixed(2) : "0.00";
+
+      const holidayDates = Array.from(holidaySet);
+
+      return res.status(200).json({
+        reports,
+        reportPercentage: Number(reportPercentage),
+        totalDays,
+        submittedDays,
+        centerBatchStartDate,
+        centerBatchEndDate,
+        missingReportDates,
+        submittedReportDates,
+        holidayDates, 
+      });
+    }
+
+    return res.status(200).json({ reports: [] });
+  } catch (error) {
+    console.error("Error fetching reports:", error);
+    res.status(500).json({ error: error.message });
+  }
+};
+
+
+const getReportById = async (req, res) => {
+  try {
+    const report = await DailyLectureReport.findByPk(req.params.id, {
+      include: ["trainers", "centers", "courses", "training_batches"],
+    });
+    if (!report) {
+      return res.status(404).json({ message: "Report not found" });
+    }
+    res.status(200).json(report);
+  } catch (error) {
+    res.status(500).json({ error: error.message });
+  }
+};
+
+const updateReport = async (req, res) => {
+  try {
+    const report = await DailyLectureReport.findByPk(req.params.id);
+    if (!report) {
+      return res.status(404).json({ message: "Report not found" });
+    }
+    await report.update(req.body);
+    res.status(200).json(report);
+  } catch (error) {
+    res.status(400).json({ error: error.message });
+  }
+};
+
+const deleteReport = async (req, res) => {
+  try {
+    const report = await DailyLectureReport.findByPk(req.params.id);
+    if (!report) {
+      return res.status(404).json({ message: "Report not found" });
+    }
+    await report.destroy();
+    res.status(204).send();
+  } catch (error) {
+    res.status(500).json({ error: error.message });
+  }
+};
+
+module.exports = {
+  createReport,
+  getAllReports,
+  getReportById,
+  updateReport,
+  deleteReport,
+};

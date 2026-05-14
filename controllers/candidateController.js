@@ -1,0 +1,952 @@
+const Candidate = require("../models/CandidateModel");
+const Course = require("../models/course");
+const Center = require("../models/center");
+const TrainingBatch = require("../models/trainingBatcheModel");
+const { validationResult } = require("express-validator");
+const { Op } = require("sequelize");
+const db = require("../config/db"); // Add this line to import your database configuration
+const sequelize = db.sequelize;
+const Student = require("../models/studentModel");
+const sendEmail = require("../servec/emailConfig");
+const { validateAdmissionAvailability } = require("./admissionControlController");
+const AdmissionControl = require("../models/admissionControlModel");
+// Create Candidate
+exports.createCandidate = async (req, res) => {
+  const errors = validationResult(req);
+  if (!errors.isEmpty()) {
+    return res.status(400).json({ errors: errors.array() });
+  }
+
+  try {
+    const candidateData = req.body;
+    const admissionCheck = await validateAdmissionAvailability({
+      tb_id: candidateData.tb_id,
+      center_id: candidateData.center_id,
+      course_id: candidateData.course_id,
+      gender: candidateData.cand_gender,
+    });
+
+    if (!admissionCheck.allowed) {
+      return res.status(400).json({ message: admissionCheck.message });
+    }
+    
+    // Check if candidate already exists for this batch
+    const existingCandidate = await Candidate.findOne({
+      where: { 
+        cand_cnic: candidateData.cand_cnic, 
+        tb_id: candidateData.tb_id 
+      },
+    });
+    
+    const user_profile_photo = req.file
+      ? `/uploads/candidate_photos/${req.file.filename}`
+      : null;
+    candidateData.cand_photo = user_profile_photo;
+    
+    if (existingCandidate) {
+      return res
+        .status(400)
+        .json({ message: "You have already applied for this batch" });
+    }
+
+    // Validate guardian WhatsApp number and where_find_us
+    if (!candidateData.guardian_whatsapp) {
+      return res
+        .status(400)
+        .json({ message: "Guardian WhatsApp number is required" });
+    }
+
+    if (!candidateData.where_find_us) {
+      return res
+        .status(400)
+        .json({ message: "Information about where you found us is required" });
+    }
+
+    // Create new candidate
+    const newCandidate = await Candidate.create(candidateData);
+    res.status(201).json({
+      message: "Candidate created successfully",
+      candidate: newCandidate,
+    });
+  } catch (error) {
+    console.error("Candidate creation error:", error);
+    res.status(500).json({ message: "Server error during candidate creation" });
+  }
+};
+// Check if Candidate Exists by CNIC
+exports.checkCandidateByCnic = async (req, res) => {
+  try {
+    const { cnic } = req.params;
+    const { tb_id } = req.query; // Get batch ID from query parameter
+
+    // If no tb_id provided, return error
+    if (!tb_id) {
+      return res.status(400).json({ 
+        message: "Batch ID (tb_id) is required" 
+      });
+    }
+
+    const openAdmissionsCount = await AdmissionControl.count({
+      where: { tb_id: Number(tb_id) },
+    });
+
+    if (!openAdmissionsCount) {
+      return res.json({
+        success: false,
+        admissions_open: false,
+        message: "Admissions are currently closed for this batch",
+      });
+    }
+
+    // Check if already enrolled as a student in this batch
+    const studentData = await Student.findOne({
+      where: { 
+        std_cnic: cnic,
+      },
+    });
+    
+    if (studentData) {
+      return res.json({
+        success: true,
+        message:
+          "You are already enrolled as a student in Training Batch " +
+          studentData.tb_id +
+          " with Roll Number: " +
+          studentData.std_rollno,
+        name: studentData.std_fathername, // Or get name from user table if available
+        student_data: true,
+      });
+    }
+
+    // Check if already applied as a candidate in this batch
+    const candidate = await Candidate.findOne({
+      where: { 
+        cand_cnic: cnic, 
+        tb_id: tb_id 
+      },
+      include: [
+        {
+          model: Course,
+          as: "courses",
+          attributes: ["course_name", "course_full_name"],
+        },
+        {
+          model: Center,
+          as: "centers",
+          attributes: ["center_name"],
+        },
+      ],
+    });
+
+    if (!candidate) {
+      return res.json({ 
+        success: false,
+        message: "Candidate not found" 
+      });
+    }
+    
+    res.json({
+      success: true,
+      message: "You have already applied for this batch",
+      name: candidate.cand_name,
+      candidate,
+      student_data: false,
+    });
+  } catch (error) {
+    console.error("Error checking candidate by CNIC:", error);
+    res
+      .status(500)
+      .json({ message: "Server error checking candidate by CNIC" });
+  }
+};
+
+// Get Candidate Profile
+exports.getCandidateById = async (req, res) => {
+  try {
+    const candidateId = req.params.id;
+
+    const candidate = await Candidate.findByPk(candidateId, {
+      include: [
+        {
+          model: Course,
+          as: "courses",
+          attributes: ["course_name", "course_full_name"],
+        },
+        {
+          model: Center,
+          as: "centers",
+          attributes: ["center_name"],
+        },
+        {
+          model: TrainingBatch,
+          as: "training_batches",
+          attributes: ["batch_name", "batch_status"],
+        },
+      ],
+    });
+
+    if (!candidate) {
+      return res.status(404).json({ message: "Candidate not found" });
+    }
+
+    res.json(candidate);
+  } catch (error) {
+    console.error("Candidate profile fetch error:", error);
+    res
+      .status(500)
+      .json({ message: "Server error fetching candidate profile" });
+  }
+};
+exports.getAllSelectedCandidates = async (req, res) => {
+  try {
+    const { tb_id } = req.params;
+    const today = new Date();
+    today.setHours(0, 0, 0, 0);
+
+    // Add tb_id filter to all queries
+    const whereClause = {
+      tb_id: tb_id,
+      [Op.and]: [
+        { cand_interview_marks: { [Op.ne]: null } },
+        { cand_interview_marks: { [Op.ne]: "" } },
+      ], // Only get candidates with interview marks
+    };
+    // Get candidate info
+    const candidate = await Candidate.findOne({
+      where: whereClause,
+      attributes: ["cand_name", "cand_id", "cand_cnic"],
+    });
+    const candidateAttributes = await Candidate.findAll({
+      where: whereClause,
+      include: [
+        {
+          model: Course,
+          as: "courses",
+          attributes: ["course_name", "course_full_name"],
+        },
+        {
+          model: Center,
+          as: "centers",
+          attributes: ["center_name"],
+        },
+      ],
+    });
+    // Get all statistics
+    const [
+      totalCandidates,
+      passedCandidates,
+      failedCandidates,
+      notAttempted,
+      rejectedCandidates,
+      appliedToday,
+      interviewsTaken,
+      recommendedCount,
+      notRecommendedCount,
+      rejectedCount,
+      laptopCount,
+      noLaptopCount,
+    ] = await Promise.all([
+      Candidate.count({ where: whereClause }),
+      Candidate.count({
+        where: { ...whereClause, cand_test_marks: { [Op.gt]: 10 } },
+      }),
+      Candidate.count({
+        where: {
+          ...whereClause,
+          cand_test_marks: { [Op.gt]: 0, [Op.lte]: 10 },
+        },
+      }),
+
+      Candidate.count({
+        where: { ...whereClause, cand_test_marks: "" },
+      }),
+      Candidate.count({
+        where: { ...whereClause, cand_admission_status: 2 },
+      }),
+      Candidate.count({
+        where: {
+          ...whereClause,
+          [Op.and]: sequelize.where(
+            sequelize.fn("DATE", sequelize.col("cand_apply_date")),
+            "=",
+            sequelize.fn("CURDATE")
+          ),
+        },
+      }),
+      Candidate.count({
+        where: {
+          ...whereClause,
+          interview_date: { [Op.ne]: null },
+        },
+      }),
+      Candidate.count({
+        where: {
+          ...whereClause,
+          recommended: "Yes",
+        },
+      }),
+      Candidate.count({
+        where: {
+          ...whereClause,
+          recommended: "No",
+        },
+      }),
+      Candidate.count({
+        where: {
+          ...whereClause,
+          cand_admission_status: 2,
+        },
+      }),
+      Candidate.count({
+        where: {
+          ...whereClause,
+          laptop_pc: "Yes",
+        },
+      }),
+      Candidate.count({
+        where: {
+          ...whereClause,
+          laptop_pc: "No",
+        },
+      }),
+    ]);
+
+    // Gender statistics with tb_id filter
+    const genderStats = await Candidate.findAll({
+      where: {
+        ...whereClause,
+        cand_admission_status: { [Op.in]: [1] }, // Added missing closing brace
+      },
+      attributes: [
+        "cand_gender",
+        [sequelize.fn("COUNT", sequelize.col("cand_id")), "total"],
+        [
+          sequelize.fn(
+            "SUM",
+            sequelize.literal(
+              "CASE WHEN cand_admission_status = 'passed' THEN 1 ELSE 0 END"
+            )
+          ),
+          "passed",
+        ],
+      ],
+      group: ["cand_gender"],
+      raw: true,
+    });
+
+    // Course summary with tb_id filter
+    const courseSummary = await Candidate.findAll({
+      where: {
+        ...whereClause,
+        cand_admission_status: { [Op.in]: [1] }, // Added missing closing brace
+      },
+      attributes: [
+        [sequelize.fn("COUNT", sequelize.col("Candidate.cand_id")), "count"],
+        [sequelize.col("courses.course_full_name"), "course_full_name"],
+        [sequelize.col("courses.course_name"), "course_name"],
+      ],
+      include: [
+        {
+          model: Course,
+          as: "courses",
+          attributes: [],
+        },
+      ],
+      group: ["courses.course_full_name", "courses.course_name"],
+      raw: true,
+    });
+
+    // Division summary with tb_id filter
+    const divisionSummary = await Candidate.findAll({
+      where: {
+        ...whereClause,
+        cand_admission_status: { [Op.in]: [1] },
+        cand_local_domicile: {
+          [Op.ne]: null,
+        }, // Added missing closing brace
+      },
+
+      attributes: [
+        "cand_local_domicile",
+        [sequelize.fn("COUNT", sequelize.col("cand_id")), "count"],
+      ],
+      group: ["cand_local_domicile"],
+      raw: true,
+    });
+
+    // Center summary with tb_id filter
+    const centerSummary = await Candidate.findAll({
+      where: {
+        ...whereClause,
+        cand_admission_status: { [Op.in]: [1] }, // Added missing closing brace
+      },
+      attributes: [
+        [sequelize.col("centers.center_name"), "center_name"],
+        [sequelize.col("courses.course_name"), "course_name"],
+        "cand_gender",
+        [sequelize.fn("COUNT", sequelize.col("Candidate.cand_id")), "count"],
+      ],
+      include: [
+        {
+          model: Center,
+          as: "centers",
+          attributes: [],
+          required: true,
+        },
+        {
+          model: Course,
+          as: "courses",
+          attributes: [],
+          required: true,
+        },
+      ],
+      group: ["centers.center_name", "courses.course_name", "cand_gender"],
+      raw: true,
+    });
+
+    // Format center summary
+    const formattedCenterSummary = centerSummary.reduce((acc, curr) => {
+      const centerName = curr.center_name;
+      const courseName = curr.course_name;
+      const gender = curr.cand_gender.toLowerCase();
+      const count = parseInt(curr.count, 10);
+
+      if (!acc[centerName]) {
+        acc[centerName] = {
+          total: 0,
+          male: 0,
+          female: 0,
+          courses: {},
+        };
+      }
+
+      if (!acc[centerName].courses[courseName]) {
+        acc[centerName].courses[courseName] = {
+          total: 0,
+          male: 0,
+          female: 0,
+        };
+      }
+
+      // Update center totals
+      acc[centerName].total += count;
+      acc[centerName][gender] += count;
+
+      // Update course totals
+      acc[centerName].courses[courseName].total += count;
+      acc[centerName].courses[courseName][gender] += count;
+
+      return acc;
+    }, {});
+
+    const response = {
+      candidateInfo: candidate
+        ? {
+            message: "Candidate found",
+            name: candidate.cand_name,
+            id: candidate.cand_id,
+            cand_cnic: candidate.cand_cnic,
+          }
+        : { message: "Candidate not found" },
+      candidates: candidateAttributes,
+      statistics: {
+        applicationSummary: {
+          totalApplied: totalCandidates,
+          passed: passedCandidates,
+          failed: failedCandidates,
+          testNotAttempted: notAttempted,
+          rejected: rejectedCandidates,
+          appliedToday: appliedToday,
+        },
+        interviewSummary: {
+          interviewsTaken,
+          recommended: recommendedCount,
+          notRecommended: notRecommendedCount,
+          rejected: rejectedCount,
+          haveLaptop: laptopCount,
+          noLaptop: noLaptopCount,
+        },
+        genderSummary: {
+          male: {
+            total: Number(
+              genderStats.find((s) => s.cand_gender.toLowerCase() === "male")?.total || 0
+            ),
+            passed: Number(
+              genderStats.find((s) => s.cand_gender === "Male")?.passed || 0
+            ),
+          },
+          female: {
+            total: Number(
+              genderStats.find((s) => s.cand_gender === "Female")?.total || 0
+            ),
+            passed: Number(
+              genderStats.find((s) => s.cand_gender === "Female")?.passed || 0
+            ),
+          },
+        },
+        courseSummary: courseSummary.reduce(
+          (acc, curr) => ({
+            ...acc,
+            [curr.course_name]: Number(curr.count) || 0,
+            [curr.course_full_name]: Number(curr.count) || 0,
+            [curr.course_name]: Number(curr.count) || 0,
+          }),
+          {}
+        ),
+        divisionSummary: divisionSummary.reduce(
+          (acc, curr) => ({
+            ...acc,
+            [curr.cand_local_domicile]: Number(curr.count),
+          }),
+          {}
+        ),
+        centerSummary: formattedCenterSummary,
+      },
+    };
+
+    res.json(response);
+  } catch (error) {
+    console.error("Error checking candidate by CNIC:", error);
+    res
+      .status(500)
+      .json({ message: "Server error checking candidate by CNIC" });
+  }
+};
+
+// Get All Candidates
+exports.getAllCandidates = async (req, res) => {
+  try {
+    const { tb_id } = req.params;
+    const today = new Date();
+    today.setHours(0, 0, 0, 0);
+
+    // Add tb_id filter to all queries
+    const whereClause = { tb_id: tb_id };
+
+    // Get candidate info
+    const candidate = await Candidate.findOne({
+      where: whereClause,
+      attributes: ["cand_name", "cand_id", "cand_cnic"],
+    });
+    const candidateAttributes = await Candidate.findAll({
+      where: whereClause,
+      include: [
+        {
+          model: Course,
+          as: "courses",
+          attributes: ["course_name", "course_full_name"],
+        },
+        {
+          model: Center,
+          as: "centers",
+          attributes: ["center_name"],
+        },
+      ],
+    });
+    // Get all statistics
+    const [
+      totalCandidates,
+      passedCandidates,
+      failedCandidates,
+      notAttempted,
+      rejectedCandidates,
+      appliedToday,
+    ] = await Promise.all([
+      Candidate.count({ where: whereClause }),
+      Candidate.count({
+        where: { ...whereClause, cand_test_marks: { [Op.gt]: 10 } },
+      }),
+      Candidate.count({
+        where: {
+          ...whereClause,
+          cand_test_marks: { [Op.gt]: 0, [Op.lte]: 10 },
+        },
+      }),
+
+      Candidate.count({
+        where: { ...whereClause, cand_test_marks: "" },
+      }),
+      Candidate.count({
+        where: { ...whereClause, cand_admission_status: 2 },
+      }),
+      Candidate.count({
+        where: {
+          ...whereClause,
+          [Op.and]: sequelize.where(
+            sequelize.fn("DATE", sequelize.col("cand_apply_date")),
+            "=",
+            sequelize.fn("CURDATE")
+          ),
+        },
+      }),
+    ]);
+
+    // Gender statistics with tb_id filter
+    const genderStats = await Candidate.findAll({
+      where: whereClause,
+      attributes: [
+        "cand_gender",
+        [sequelize.fn("COUNT", sequelize.col("cand_id")), "total"],
+        [
+          sequelize.fn(
+            "SUM",
+            sequelize.literal(
+              "CASE WHEN cand_admission_status = 'passed' THEN 1 ELSE 0 END"
+            )
+          ),
+          "passed",
+        ],
+      ],
+      group: ["cand_gender"],
+      raw: true,
+    });
+
+    // Course summary with tb_id filter
+    const courseSummary = await Candidate.findAll({
+      where: whereClause,
+      attributes: [
+        [sequelize.fn("COUNT", sequelize.col("Candidate.cand_id")), "count"],
+        [sequelize.col("courses.course_full_name"), "course_full_name"],
+        [sequelize.col("courses.course_name"), "course_name"],
+      ],
+      include: [
+        {
+          model: Course,
+          as: "courses",
+          attributes: [],
+        },
+      ],
+      group: ["courses.course_full_name", "courses.course_name"],
+      raw: true,
+    });
+
+    // Division summary with tb_id filter
+    const divisionSummary = await Candidate.findAll({
+      where: {
+        ...whereClause,
+        cand_local_domicile: {
+          [Op.ne]: null,
+        },
+      },
+      attributes: [
+        "cand_local_domicile",
+        [sequelize.fn("COUNT", sequelize.col("cand_id")), "count"],
+      ],
+      group: ["cand_local_domicile"],
+      raw: true,
+    });
+
+    // Center summary with tb_id filter
+    const centerSummary = await Candidate.findAll({
+      where: whereClause,
+      attributes: [
+        [sequelize.col("centers.center_name"), "center_name"],
+        [sequelize.col("courses.course_name"), "course_name"],
+        "cand_gender",
+        [sequelize.fn("COUNT", sequelize.col("Candidate.cand_id")), "count"],
+      ],
+      include: [
+        {
+          model: Center,
+          as: "centers",
+          attributes: [],
+          required: true,
+        },
+        {
+          model: Course,
+          as: "courses",
+          attributes: [],
+          required: true,
+        },
+      ],
+      group: ["centers.center_name", "courses.course_name", "cand_gender"],
+      raw: true,
+    });
+
+    // Format center summary
+    const formattedCenterSummary = centerSummary.reduce((acc, curr) => {
+      const centerName = curr.center_name;
+      const courseName = curr.course_name;
+      const gender = curr.cand_gender.toLowerCase();
+      const count = parseInt(curr.count, 10);
+
+      if (!acc[centerName]) {
+        acc[centerName] = {
+          total: 0,
+          male: 0,
+          female: 0,
+          courses: {},
+        };
+      }
+
+      if (!acc[centerName].courses[courseName]) {
+        acc[centerName].courses[courseName] = {
+          total: 0,
+          male: 0,
+          female: 0,
+        };
+      }
+
+      // Update center totals
+      acc[centerName].total += count;
+      acc[centerName][gender] += count;
+
+      // Update course totals
+      acc[centerName].courses[courseName].total += count;
+      acc[centerName].courses[courseName][gender] += count;
+
+      return acc;
+    }, {});
+
+    const response = {
+      candidateInfo: candidate
+        ? {
+            message: "Candidate found",
+            name: candidate.cand_name,
+            id: candidate.cand_id,
+            cand_cnic: candidate.cand_cnic,
+          }
+        : { message: "Candidate not found" },
+      candidates: candidateAttributes,
+      statistics: {
+        applicationSummary: {
+          totalApplied: totalCandidates,
+          passed: passedCandidates,
+          failed: failedCandidates,
+          testNotAttempted: notAttempted,
+          rejected: rejectedCandidates,
+          appliedToday: appliedToday,
+        },
+        genderSummary: {
+          male: {
+            total: Number(
+              genderStats.find((s) => s.cand_gender.toLowerCase() === "male")?.total || 0
+            ),
+            passed: Number(
+              genderStats.find((s) => s.cand_gender === "Male")?.passed || 0
+            ),
+          },
+          female: {
+            total: Number(
+              genderStats.find((s) => s.cand_gender === "Female")?.total || 0
+            ),
+            passed: Number(
+              genderStats.find((s) => s.cand_gender === "Female")?.passed || 0
+            ),
+          },
+        },
+        courseSummary: courseSummary.reduce(
+          (acc, curr) => ({
+            ...acc,
+            [curr.course_name]: Number(curr.count) || 0,
+            [curr.course_full_name]: Number(curr.count) || 0,
+            [curr.course_name]: Number(curr.count) || 0,
+          }),
+          {}
+        ),
+        divisionSummary: divisionSummary.reduce(
+          (acc, curr) => ({
+            ...acc,
+            [curr.cand_local_domicile]: Number(curr.count),
+          }),
+          {}
+        ),
+        centerSummary: formattedCenterSummary,
+      },
+    };
+
+    res.json(response);
+  } catch (error) {
+    console.error("Error checking candidate by CNIC:", error);
+    res
+      .status(500)
+      .json({ message: "Server error checking candidate by CNIC" });
+  }
+};
+
+// Update Candidate
+exports.updateCandidate = async (req, res) => {
+  try {
+    const candidateId = req.params.id;
+    const updateData = req.body;
+
+    // Validate guardian WhatsApp number and where_find_us if they're being updated
+    if (updateData.guardian_whatsapp === "") {
+      return res
+        .status(400)
+        .json({ message: "Guardian WhatsApp number cannot be empty" });
+    }
+
+    if (updateData.where_find_us === "") {
+      return res.status(400).json({
+        message: "Information about where you found us cannot be empty",
+      });
+    }
+
+    const [updatedRowsCount] = await Candidate.update(updateData, {
+      where: { cand_id: candidateId },
+    });
+
+    if (updatedRowsCount === 0) {
+      return res.status(404).json({ message: "Candidate not found" });
+    }
+
+    const updatedCandidate = await Candidate.findByPk(candidateId);
+
+    res.json({
+      message: "Candidate updated successfully",
+      candidate: updatedCandidate,
+    });
+  } catch (error) {
+    console.error("Candidate update error:", error);
+    res.status(500).json({ message: "Server error updating candidate" });
+  }
+};
+
+// Update Admission Status
+exports.updateAdmissionStatus = async (req, res) => {
+  try {
+    const candidateId = req.params.id;
+    const { cand_admission_status, reject_reason } = req.body;
+
+    const [updatedRowsCount] = await Candidate.update(
+      {
+        cand_admission_status,
+        reject_reason: reject_reason || "",
+      },
+      { where: { cand_id: candidateId } }
+    );
+
+    if (updatedRowsCount === 0) {
+      return res.status(404).json({ message: "Candidate not found" });
+    }
+
+    res.json({
+      message: "Admission status updated successfully",
+    });
+  } catch (error) {
+    console.error("Admission status update error:", error);
+    res.status(500).json({ message: "Server error updating admission status" });
+  }
+};
+
+// Update Interview Marks
+exports.updateInterviewMarks = async (req, res) => {
+  try {
+    const candidateId = req.params.id;
+    const { cand_interview_marks, interview_date } = req.body;
+
+    const [updatedRowsCount] = await Candidate.update(
+      {
+        cand_interview_marks,
+        interview_date,
+      },
+      { where: { cand_id: candidateId } }
+    );
+
+    if (updatedRowsCount === 0) {
+      return res.status(404).json({ message: "Candidate not found" });
+    }
+
+    res.json({
+      message: "Interview marks updated successfully",
+    });
+  } catch (error) {
+    console.error("Interview marks update error:", error);
+    res.status(500).json({ message: "Server error updating interview marks" });
+  }
+};
+
+// Update Test Marks
+exports.updateTestMarks = async (req, res) => {
+  try {
+    const candidateId = req.params.id;
+    const { cand_test_code, cand_test_marks } = req.body;
+
+    const [updatedRowsCount] = await Candidate.update(
+      {
+        cand_test_code,
+        cand_test_marks,
+      },
+      { where: { cand_id: candidateId } }
+    );
+
+    if (updatedRowsCount === 0) {
+      return res.status(404).json({ message: "Candidate not found" });
+    }
+
+    res.json({
+      message: "Test marks updated successfully",
+    });
+  } catch (error) {
+    console.error("Test marks update error:", error);
+    res.status(500).json({ message: "Server error updating test marks" });
+  }
+};
+
+// Update Interview Data
+exports.updateInterviewData = async (req, res) => {
+  try {
+    const { candidateId } = req.params;
+    const {
+      cand_interview_marks,
+      hasLaptop,
+      isRecommended,
+      courseTrack,
+      centerPriority,
+    } = req.body;
+
+    const [updatedRowsCount] = await Candidate.update(
+      {
+        cand_interview_marks,
+        laptop_pc: hasLaptop ? "Yes" : "No", // Store as string 'Yes' or 'No'
+        recommended: isRecommended ? "Yes" : "No", // Store as string 'Yes' or 'No'
+        course_second_priority: courseTrack || null,
+        center_second_priority: centerPriority || null,
+        interview_date: new Date().toISOString().split("T")[0], // Format as YYYY-MM-DD string
+        cand_admission_status: isRecommended ? 1 : 0, // 1 for passed/recommended
+      },
+      { where: { cand_id: candidateId } }
+    );
+
+    if (updatedRowsCount === 0) {
+      return res.status(404).json({ message: "Candidate not found" });
+    }
+
+    res.json({
+      success: true,
+      message: "Interview data updated successfully",
+    });
+  } catch (error) {
+    console.error("Interview data update error:", error);
+    res.status(500).json({ message: "Server error updating interview data" });
+  }
+};
+
+// Suspend Candidate
+exports.suspendCandidate = async (req, res) => {
+  try {
+    const { candidateId } = req.params;
+    const { rejectReason } = req.body;
+
+    const [updatedRowsCount] = await Candidate.update(
+      {
+        cand_admission_status: 2, // 2 for rejected/suspended
+        reject_reason: rejectReason || "No reason provided",
+      },
+      { where: { cand_id: candidateId } }
+    );
+
+    if (updatedRowsCount === 0) {
+      return res.status(404).json({ message: "Candidate not found" });
+    }
+
+    res.json({
+      success: true,
+      message: "Candidate suspended successfully",
+    });
+  } catch (error) {
+    console.error("Candidate suspension error:", error);
+    res.status(500).json({ message: "Server error suspending candidate" });
+  }
+};

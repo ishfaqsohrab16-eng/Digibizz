@@ -62,3 +62,8 @@ backend/studentdata.xlsx
 backend/middleware/dist/
 backend/uploads/
 frontend/dist/
+uploads/
+certificates/
+certificateBGImages/
+.nixpacks/
+photos/
