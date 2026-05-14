@@ -67,3 +67,21 @@ certificates/
 certificateBGImages/
 .nixpacks/
 photos/
+
+# Track frontend source and config
+!frontend/src/
+!frontend/public/
+!frontend/index.html
+!frontend/package.json
+!frontend/package-lock.json
+!frontend/vite.config.ts
+!frontend/tsconfig.json
+!frontend/tsconfig.app.json
+!frontend/tsconfig.node.json
+!frontend/tailwind.config.ts
+!frontend/postcss.config.js
+!frontend/eslint.config.js
+!frontend/README.md
+!frontend/setup.sh
+!frontend/jspdf.ts
+!frontend/xlsx.ts
