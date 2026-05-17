@@ -24,7 +24,7 @@ const StudentQuizAttempts = sequelize.define(
       },
     },
     quiz_code: {
-      type: DataTypes.STRING(20),
+      type: DataTypes.STRING(100),
       allowNull: false,
       references: {
         model: StudentQuiz,
@@ -32,11 +32,11 @@ const StudentQuizAttempts = sequelize.define(
       },
       validate: {
         notEmpty: true,
-        len: [1, 20],
+        len: [1, 100],
       },
     },
     std_cnic: {
-      type: DataTypes.STRING(100),
+      type: DataTypes.STRING(50),
       allowNull: false,
       references: {
         model: Student,
@@ -44,7 +44,7 @@ const StudentQuizAttempts = sequelize.define(
       },
       validate: {
         notEmpty: true,
-        len: [1, 100],
+        len: [1, 50],
       },
     },
     tb_id: {

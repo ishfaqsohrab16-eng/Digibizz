@@ -13,7 +13,7 @@ const StudentQuizAnswers = sequelize.define(
       autoIncrement: true,
     },
     quiz_code: {
-      type: DataTypes.STRING(50),
+      type: DataTypes.STRING(100),
       allowNull: false,
       references: {
         model: StudentQuiz,
@@ -21,7 +21,7 @@ const StudentQuizAnswers = sequelize.define(
       },
       validate: {
         notEmpty: true,
-        len: [1, 50],
+        len: [1, 100],
       },
     },
     attempt_session: {

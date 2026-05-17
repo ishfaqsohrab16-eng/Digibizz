@@ -1,5 +1,6 @@
 process.env.TZ = "Asia/Karachi";
 const express = require("express");
+const cors = require("cors");
 const helmet = require("helmet");
 const session = require("express-session");
 const path = require("path");
@@ -50,15 +51,36 @@ require("./models/courseModuleAssociation");
 const app = express();
 
 // Security Middleware
-const allowedOrigin = process.env.ALLOWED_ORIGINS || "'self'";
+const allowedOrigins = (process.env.ALLOWED_ORIGINS || "")
+  .split(",")
+  .map((origin) => origin.trim())
+  .filter(Boolean);
 
+const corsOptions = {
+  origin(origin, callback) {
+    // Allow requests without an Origin header, such as curl or server-to-server traffic.
+    if (!origin) {
+      return callback(null, true);
+    }
+
+    if (allowedOrigins.includes(origin)) {
+      return callback(null, true);
+    }
+
+    return callback(new Error(`Origin ${origin} is not allowed by CORS`));
+  },
+  credentials: true,
+};
+
+app.use(cors(corsOptions));
+app.options("*", cors(corsOptions));
 
 app.use(
   helmet({
     contentSecurityPolicy: {
       directives: {
         defaultSrc: ["'self'"],
-        connectSrc: ["'self'", allowedOrigin],
+        connectSrc: ["'self'", ...allowedOrigins],
         scriptSrc: ["'self'", "'unsafe-inline'"],
         styleSrc: ["'self'", "'unsafe-inline'"],
         imgSrc: ["'self'", "data:"],

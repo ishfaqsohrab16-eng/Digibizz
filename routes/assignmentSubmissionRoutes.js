@@ -7,12 +7,16 @@ const {
 
   validateAssignmentSubmissionUpdate,
 } = require("../middleware/assignmentSubmissionValidation");
-const { upload } = require("../middleware/uploadAssignmentConfig");
+const {
+  upload,
+  handleUploadError,
+} = require("../middleware/uploadAssignmentConfig");
 
 // Create Assignment Submission
 router.post(
   "/",
   upload.single("assignment_attachment"),
+  handleUploadError,
   isAdminAuthenticated,
   validateAssignmentSubmissionCreation,
   assignmentSubmissionController.createAssignmentSubmission

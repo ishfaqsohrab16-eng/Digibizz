@@ -61,6 +61,7 @@ const fetchStudentStatistics = async (student, tb_id) => {
       WHERE 
         s.std_rollno = :std_rollno
         AND s.tb_id = :tb_id
+        AND s.as_submission_status <> 2
       `,
       {
         replacements: {

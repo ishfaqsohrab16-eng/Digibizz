@@ -35,7 +35,17 @@ router.put(
   adminController.updateAdminProfile
 );
 router.post("/logout", (req, res) => {
-  res.json({ message: "Logout handled client-side" });
+  if (req.session) {
+    req.session.destroy(() => {});
+  }
+
+  res.clearCookie("connect.sid", {
+    httpOnly: true,
+    sameSite: "none",
+    secure: process.env.NODE_ENV === "production",
+  });
+
+  res.json({ message: "Logged out successfully" });
 });
 router.put(
   "/change-password",

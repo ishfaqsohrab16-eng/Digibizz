@@ -23,13 +23,7 @@ const createReport = async (req, res) => {
       dlr_challenges,
       dlr_month,
     } = req.body;
-
-    // Normalize and validate date format (should be YYYY-MM-DD)
-    const dateRegex = /^\d{4}-\d{2}-\d{2}$/;
-    if (!dateRegex.test(dlr_date)) {
-      return res.status(400).json({ error: "Invalid date format. Expected YYYY-MM-DD" });
-    }
-
+    // Validate date format
     const reportDate = new Date(dlr_date);
     if (isNaN(reportDate.getTime())) {
       return res.status(400).json({ error: "Invalid date format" });
@@ -37,11 +31,7 @@ const createReport = async (req, res) => {
 
     // Check if date is in the future
     const today = new Date();
-    today.setHours(0, 0, 0, 0);
-    const checkDate = new Date(dlr_date);
-    checkDate.setHours(0, 0, 0, 0);
-    
-    if (checkDate > today) {
+    if (reportDate > today) {
       return res
         .status(400)
         .json({ error: "Future dates are not allowed for reports" });
@@ -79,12 +69,11 @@ const createReport = async (req, res) => {
     };
 
     // Check if report already exists for this trainer, batch, and date
-    // Use exact string comparison for date (both in YYYY-MM-DD format)
     const existingReport = await DailyLectureReport.findOne({
       where: {
-        t_id: trainer.t_id,
+         t_id: trainer.t_id,
         tb_id,
-        dlr_date: dlr_date.trim(), // Ensure no whitespace
+        dlr_date,
       },
     });
 
@@ -117,45 +106,36 @@ const getAllReports = async (req, res) => {
   try {
     const { tb_id, t_id, userType, center_id, course_id } = req.params;
     
-    // 1. Set the base conditions for the specific Center and Batch selected
+    // 1. Set the exact conditions for the specific Center and Course selected
     const conditions = {
-      tb_id: parseInt(tb_id),
-      center_id: parseInt(center_id),
+      tb_id: tb_id,
+      center_id: center_id,
+      course_id: course_id,
     };
 
-    // 2. Apply Role-Specific Filters
+    // 2. Apply Role-Specific Locks
     if (userType === "trainer") {
       // Trainer: Lock to their specific trainer ID so they only see their own reports
       const trainer = await Trainer.findOne({ where: { user_id: t_id } });
       if (!trainer) {
         return res.status(404).json({ message: "Trainer not found" });
       }
-      conditions.t_id = trainer.t_id;
-      conditions.course_id = parseInt(course_id);
+      conditions.t_id = trainer.t_id; 
 
     } else if (userType === "MasterTrainer") {
-      // Master Trainer: Show all reports at the selected center 
-      // for the master trainer's assigned course
+      // Master Trainer: Lock to their assigned course directly from the database
       const mt = await MasterTrainerModel.findOne({ where: { user_id: t_id } });
       if (!mt) {
         return res.status(404).json({ message: "Master Trainer not found" });
       }
-
-      // Filter by the master trainer's course ID
-      // This will show reports from all trainers teaching this course at this center
-      conditions.course_id = mt.mt_course_id;
-
-    } else {
-      // Admin/SuperAdmin/CenterManager: Use the exact center_id and course_id passed
-      conditions.course_id = parseInt(course_id);
+      // This overrides the course_id to ensure absolute security for the MT's subject
+      conditions.course_id = mt.mt_course_id; 
     }
+    // Admins have no overrides and will use the exact center_id and course_id passed from the dropdowns
 
     // 3. Fetch specific Center Dates for progress calculations
     const centerDates = await CenterDates.findOne({
-      where: { 
-        tb_id: parseInt(tb_id),
-        center_id: parseInt(center_id),
-      },
+      where: { tb_id: conditions.tb_id, center_id: conditions.center_id },
     });
 
     if (!centerDates) {
@@ -192,7 +172,7 @@ const getAllReports = async (req, res) => {
 
     const holidays = await Holiday.findAll({
       where: {
-        tb_id: parseInt(tb_id),
+        tb_id: conditions.tb_id,
         h_date: { [Op.between]: [startDate, endDate] },
       },
       attributes: ["h_date"],

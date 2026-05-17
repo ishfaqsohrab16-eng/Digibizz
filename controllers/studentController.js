@@ -393,17 +393,113 @@ const fetchBulkStudentStatistics = async (students, tb_id, batchEndDate) => {
 const fetchStudentStatistics = async (student, tb_id, batchEndDate) => {
   try {
     const statsMap = await fetchBulkStudentStatistics([student], tb_id, batchEndDate);
-    return statsMap[student.std_cnic] || {
+    const baseStats = statsMap[student.std_cnic] || {
       attendanceProgress: 0,
       tickets: { count: 0 },
       feedback: { submissionCount: 0 },
       documents: [],
       professionalProfiles: [],
     };
+
+    const batchId = student.tb_id || tb_id;
+
+    if (!batchId) {
+      return baseStats;
+    }
+
+    const assignments = await sequelize.query(
+      `
+      SELECT
+        a.as_id,
+        a.as_title,
+        a.as_deadline,
+        a.as_marks,
+        a.as_added_on
+      FROM assignments AS a
+      WHERE a.tb_id = :tb_id
+        AND a.center_id = :center_id
+        AND a.course_id = :course_id
+      `,
+      {
+        replacements: {
+          tb_id: batchId,
+          center_id: student.center_id,
+          course_id: student.course_id,
+        },
+        type: sequelize.QueryTypes.SELECT,
+      }
+    );
+
+    const completedAssignments = await sequelize.query(
+      `
+      SELECT
+        a.as_id,
+        a.as_title,
+        s.submitted_on,
+        s.obt_marks,
+        a.as_marks,
+        s.as_submission_status
+      FROM assignment_submissions AS s
+      JOIN assignments AS a ON s.as_id = a.as_id
+      WHERE s.std_rollno = :std_rollno
+        AND s.tb_id = :tb_id
+        AND s.as_submission_status <> 2
+      `,
+      {
+        replacements: {
+          std_rollno: student.std_rollno,
+          tb_id: batchId,
+        },
+        type: sequelize.QueryTypes.SELECT,
+      }
+    );
+
+    const completedAssignmentIds = completedAssignments.map((assignment) => assignment.as_id);
+    const missedAssignments = assignments.filter(
+      (assignment) =>
+        !completedAssignmentIds.includes(assignment.as_id) &&
+        new Date(assignment.as_deadline) < new Date()
+    );
+
+    const assignmentProgress = {
+      total: assignments.length,
+      completed: completedAssignments.length,
+      missed: missedAssignments.length,
+      pending:
+        assignments.length -
+        completedAssignments.length -
+        missedAssignments.length,
+      completionRate:
+        assignments.length > 0
+          ? Math.round((completedAssignments.length / assignments.length) * 100)
+          : 0,
+    };
+
+    return {
+      ...baseStats,
+      assignments: {
+        received: assignments,
+        completed: completedAssignments,
+        missed: missedAssignments,
+        progress: assignmentProgress,
+      },
+    };
   } catch (error) {
     console.error("Error fetching student statistics:", error);
     return {
       attendanceProgress: 0,
+      assignments: {
+        received: [],
+        completed: [],
+        missed: [],
+        progress: {
+          total: 0,
+          completed: 0,
+          missed: 0,
+          pending: 0,
+          completionRate: 0,
+        },
+      },
       tickets: { count: 0 },
       feedback: { submissionCount: 0 },
       documents: [],

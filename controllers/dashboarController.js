@@ -80,8 +80,18 @@ exports.getStudentDashoard = async (req, res) => {
 
     const hasAllApprovedDocs = missingDocuments.length === 0;
 
-    // Note: Allow students to access dashboard regardless of document status
-    // They can upload documents in the StudentDocs section anytime
+    // If documents are missing and user is a student, return early with document upload requirement
+    if (userType === "student" && !hasAllApprovedDocs) {
+      return res.status(200).json({
+        success: false,
+        documents_uploaded: false,
+        message: "Please upload all required documents to access the dashboard",
+        missing_documents: missingDocuments,
+        required_documents: requiredDocTypes,
+        uploaded_documents: uploadedDocTypes,
+        redirect_to: "StudentDocs"
+      });
+    }
 
     let givCertificate = true;
     const examAssessmentModel = await ExamAssignment.findOne({
@@ -534,7 +544,7 @@ exports.getStudentDashoard = async (req, res) => {
       centerData,
       courseData,
       documentStatus: userType === "student" ? {
-        hasAllDocuments: true,
+        hasAllDocuments: hasAllApprovedDocs,
         missingDocuments: missingDocuments,
         requiredDocuments: requiredDocTypes,
         uploadedDocuments: uploadedDocTypes
