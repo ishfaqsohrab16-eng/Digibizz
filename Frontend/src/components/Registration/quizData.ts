@@ -1,0 +1,221 @@
+export const quizData = {
+  quizTitle: "Digital Skills Assessment",
+  totalTime: 1200, // 20 minutes in seconds
+  questions: [
+    {
+      id: 1,
+      question: "What is the function of a data recovery software?",
+      options: [
+        "Writing code",
+        "Restoring lost or deleted files from storage devices",
+        "Editing videos",
+        "Playing music",
+      ],
+      correctAnswer: "Restoring lost or deleted files from storage devices",
+    },
+    {
+      id: 2,
+      question: "Which of the following is a web browser?",
+      options: [
+        "Microsoft Word",
+        "Google Chrome",
+        "VLC Media Player",
+        "Photoshop",
+      ],
+      correctAnswer: "Google Chrome",
+    },
+    {
+      id: 3,
+      question: "What is the main purpose of an antivirus software?",
+      options: [
+        "To play games",
+        "To edit photos",
+        "To protect against malware",
+        "To send emails",
+      ],
+      correctAnswer: "To protect against malware",
+    },
+    {
+      id: 4,
+      question: "What does CPU stand for?",
+      options: [
+        "Central Processing Unit",
+        "Computer Personal Unit",
+        "Central Program Utility",
+        "Computer Processing Upgrade",
+      ],
+      correctAnswer: "Central Processing Unit",
+    },
+    {
+      id: 5,
+      question: "Which device is used for storing data permanently?",
+      options: ["RAM", "Hard Drive", "CPU", "Monitor"],
+      correctAnswer: "Hard Drive",
+    },
+    {
+      id: 6,
+      question: "What is the function of an operating system?",
+      options: [
+        "Play games",
+        "Manage hardware and software resources",
+        "Edit videos",
+        "Send emails",
+      ],
+      correctAnswer: "Manage hardware and software resources",
+    },
+    {
+      id: 7,
+      question: "What is a spreadsheet used for?",
+      options: [
+        "Writing letters",
+        "Drawing pictures",
+        "Organizing and calculating data",
+        "Playing music",
+      ],
+      correctAnswer: "Organizing and calculating data",
+    },
+    {
+      id: 8,
+      question: "What is the purpose of a firewall?",
+      options: [
+        "Cool down the computer",
+        "Protect against unauthorized access",
+        "Increase internet speed",
+        "Store files",
+      ],
+      correctAnswer: "Protect against unauthorized access",
+    },
+    {
+      id: 9,
+      question: "What is cloud storage?",
+      options: [
+        "A type of USB drive",
+        "Storage in the sky",
+        "Online storage service",
+        "Computer memory",
+      ],
+      correctAnswer: "Online storage service",
+    },
+    {
+      id: 10,
+      question: "What is the function of a router?",
+      options: [
+        "Print documents",
+        "Connect devices to the internet",
+        "Store files",
+        "Process data",
+      ],
+      correctAnswer: "Connect devices to the internet",
+    },
+    {
+      id: 11,
+      question: "What is a PDF?",
+      options: [
+        "Pretty Digital Format",
+        "Portable Document Format",
+        "Personal Data File",
+        "Program Download Format",
+      ],
+      correctAnswer: "Portable Document Format",
+    },
+    {
+      id: 12,
+      question: "What is phishing?",
+      options: [
+        "A fishing game",
+        "A type of computer virus",
+        "An attempt to steal personal information",
+        "A programming language",
+      ],
+      correctAnswer: "An attempt to steal personal information",
+    },
+    {
+      id: 13,
+      question: "What is RAM used for?",
+      options: [
+        "Permanent storage",
+        "Temporary memory",
+        "Processing graphics",
+        "Internet connection",
+      ],
+      correctAnswer: "Temporary memory",
+    },
+    {
+      id: 14,
+      question: "What is a URL?",
+      options: [
+        "Universal Remote Link",
+        "Uniform Resource Locator",
+        "Universal Resource Library",
+        "Unified Remote Location",
+      ],
+      correctAnswer: "Uniform Resource Locator",
+    },
+    {
+      id: 15,
+      question: "What is bandwidth?",
+      options: [
+        "A type of cable",
+        "Internet speed capacity",
+        "Computer memory",
+        "Screen size",
+      ],
+      correctAnswer: "Internet speed capacity",
+    },
+    {
+      id: 16,
+      question: "What is a browser cookie?",
+      options: [
+        "An online snack",
+        "A type of virus",
+        "A stored piece of data about website preferences",
+        "A download manager",
+      ],
+      correctAnswer: "A stored piece of data about website preferences",
+    },
+    {
+      id: 17,
+      question: "What is the purpose of an SSL certificate?",
+      options: [
+        "Speed up website loading",
+        "Secure data transmission",
+        "Store website data",
+        "Display graphics",
+      ],
+      correctAnswer: "Secure data transmission",
+    },
+    {
+      id: 18,
+      question: "What is a backup?",
+      options: [
+        "A type of computer",
+        "A copy of data for safekeeping",
+        "An internet provider",
+        "A computer program",
+      ],
+      correctAnswer: "A copy of data for safekeeping",
+    },
+    {
+      id: 19,
+      question: "What is a digital signature?",
+      options: [
+        "A handwritten signature",
+        "An electronic authentication method",
+        "A type of font",
+        "A computer password",
+      ],
+      correctAnswer: "An electronic authentication method",
+    },
+    {
+      id: 20,
+      question: "What is the purpose of defragmentation?",
+      options: [
+        "Delete files",
+        "Organize files for better performance",
+        "Download files",
+        "Protect against viruses",
+      ],
+      correctAnswer: "Organize files for better performance",
+    },
+  ],
+};

@@ -53,3 +53,10 @@ $RECYCLE.BIN/
 
 # Build/runtime directories
 uploads/
+
+# Frontend source should be versioned
+Frontend/node_modules/
+Frontend/dist/
+Frontend/.env
+Frontend/.env.*
+!Frontend/.env.example
