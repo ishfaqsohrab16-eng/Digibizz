@@ -95,6 +95,11 @@ app.use(
 app.use(express.json());
 app.use(express.urlencoded({ extended: true }));
 
+// Lightweight health endpoint for container/platform checks.
+app.get("/healthz", (req, res) => {
+  res.status(200).json({ status: "ok" });
+});
+
 // Session Configuration
 app.use(
   session({
