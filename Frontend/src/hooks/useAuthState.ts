@@ -1,8 +1,7 @@
 import { useState, useEffect, useCallback } from "react";
-import { useNavigate } from "react-router-dom";
 import type { AuthState } from "../types/auth";
 import type { LoginCredentials } from "../types/admin";
-import { loginAdmin } from "../services/api";
+import { loginAdmin, logoutAdminSession } from "../services/api";
 import { storage } from "../utils/storage";
 
 /**
@@ -19,8 +18,6 @@ export const useAuthState = () => {
   // Add isLoading state for login/logout operations
   const [isLoading, setIsLoading] = useState(false);
   const [initialLoading, setInitialLoading] = useState(true);
-
-  const navigate = useNavigate();
 
   // Initialize auth state from storage
   useEffect(() => {
@@ -41,6 +38,7 @@ export const useAuthState = () => {
     async (credentials: LoginCredentials) => {
       try {
         setIsLoading(true);
+        storage.clearSessionState();
         const response = await loginAdmin(credentials);
 
         storage.setToken(response.token);
@@ -59,11 +57,12 @@ export const useAuthState = () => {
         setIsLoading(false);
       }
     },
-    [navigate]
+    []
   );
 
   const logout = useCallback(() => {
     setIsLoading(true);
+    void logoutAdminSession();
     storage.clearAuth();
 
     setState({
@@ -73,9 +72,9 @@ export const useAuthState = () => {
       loading: false,
     });
 
-    navigate("/login");
+    window.location.replace("/login");
     setIsLoading(false);
-  }, [navigate]);
+  }, []);
 
   return {
     ...state,

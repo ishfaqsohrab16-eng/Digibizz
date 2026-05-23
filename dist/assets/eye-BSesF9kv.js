@@ -1,4 +1,4 @@
-import{r as a}from"./index-BHF69vPw.js";/**
+import{a_ as n}from"./index-BnlJH-WN.js";/**
  * @license lucide-react v0.462.0 - ISC
  *
  * This source code is licensed under the ISC license.
@@ -13,12 +13,12 @@ import{r as a}from"./index-BHF69vPw.js";/**
  *
  * This source code is licensed under the ISC license.
  * See the LICENSE file in the root directory of this source tree.
- */const f=a.forwardRef(({color:r="currentColor",size:e=24,strokeWidth:t=2,absoluteStrokeWidth:o,className:c="",children:n,iconNode:i,...l},u)=>a.createElement("svg",{ref:u,...w,width:e,height:e,stroke:r,strokeWidth:o?Number(t)*24/Number(e):t,className:s("lucide",c),...l},[...i.map(([d,m])=>a.createElement(d,m)),...Array.isArray(n)?n:[n]]));/**
+ */const f=n.forwardRef(({color:r="currentColor",size:e=24,strokeWidth:t=2,absoluteStrokeWidth:o,className:c="",children:a,iconNode:i,...l},u)=>n.createElement("svg",{ref:u,...w,width:e,height:e,stroke:r,strokeWidth:o?Number(t)*24/Number(e):t,className:s("lucide",c),...l},[...i.map(([d,m])=>n.createElement(d,m)),...Array.isArray(a)?a:[a]]));/**
  * @license lucide-react v0.462.0 - ISC
  *
  * This source code is licensed under the ISC license.
  * See the LICENSE file in the root directory of this source tree.
- */const y=(r,e)=>{const t=a.forwardRef(({className:o,...c},n)=>a.createElement(f,{ref:n,iconNode:e,className:s(`lucide-${p(r)}`,o),...c}));return t.displayName=`${r}`,t};/**
+ */const y=(r,e)=>{const t=n.forwardRef(({className:o,...c},a)=>n.createElement(f,{ref:a,iconNode:e,className:s(`lucide-${p(r)}`,o),...c}));return t.displayName=`${r}`,t};/**
  * @license lucide-react v0.462.0 - ISC
  *
  * This source code is licensed under the ISC license.

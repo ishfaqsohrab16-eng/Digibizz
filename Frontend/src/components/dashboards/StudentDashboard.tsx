@@ -220,22 +220,10 @@ const StudentDashboard = ({ openForm }: AdminDashboardProps) => {
       };
       safelyStoreInLocalStorage("studentInfo", studentInfo);
       clearOldestCacheItems();
-      const stored = safelyStoreInLocalStorage(cacheKey, {
+      safelyStoreInLocalStorage(cacheKey, {
         data: response,
         timestamp: Date.now(),
       });
-      if (!stored) {
-        const minimalData = {
-          dashboardStats: response.dashboardStats,
-          statistics: response.statistics,
-        };
-
-        safelyStoreInLocalStorage(cacheKey, {
-          data: minimalData,
-          timestamp: Date.now(),
-          isReduced: true,
-        });
-      }
     } catch (err) {
       const errorMessage = err instanceof Error ? err.message : "Failed to fetch dashboard data";
       setError(errorMessage);
@@ -390,6 +378,77 @@ const StudentDashboard = ({ openForm }: AdminDashboardProps) => {
             className="mt-4 inline-flex items-center px-4 py-2 border border-transparent text-sm font-medium rounded-md text-white bg-blue-600 hover:bg-blue-700 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-blue-500"
           >
             Refresh
+          </button>
+        </div>
+      </div>
+    );
+  }
+
+  if (dashboardData.documents_uploaded === false) {
+    return (
+      <div className="min-h-screen bg-background flex items-center justify-center">
+        <div className="text-center space-y-4 max-w-2xl mx-auto p-6 bg-white rounded-lg shadow-lg">
+          <div className="inline-flex h-12 w-12 items-center justify-center rounded-full bg-yellow-100">
+            <FileText className="h-6 w-6 text-yellow-700" />
+          </div>
+          <h3 className="text-xl font-semibold text-gray-900">
+            Documents Required Before Dashboard Access
+          </h3>
+          <p className="text-gray-600">
+            {dashboardData.message ||
+              "Please upload all required documents to continue."}
+          </p>
+          {dashboardData.missing_documents &&
+            dashboardData.missing_documents.length > 0 && (
+              <div className="text-left bg-yellow-50 border border-yellow-200 rounded-md p-4">
+                <p className="font-medium text-yellow-800 mb-2">
+                  Missing documents:
+                </p>
+                <ul className="list-disc pl-5 text-sm text-yellow-900 space-y-1">
+                  {dashboardData.missing_documents.map((documentName) => (
+                    <li key={documentName}>{documentName}</li>
+                  ))}
+                </ul>
+              </div>
+            )}
+          <div className="flex items-center justify-center gap-3">
+            <button
+              onClick={() => openForm("StudentDocs")}
+              className="inline-flex items-center px-4 py-2 rounded-md text-white bg-blue-600 hover:bg-blue-700"
+            >
+              Open Documents
+            </button>
+            <button
+              onClick={() => fetchDashboardData(true)}
+              className="inline-flex items-center px-4 py-2 rounded-md border border-gray-300 text-gray-700 hover:bg-gray-50"
+            >
+              Retry
+            </button>
+          </div>
+        </div>
+      </div>
+    );
+  }
+
+  if (!dashboardData.dashboardStats || !dashboardData.statistics) {
+    return (
+      <div className="min-h-screen bg-background flex items-center justify-center">
+        <div className="text-center space-y-4 max-w-md mx-auto p-6 bg-white rounded-lg shadow-lg">
+          <div className="inline-flex h-12 w-12 items-center justify-center rounded-full bg-red-100">
+            <AlertCircle className="h-6 w-6 text-red-600" />
+          </div>
+          <h3 className="text-xl font-semibold text-gray-900">
+            Dashboard Data Is Incomplete
+          </h3>
+          <p className="text-gray-500">
+            The dashboard cache is stale or incomplete. Refresh to load a clean
+            copy.
+          </p>
+          <button
+            onClick={() => fetchDashboardData(true)}
+            className="mt-4 inline-flex items-center px-4 py-2 border border-transparent text-sm font-medium rounded-md text-white bg-blue-600 hover:bg-blue-700"
+          >
+            Reload Dashboard
           </button>
         </div>
       </div>

@@ -44,6 +44,7 @@ import {
 import { QuizSubmission } from "../components/Quiz/QuizAttempt";
 import { MasterTrainerDashboardData } from "../components/dashboards/MasterTrainerDashboard";
 import { CourseModuleFormData } from "../types/courseModule";
+import { storage } from "../utils/storage";
 
 const API_URL = import.meta.env.VITE_BACKEND_URL + "/api";
 // Interface definitions
@@ -142,7 +143,7 @@ const getCurrentUserToken = () => {
 const handleApiError = (error: unknown) => {
   if (axios.isAxiosError(error)) {
     if (error.response?.status === 401) {
-      // Token expired, redirect to login page
+      storage.clearSessionState();
       window.location.href = "/login";
     }
     if (error.response) {
@@ -194,6 +195,22 @@ export async function loginAdmin(credentials: LoginCredentials) {
     throw error;
   }
 }
+
+export async function logoutAdminSession() {
+  try {
+    await fetch(`${API_URL}/admin/logout`, {
+      method: "POST",
+      headers: {
+        Authorization: `Bearer ${getCurrentUserToken() || ""}`,
+        "Content-Type": "application/json",
+      },
+      credentials: "include",
+    });
+  } catch (error) {
+    console.error("Logout request failed:", error);
+  }
+}
+
 export async function loginAsSubUser(user_id: number, tb_id?: number) {
   try {
     const response = await fetch(`${API_URL}/admin/login/${user_id}/${tb_id}`, {

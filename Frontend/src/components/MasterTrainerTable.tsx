@@ -35,7 +35,7 @@ interface MasterTrainerTableData extends MasterTrainerApiData {
 interface MasterTrainerTableData extends MasterTrainerApiData {
   id: number;
 }
-const BACKEND_URL = "http://localhost:5000"; // adjust port as needed
+
 const MasterTrainerTable: React.FC = () => {
   const [masterTrainers, setMasterTrainers] = useState<
     MasterTrainerTableData[]

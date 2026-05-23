@@ -19,7 +19,7 @@ interface AdminApiData {
 interface AdminTableData extends AdminApiData {
   id: number;
 }
-const BACKEND_URL = "http://localhost:5000"; // adjust port as needed
+const BACKEND_URL = import.meta.env.VITE_BACKEND_URL || "";
 const EnrolledAdminTable: React.FC = () => {
   const [admins, setAdmins] = useState<AdminTableData[]>([]);
   const [loading, setLoading] = useState(false);
@@ -85,25 +85,13 @@ const EnrolledAdminTable: React.FC = () => {
       renderCell: ({ item }: { item: AdminTableData }) => (
         <div className="flex items-center justify-center">
           <img
-            src={`http://localhost:5000${item.user_profile_photo}`}
+            src={getFullImageUrl(item.user_profile_photo)}
             alt={item.user_name}
             className="object-cover h-10 w-10"
             onError={(e) => {
               console.error("Image failed to load:", e.currentTarget.src);
             }}
           />
-          {/* <Avatar>
-            <img
-              src={`http://localhost:5000${item.user_profile_photo}`}
-              alt={item.user_name}
-              className="object-cover h-10 w-10"
-              onError={(e) => {
-                console.error("Image failed to load:", e.currentTarget.src);
-              }}
-            />
-            <AvatarFallback>{getInitials(item.user_name)}</AvatarFallback>
-          </Avatar> */}
-          ;
         </div>
       ),
     },

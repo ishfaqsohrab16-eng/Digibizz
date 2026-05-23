@@ -1,5 +1,5 @@
 import { useState } from "react";
-import { useNavigate, useLocation } from "react-router-dom";
+import { useLocation } from "react-router-dom";
 import { LockKeyhole, User, Eye, EyeOff } from "lucide-react";
 import { useAuth } from "../context/AuthContext";
 import type { LoginCredentials } from "../types/admin";
@@ -8,7 +8,6 @@ import { toast } from "sonner";
 import Loader from "../components/Loader";
 
 export default function LoginForm() {
-  const navigate = useNavigate();
   const location = useLocation();
   const { login, isLoading } = useAuth();
   const [credentials, setCredentials] = useState<LoginCredentials>({
@@ -31,7 +30,7 @@ export default function LoginForm() {
       toast.success("Login successful!");
 
       setTimeout(() => {
-        navigate(from, { replace: true });
+        window.location.replace(from);
         setIsAuthenticating(false);
       }, 1500);
     } catch (err) {

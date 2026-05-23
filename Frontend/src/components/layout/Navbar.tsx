@@ -11,12 +11,13 @@ import {
   faChevronDown,
   faPalette 
 } from '@fortawesome/free-solid-svg-icons';
-import { Link, useNavigate } from 'react-router-dom';
+import { Link } from 'react-router-dom';
 import ThemeSelector from '../ThemeSelector';
 import logoImage from '../../assets/logo.png';
 import mobileImage from '../../assets/icon.png';
 import { UserData } from '../../types/admin';
 import { useBatch } from '../../context/BatchContext';
+import { useAuth } from '../../context/AuthContext';
 import userImage  from '../../assets/userLogo.png'
 interface NavbarProps {
   toggleSidebar: () => void;
@@ -31,7 +32,7 @@ const Navbar: React.FC<NavbarProps> = ({ toggleSidebar, openForm }) => {
   const userDropdownRef = useRef<HTMLDivElement>(null);
   const mobileThemeSelectorRef = useRef<HTMLDivElement>(null);
   const [loading, setLoading] = useState(true);
-  const navigate = useNavigate();
+  const { logout } = useAuth();
   const BASE_URL = import.meta.env.VITE_BACKEND_URL;
   const [formData, setFormData] = useState<UserData>({
     id: 0,
@@ -159,8 +160,7 @@ const Navbar: React.FC<NavbarProps> = ({ toggleSidebar, openForm }) => {
 
   // Logout function
   const handleLogout = () => {
-    localStorage.removeItem("token");
-    navigate("/login");
+    logout();
   };
 
   // Handle theme selector toggle for mobile
