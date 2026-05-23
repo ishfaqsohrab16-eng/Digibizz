@@ -17,7 +17,6 @@ import { AssignmentSubmissionList } from "./AssignmentSubmissionList";
 import CustomCKEditor from "./CustomCKEditor";
 import { useBatch } from "../../context/BatchContext";
 import { Assignment } from "../StudentForm/StudentProfile";
-import { set } from "date-fns";
 
 interface AssignmentViewProps {
   assignment?: any;
@@ -153,7 +152,7 @@ const AssignmentView: React.FC<AssignmentViewProps> = ({
   const [isdeadlineExpired, setIsdeadlineExpired] = useState(false);
   const [isSubmitted, setIsSubmitted] = useState(false);
   const studentInfo = JSON.parse(localStorage.getItem("studentInfo") || "{}");
-  const { rollNumber, name } = studentInfo;
+  const rollNumber = studentInfo.rollNumber || "";
   const BACKEND_URL = import.meta.env.VITE_BACKEND_URL;
   const { submittedCount, userType } = useBatch();
   const { notSubmittedCount } = useBatch();
@@ -174,9 +173,9 @@ const AssignmentView: React.FC<AssignmentViewProps> = ({
   const handleFileChange = (event: React.ChangeEvent<HTMLInputElement>) => {
     const file = event.target.files?.[0];
     if (file) {
-      if (file.size > 20 * 1024 * 1024) {
-        // 20MB limit
-        toast.error("File too large. Please select a file smaller than 20MB.");
+      if (file.size > 5 * 1024 * 1024) {
+        toast.error("File too large. Please select a file smaller than 5MB.");
+        event.target.value = "";
         return;
       }
       setSelectedFile(file);
@@ -242,9 +241,11 @@ const AssignmentView: React.FC<AssignmentViewProps> = ({
       }
     } catch (error) {
       console.error("Error submitting assignment:", error);
-      toast.error(
-        "Submission Failed. Failed to submit assignment. Please try again."
-      );
+      const errorMessage =
+        error instanceof Error
+          ? error.message
+          : "Failed to submit assignment. Please try again.";
+      toast.error(`Submission Failed. ${errorMessage}`);
     }
   };
 
@@ -292,7 +293,7 @@ const AssignmentView: React.FC<AssignmentViewProps> = ({
 
       const response = await getStudentAssignmentSubmits(
         assignment.as_id,
-        rollNumber
+        formData.std_rollno
       );
       if (
         response.success &&
@@ -332,10 +333,16 @@ const AssignmentView: React.FC<AssignmentViewProps> = ({
   };
 
   useEffect(() => {
-    if (assignment?.as_id && rollNumber && userType === "student") {
+    if (assignment?.as_id && formData.std_rollno && userType === "student") {
       checkSubmissionAndDeadline();
     }
-  }, [assignment?.as_id, assignment?.as_deadline, rollNumber, isSubmitted]);
+  }, [
+    assignment?.as_id,
+    assignment?.as_deadline,
+    formData.std_rollno,
+    isSubmitted,
+    userType,
+  ]);
 
   useEffect(() => {
     if (userType === "student" && (!rollNumber || rollNumber === "undefined")) {

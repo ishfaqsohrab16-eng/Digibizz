@@ -1,5 +1,5 @@
 import { useState } from "react";
-import { useLocation } from "react-router-dom";
+import { useLocation, useNavigate } from "react-router-dom";
 import { LockKeyhole, User, Eye, EyeOff } from "lucide-react";
 import { useAuth } from "../context/AuthContext";
 import type { LoginCredentials } from "../types/admin";
@@ -9,6 +9,7 @@ import Loader from "../components/Loader";
 
 export default function LoginForm() {
   const location = useLocation();
+  const navigate = useNavigate();
   const { login, isLoading } = useAuth();
   const [credentials, setCredentials] = useState<LoginCredentials>({
     user_username: "",

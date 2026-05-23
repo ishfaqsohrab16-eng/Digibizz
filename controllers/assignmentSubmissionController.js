@@ -24,6 +24,13 @@ exports.createAssignmentSubmission = async (req, res) => {
     const student = await Student.findOne({
       where: { std_rollno },
     });
+    if (!student) {
+      return res.status(404).json({
+        success: false,
+        message:
+          "Student record not found for assignment submission. Please refresh and try again.",
+      });
+    }
     // Handle file upload
     const as_submission_attachment = req.file
       ? `/uploads/user-assignments/${req.file.filename}`
