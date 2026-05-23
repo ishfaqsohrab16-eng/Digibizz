@@ -957,6 +957,27 @@ export const getStudentsByCNICProfile = async (std_cnic?: string) => {
     throw error;
   }
 };
+export const getStudentsByEmailProfile = async (user_email?: string) => {
+  try {
+    const response = await axios.get(
+      `${API_URL}/student/getStudentProfileByEmail/${encodeURIComponent(
+        user_email || ""
+      )}`,
+      {
+        headers: {
+          Authorization: `Bearer ${getCurrentUserToken()}`,
+          "Content-Type": "application/json",
+        },
+      }
+    );
+    return response.data;
+  } catch (error) {
+    if (error instanceof AxiosError) {
+      handleApiError(error);
+    }
+    throw error;
+  }
+};
 export const getStudentsByCNIC = async (std_cnic?: string) => {
   try {
     const response = await axios.get(

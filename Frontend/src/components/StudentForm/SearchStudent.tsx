@@ -15,6 +15,7 @@ import {
 import { useBatch } from "../../context/BatchContext";
 import {
   getStudentsByCNICProfile,
+  getStudentsByEmailProfile,
   updateStudentDocuments,
   updateFreelancerProfiles,
   loginAsSubUser,
@@ -106,7 +107,9 @@ interface StudentData {
 }
 
 const SearchStudent = () => {
+  const [searchMode, setSearchMode] = useState<"cnic" | "email">("cnic");
   const [searchCNIC, setSearchCNIC] = useState("");
+  const [searchEmail, setSearchEmail] = useState("");
   const [showProfile, setShowProfile] = useState(false);
   const [studentData, setStudentData] = useState<StudentData | null>(null);
   const { selectedBatchId, userType } = useBatch();
@@ -128,8 +131,11 @@ const SearchStudent = () => {
 
   const handleChange = (e: React.ChangeEvent<HTMLInputElement>) => {
     const { value } = e.target;
-    const formattedValue = formatCnic(value);
-    setSearchCNIC(formattedValue);
+    if (searchMode === "cnic") {
+      setSearchCNIC(formatCnic(value));
+      return;
+    }
+    setSearchEmail(value);
   };
 
   const formatCnic = (value: string) => {
@@ -142,14 +148,32 @@ const SearchStudent = () => {
   const handleSearch = async () => {
     setIsLoading(true);
     try {
-      const response = await getStudentsByCNICProfile(searchCNIC);
+      const query = searchMode === "cnic" ? searchCNIC.trim() : searchEmail.trim();
+
+      if (!query) {
+        toast.error(
+          searchMode === "cnic"
+            ? "Please enter a student CNIC"
+            : "Please enter a student email"
+        );
+        return;
+      }
+
+      const response =
+        searchMode === "cnic"
+          ? await getStudentsByCNICProfile(query)
+          : await getStudentsByEmailProfile(query);
       if (response.success) {
         setStudentData(response.data);
         setShowProfile(true);
       }
     } catch (error) {
       console.error("Error:", error);
-      toast.error("Failed to fetch student data");
+      setStudentData(null);
+      setShowProfile(false);
+      toast.error(
+        error instanceof Error ? error.message : "Failed to fetch student data"
+      );
     } finally {
       setIsLoading(false);
     }
@@ -322,12 +346,46 @@ const SearchStudent = () => {
             DigiBizz Student Profile
           </h1>
 
-          <div className="mt-6 flex justify-center gap-4">
+          <div className="mt-6 flex justify-center gap-3">
+            <button
+              type="button"
+              onClick={() => setSearchMode("cnic")}
+              className={`px-4 py-2 rounded-md border transition-colors ${
+                searchMode === "cnic"
+                  ? "bg-[hsl(var(--primary))] text-[hsl(var(--primary-foreground))] border-[hsl(var(--primary))]"
+                  : "bg-[hsl(var(--card))] text-[hsl(var(--foreground))] border-[hsl(var(--border))]"
+              }`}
+            >
+              Search By CNIC
+            </button>
+            <button
+              type="button"
+              onClick={() => setSearchMode("email")}
+              className={`px-4 py-2 rounded-md border transition-colors ${
+                searchMode === "email"
+                  ? "bg-[hsl(var(--primary))] text-[hsl(var(--primary-foreground))] border-[hsl(var(--primary))]"
+                  : "bg-[hsl(var(--card))] text-[hsl(var(--foreground))] border-[hsl(var(--border))]"
+              }`}
+            >
+              Search By Email
+            </button>
+          </div>
+
+          <div className="mt-4 flex justify-center gap-4">
             <input
               type="text"
-              placeholder="Enter Student CNIC"
-              value={searchCNIC}
+              placeholder={
+                searchMode === "cnic"
+                  ? "Enter Student CNIC"
+                  : "Enter Student Email"
+              }
+              value={searchMode === "cnic" ? searchCNIC : searchEmail}
               onChange={handleChange}
+              onKeyDown={(e) => {
+                if (e.key === "Enter") {
+                  void handleSearch();
+                }
+              }}
               disabled={isLoading}
               className="px-4 py-2 border border-[hsl(var(--border))] rounded-md focus:outline-none focus:ring-2 focus:ring-[hsl(var(--primary))] w-full max-w-md text-[hsl(var(--foreground))] bg-[hsl(var(--card))]"
             />

@@ -41,6 +41,11 @@ router.get(
   studentController.getStudentProfileByCNIC
 );
 router.get(
+  "/getStudentProfileByEmail/:user_email",
+  isAdminAuthenticated,
+  studentController.getStudentProfileByEmail
+);
+router.get(
   "/getStudentByCNIC/:std_cnic",
   studentController.getStudentProfileByCNIC
 );

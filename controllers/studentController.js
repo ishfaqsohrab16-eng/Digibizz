@@ -758,19 +758,8 @@ exports.getStudentProfile = async (req, res) => {
   }
 };
 
-// Get Student Profile By CNIC
-exports.getStudentProfileByCNIC = async (req, res) => {
-  const { std_cnic } = req.params;
-
-  if (!std_cnic) {
-    return res.status(400).json({
-      success: false,
-      message: "CNIC is required",
-    });
-  }
-
+const getStudentProfileByField = async (res, fieldClause, replacements) => {
   try {
-    // Fetch basic student data
     const [student] = await sequelize.query(
       `
       SELECT 
@@ -810,12 +799,12 @@ exports.getStudentProfileByCNIC = async (req, res) => {
       LEFT JOIN 
         centers AS ce ON s.center_id = ce.center_id
       WHERE 
-        u.user_type = 'Student'
-        AND s.std_cnic = :std_cnic
+        LOWER(u.user_type) = 'student'
+        AND ${fieldClause}
       LIMIT 1
       `,
       {
-        replacements: { std_cnic },
+        replacements,
         type: sequelize.QueryTypes.SELECT,
       }
     );
@@ -831,13 +820,16 @@ exports.getStudentProfileByCNIC = async (req, res) => {
     const trainingBatch = await TrainingBatch.findOne({
       where: { tb_id: student.tb_id },
       attributes: ["tb_end"],
-      raw: true
+      raw: true,
     });
 
     const batchEndDate = trainingBatch ? trainingBatch.tb_end : null;
 
-    // Get student statistics using the helper function - pass tb_id and batchEndDate
-    const studentStats = await fetchStudentStatistics(student, student.tb_id, batchEndDate);
+    const studentStats = await fetchStudentStatistics(
+      student,
+      student.tb_id,
+      batchEndDate
+    );
 
     const transformedData = {
       user_id: student.user_id,
@@ -865,7 +857,7 @@ exports.getStudentProfileByCNIC = async (req, res) => {
       std_lms_status: student.std_lms_status,
       std_forum_status: student.std_forum_status,
       std_rollno: student.std_rollno,
-      ...studentStats, // Add all the statistics from the helper function
+      ...studentStats,
     };
     return res.status(200).json({
       success: true,
@@ -879,6 +871,37 @@ exports.getStudentProfileByCNIC = async (req, res) => {
       error: process.env.NODE_ENV === "development" ? error.message : undefined,
     });
   }
+};
+
+// Get Student Profile By CNIC
+exports.getStudentProfileByCNIC = async (req, res) => {
+  const { std_cnic } = req.params;
+
+  if (!std_cnic) {
+    return res.status(400).json({
+      success: false,
+      message: "CNIC is required",
+    });
+  }
+
+  return getStudentProfileByField(res, "s.std_cnic = :std_cnic", {
+    std_cnic,
+  });
+};
+
+exports.getStudentProfileByEmail = async (req, res) => {
+  const user_email = req.params.user_email?.trim().toLowerCase();
+
+  if (!user_email) {
+    return res.status(400).json({
+      success: false,
+      message: "Email is required",
+    });
+  }
+
+  return getStudentProfileByField(res, "LOWER(u.user_email) = :user_email", {
+    user_email,
+  });
 };
 
 // Update Student Profile

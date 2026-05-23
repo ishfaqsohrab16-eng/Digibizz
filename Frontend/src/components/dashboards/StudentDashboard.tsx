@@ -130,6 +130,18 @@ const clearOldestCacheItems = () => {
   }
 };
 
+const getStudentInfoFromStats = (statistics?: { label: string; value: string }[]) => {
+  if (!Array.isArray(statistics)) {
+    return { rollNumber: "", name: "" };
+  }
+
+  return {
+    rollNumber:
+      statistics.find((stat) => stat.label === "Roll No.")?.value || "",
+    name: statistics.find((stat) => stat.label === "Name.")?.value || "",
+  };
+};
+
 const StudentDashboard = ({ openForm }: AdminDashboardProps) => {
   const [dashboardData, setDashboardData] = useState<DashboardData | null>(
     null
@@ -171,23 +183,17 @@ const StudentDashboard = ({ openForm }: AdminDashboardProps) => {
             const isStillValid = Date.now() - timestamp < CACHE_DURATION;
 
             if (isStillValid) {
+              if (!Array.isArray(data.statistics)) {
+                localStorage.removeItem(cacheKey);
+                throw new Error("Cached dashboard data is incomplete");
+              }
+
               setDashboardData(data);
               setError(null); // Clear any errors when data loads successfully
               setLoading(false);
 
               // Extract student info from cached data
-              const studentInfo = {
-                rollNumber:
-                  data.statistics.find(
-                    (stat: { label: string; value: string }) =>
-                      stat.label === "Roll No."
-                  )?.value || "",
-                name:
-                  data.statistics.find(
-                    (stat: { label: string; value: string }) =>
-                      stat.label === "Name."
-                  )?.value || "",
-              };
+              const studentInfo = getStudentInfoFromStats(data.statistics);
               safelyStoreInLocalStorage("studentInfo", studentInfo);
               return;
             }
@@ -210,20 +216,15 @@ const StudentDashboard = ({ openForm }: AdminDashboardProps) => {
 
       setDashboardData(response);
       setError(null); // Clear any errors when data loads successfully
-      const studentInfo = {
-        rollNumber:
-          response.statistics.find((stat) => stat.label === "Roll No.")
-            ?.value || "",
-        name:
-          response.statistics.find((stat) => stat.label === "Name.")?.value ||
-          "",
-      };
-      safelyStoreInLocalStorage("studentInfo", studentInfo);
-      clearOldestCacheItems();
-      safelyStoreInLocalStorage(cacheKey, {
-        data: response,
-        timestamp: Date.now(),
-      });
+      if (Array.isArray(response.statistics)) {
+        const studentInfo = getStudentInfoFromStats(response.statistics);
+        safelyStoreInLocalStorage("studentInfo", studentInfo);
+        clearOldestCacheItems();
+        safelyStoreInLocalStorage(cacheKey, {
+          data: response,
+          timestamp: Date.now(),
+        });
+      }
     } catch (err) {
       const errorMessage = err instanceof Error ? err.message : "Failed to fetch dashboard data";
       setError(errorMessage);
