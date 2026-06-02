@@ -13,21 +13,24 @@ exports.listModules = async (req, res) => {
         { model: Trainer, as: "trainer" }
       ]
     });
+    const topicInclude = [
+      { 
+        model: TrainerTopicReport, 
+        as: "trainerReports", 
+        ...(trainerAlocation?.trainer?.user_id
+          ? { where: { tb_id: tb_id, trainer_id: trainerAlocation.trainer.user_id } }
+          : { where: { tb_id: tb_id, trainer_id: null } }),
+        required: false,
+        include: [{ model: Trainer, as: "trainer" }] 
+      }
+    ];
     const modules = await CourseModule.findAll({
       where: { course_id },
       include: [
         { model: Course, as: "courseModules" },
         { model: Topic,
           as: "courseTopics",
-          include: [
-            { 
-              model: TrainerTopicReport, 
-              as: "trainerReports", 
-              where: { tb_id: tb_id, trainer_id: trainerAlocation.trainer.user_id }, 
-              required: false, // This makes it a LEFT JOIN instead of INNER JOIN
-              include: [{ model: Trainer, as: "trainer" }] 
-            }
-          ]
+          include: topicInclude
         }
       ]
     });  

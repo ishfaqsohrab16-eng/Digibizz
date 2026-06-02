@@ -184,10 +184,6 @@ exports.getStudentDashoard = async (req, res) => {
       raw: true,
     });
 
-    if (!centerDates) {
-      return res.status(404).json({ message: "Center dates not found" });
-    }
-
     // Calculate attendance progress (OPTIMIZED - matches studentController logic)
     let attendanceProgress = 0;
     
@@ -203,13 +199,13 @@ exports.getStudentDashoard = async (req, res) => {
       let startDate = null;
       if (studentProfile.std_added_on) {
         startDate = normalizeDate(new Date(studentProfile.std_added_on));
-      } else if (centerDates.tb_start) {
+      } else if (centerDates?.tb_start) {
         startDate = normalizeDate(new Date(centerDates.tb_start));
       }
 
       // Determine end date: use center end date
       let endDate = null;
-      if (centerDates.tb_end) {
+      if (centerDates?.tb_end) {
         endDate = normalizeDate(new Date(centerDates.tb_end));
       }
 
@@ -327,17 +323,14 @@ exports.getStudentDashoard = async (req, res) => {
         course_id: studentProfile.course_id,
       },
     });
-    if (!trainerCenterAllocation) {
-      return res.status(404).json({
-        message: "Trainer center allocation not found",
-      });
-    }
-    const totalQuizzes = await Quiz.count({
-      where: {
-        tb_id: tb_id,
-        t_id: trainerCenterAllocation.t_id,
-      },
-    });
+    const totalQuizzes = trainerCenterAllocation
+      ? await Quiz.count({
+          where: {
+            tb_id: tb_id,
+            t_id: trainerCenterAllocation.t_id,
+          },
+        })
+      : 0;
 
     const completedQuizzes = await QuizAttempts.count({
       where: {
@@ -366,8 +359,8 @@ exports.getStudentDashoard = async (req, res) => {
     const statistics = [
       { label: "Roll No.", value: studentProfile.std_rollno },
       { label: "Name.", value: u.user_name },
-      { label: "Domain", value: course.course_full_name },
-      { label: "Center", value: center.center_name },
+      { label: "Domain", value: course?.course_full_name || "Not assigned" },
+      { label: "Center", value: center?.center_name || "Not assigned" },
       // { label: "Overall Progress", value: `${overallProgress.toFixed(1)}%` },
       {
         label: "Attendance Progress",
@@ -414,19 +407,23 @@ exports.getStudentDashoard = async (req, res) => {
     );
 
     // Count pending items
-    const pendingQuizCount =
-      (await Quiz.count({
-        where: {
-          tb_id: tb_id,
-          t_id: trainerCenterAllocation.course_id,
-        },
-      })) -
-      (await QuizAttempts.count({
-        where: {
-          std_cnic: studentProfile.std_cnic,
-          tb_id: tb_id,
-        },
-      }));
+    const pendingQuizCount = trainerCenterAllocation
+      ? Math.max(
+          (await Quiz.count({
+            where: {
+              tb_id: tb_id,
+              t_id: trainerCenterAllocation.t_id,
+            },
+          })) -
+            (await QuizAttempts.count({
+              where: {
+                std_cnic: studentProfile.std_cnic,
+                tb_id: tb_id,
+              },
+            })),
+          0
+        )
+      : 0;
 
     const pendingAssignmentCount = pendingAssignments.length;
 
@@ -457,15 +454,18 @@ exports.getStudentDashoard = async (req, res) => {
       order: [["ca_added_on", "DESC"]],
     });
 
-    const quiz = await Quiz.findAll({
-      where: {
-        tb_id,
-        ...(userType === "student"
-          ? { t_id: trainerCenterAllocation?.t_id }
-          : {}),
-      },
-      order: [["quiz_created_on", "DESC"]],
-    });
+    const quiz =
+      userType === "student" && !trainerCenterAllocation
+        ? []
+        : await Quiz.findAll({
+            where: {
+              tb_id,
+              ...(userType === "student"
+                ? { t_id: trainerCenterAllocation.t_id }
+                : {}),
+            },
+            order: [["quiz_created_on", "DESC"]],
+          });
 
     const assignmentList = await Assignment.findAll({
       where: { ...whereClause },

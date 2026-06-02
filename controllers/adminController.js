@@ -141,7 +141,8 @@ exports.loginAdmin = async (req, res) => {
       });
     }
 
-    const { user_username, user_password } = req.body;
+    const { user_password } = req.body;
+    const user_username = req.body.user_username?.trim();
     const trainingBatch = await TrainingBatchModel.findOne({
       order: [["tb_id", "DESC"]],
       attributes: ["tb_id", "tb_name", "tb_start", "tb_end", "tb_status"],
@@ -155,11 +156,21 @@ exports.loginAdmin = async (req, res) => {
     }
 
     const isEmail = /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(user_username);
+    const normalizedLogin = isEmail ? user_username.toLowerCase() : user_username;
 
     // Find user with validation
     const user = await User.findOne({
       where: {
-        [isEmail ? "user_email" : "user_username"]: user_username,
+        ...(isEmail
+          ? {
+              [Op.and]: [
+                sequelize.where(
+                  sequelize.fn("LOWER", sequelize.col("user_email")),
+                  normalizedLogin
+                ),
+              ],
+            }
+          : { user_username: normalizedLogin }),
         user_status: 1,
       },
       attributes: [
@@ -189,8 +200,10 @@ exports.loginAdmin = async (req, res) => {
       });
     }
 
+    const normalizedUserType = user.user_type?.toLowerCase();
+
     // Handle different user types
-    switch (user.user_type) {
+    switch (normalizedUserType) {
       case "trainer": {
         const trainer = await Trainer.findOne({
           where: { user_id: user.user_id },
@@ -270,7 +283,7 @@ exports.loginAdmin = async (req, res) => {
         break;
       }
 
-      case "Center Manager": {
+      case "center manager": {
         const centerUser = await CenterUser.findOne({
           where: { user_id: user.user_id },
         });
@@ -286,7 +299,7 @@ exports.loginAdmin = async (req, res) => {
         break;
       }
 
-      case "MasterTrainer": {
+      case "mastertrainer": {
         const masterTrainer = await MasterTrainer.findOne({
           where: { user_id: user.user_id },
         });
@@ -304,10 +317,10 @@ exports.loginAdmin = async (req, res) => {
     }
 
     // Log activity for trainers and students
-    if (["trainer", "student"].includes(user.user_type)) {
+    if (["trainer", "student"].includes(normalizedUserType)) {
       await ActivityLogModel.create({
         user_id: user.user_id,
-        user_type: user.user_type,
+        user_type: normalizedUserType,
         tb_id,
         center_id,
         course_id,
@@ -696,8 +709,9 @@ exports.changeUserPassword = async (req, res) => {
         user_id: user_id,
       },
     });
-    if (existingUser.user_password === "") {
+    if (!existingUser.user_password) {
       existingUser.user_password = newPassword;
+      existingUser.user_status = 1;
       await existingUser.save();
 
       if (student) {
@@ -738,6 +752,75 @@ exports.changeUserPassword = async (req, res) => {
     });
   }
 };
+
+exports.resetStudentPasswordByAdmin = async (req, res) => {
+  try {
+    const { user_id, newPassword } = req.body;
+
+    if (!user_id || !newPassword) {
+      return res.status(400).json({
+        success: false,
+        message: "Student and new password are required",
+      });
+    }
+
+    if (newPassword.length < 6) {
+      return res.status(400).json({
+        success: false,
+        message: "Password must be at least 6 characters",
+      });
+    }
+
+    const existingUser = await User.findOne({
+      where: { user_id },
+    });
+
+    if (
+      !existingUser ||
+      existingUser.user_type?.toLowerCase() !== "student"
+    ) {
+      return res.status(404).json({
+        success: false,
+        message: "Student user not found",
+      });
+    }
+
+    const student = await Student.findOne({
+      where: { user_id },
+    });
+
+    if (!student) {
+      return res.status(404).json({
+        success: false,
+        message: "Student profile not found",
+      });
+    }
+
+    const isSuspendedStudent =
+      student.std_lms_status === 2 ||
+      (student.suspension_reason && student.suspension_reason.trim() !== "");
+
+    existingUser.user_password = newPassword;
+    if (!isSuspendedStudent) {
+      existingUser.user_status = 1;
+      student.std_lms_status = 1;
+      await student.save();
+    }
+    await existingUser.save();
+
+    return res.json({
+      success: true,
+      message: "Student password reset successfully",
+    });
+  } catch (error) {
+    console.error("Admin student password reset error:", error);
+    return res.status(500).json({
+      success: false,
+      message: "Server error during student password reset",
+    });
+  }
+};
+
 exports.updateProfilePhoto = async (req, res) => {
   try {
     if (!req.file) {
@@ -785,10 +868,19 @@ exports.updateProfilePhoto = async (req, res) => {
 // Forgot Password
 exports.forgotPassword = async (req, res) => {
   try {
-    const { user_email } = req.body;
+    const user_email = req.body.user_email?.trim().toLowerCase();
+
+    if (!user_email) {
+      return res.status(400).json({ message: "Email is required" });
+    }
 
     // Check if user exists
-    const user = await User.findOne({ where: { user_email } });
+    const user = await User.findOne({
+      where: sequelize.where(
+        sequelize.fn("LOWER", sequelize.col("user_email")),
+        user_email
+      ),
+    });
     if (!user) {
       return res.status(404).json({
         message:
@@ -823,7 +915,15 @@ exports.forgotPassword = async (req, res) => {
 // Reset Password
 exports.resetPassword = async (req, res) => {
   try {
-    const { user_email, verification_code, new_password } = req.body;
+    const {
+      verification_code,
+      new_password,
+    } = req.body;
+    const user_email = req.body.user_email?.trim().toLowerCase();
+
+    if (!user_email) {
+      return res.status(400).json({ message: "Email is required" });
+    }
 
     // Check if the code exists and is valid
     const storedCode = verificationCodes[user_email];
@@ -836,13 +936,36 @@ exports.resetPassword = async (req, res) => {
     }
 
     // Find user by email
-    const user = await User.findOne({ where: { user_email } });
+    const user = await User.findOne({
+      where: sequelize.where(
+        sequelize.fn("LOWER", sequelize.col("user_email")),
+        user_email
+      ),
+    });
     if (!user) {
       return res.status(404).json({ message: "User not found" });
     }
 
+    const student = await Student.findOne({
+      where: { user_id: user.user_id },
+    });
+    const isSuspendedStudent =
+      student &&
+      (student.std_lms_status === 2 ||
+        (student.suspension_reason &&
+          student.suspension_reason.trim() !== ""));
+
     // Update password
     user.user_password = new_password;
+    if (
+      user.user_type?.toLowerCase() === "student" &&
+      student &&
+      !isSuspendedStudent
+    ) {
+      user.user_status = 1;
+      student.std_lms_status = 1;
+      await student.save();
+    }
     await user.save();
 
     // Clear the code from memory

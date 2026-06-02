@@ -206,11 +206,11 @@ exports.getStudentProfile = async (tb_id, center_id, course_id, user_id, userTyp
     // Build the WHERE clause dynamically
     const whereClause =
       userType === "trainer"
-        ? `WHERE u.user_type = 'Student'
+        ? `WHERE LOWER(u.user_type) = 'student'
            AND s.tb_id = ${tb_id}
            AND s.center_id IN (${t_center_ids.join(",")})
            AND s.course_id IN (${t_course_ids.join(",")})`
-        : `WHERE u.user_type = 'Student'
+        : `WHERE LOWER(u.user_type) = 'student'
            AND s.tb_id = ${tb_id}`;
 
     // Query to fetch student data - ENSURE tb_id is included
@@ -371,7 +371,7 @@ exports.getStudentProfileByCNIC = async (std_cnic) => {
       LEFT JOIN 
         centers AS ce ON s.center_id = ce.center_id
       WHERE 
-        u.user_type = 'Student'
+        LOWER(u.user_type) = 'student'
         AND s.std_cnic = :std_cnic
       LIMIT 1
       `,

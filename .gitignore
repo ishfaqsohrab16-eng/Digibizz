@@ -54,6 +54,11 @@ $RECYCLE.BIN/
 # Build/runtime directories
 uploads/
 
+# Database dumps/backups
+*.sql
+!migration/*.sql
+migration/database/
+
 # Frontend source should be versioned
 Frontend/node_modules/
 Frontend/dist/

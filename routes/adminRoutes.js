@@ -54,6 +54,11 @@ router.put(
   adminController.changeUserPassword
 );
 router.put("/change-student-password", adminController.changeUserPassword);
+router.put(
+  "/reset-student-password",
+  isAdminAuthenticated,
+  adminController.resetStudentPasswordByAdmin
+);
 
 // Forgot Password
 router.post("/forgot-password", adminController.forgotPassword);

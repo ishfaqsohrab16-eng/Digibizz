@@ -163,12 +163,20 @@ const getBasicHeaders = () => ({
 });
 export async function loginAdmin(credentials: LoginCredentials) {
   try {
+    const loginIdentifier = credentials.user_username.trim();
+    const normalizedCredentials = {
+      ...credentials,
+      user_username: loginIdentifier.includes("@")
+        ? loginIdentifier.toLowerCase()
+        : loginIdentifier,
+    };
+
     const response = await fetch(`${API_URL}/admin/login`, {
       method: "POST",
       headers: {
         "Content-Type": "application/json",
       },
-      body: JSON.stringify(credentials),
+      body: JSON.stringify(normalizedCredentials),
     });
 
     if (!response.ok) {
@@ -286,6 +294,34 @@ export const changeStudentPassword = async (
       const errorMessage =
         error.response?.data?.message || "Password change failed";
       throw new Error(errorMessage);
+    }
+    throw error;
+  }
+};
+
+export const resetStudentPasswordByAdmin = async (
+  userId: number,
+  newPassword: string
+) => {
+  try {
+    const response = await axios.put(
+      `${API_URL}/admin/reset-student-password`,
+      {
+        user_id: userId,
+        newPassword,
+      },
+      {
+        headers: {
+          Authorization: `Bearer ${getCurrentUserToken()}`,
+          "Content-Type": "application/json",
+        },
+      }
+    );
+
+    return response.data;
+  } catch (error) {
+    if (error instanceof AxiosError) {
+      handleApiError(error);
     }
     throw error;
   }
@@ -2325,7 +2361,7 @@ export const sendForgotPasswordEmail = async (email: string) => {
   try {
     const response = await axios.post(
       `${API_URL}/admin/forgot-password`,
-      { user_email: email },
+      { user_email: email.trim().toLowerCase() },
       {
         headers: {
           "Content-Type": "application/json",
@@ -2334,6 +2370,9 @@ export const sendForgotPasswordEmail = async (email: string) => {
     );
     return response.data;
   } catch (error) {
+    if (error instanceof AxiosError) {
+      handleApiError(error);
+    }
     throw error;
   }
 };
@@ -2345,7 +2384,11 @@ export const resetPassword = async (
   try {
     const response = await axios.post(
       `${API_URL}/admin/reset-password`,
-      { user_email: email, verification_code: code, new_password: newPassword },
+      {
+        user_email: email.trim().toLowerCase(),
+        verification_code: code,
+        new_password: newPassword,
+      },
       {
         headers: {
           "Content-Type": "application/json",
@@ -2354,6 +2397,9 @@ export const resetPassword = async (
     );
     return response.data;
   } catch (error) {
+    if (error instanceof AxiosError) {
+      handleApiError(error);
+    }
     throw error;
   }
 };
