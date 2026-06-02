@@ -145,6 +145,7 @@ const handleApiError = (error: unknown) => {
     if (error.response?.status === 401) {
       storage.clearSessionState();
       window.location.href = "/login";
+      throw new Error("Session expired. Please log in again.");
     }
     if (error.response) {
       throw new Error(
@@ -2178,6 +2179,9 @@ export const getDailyReport = async (
     );
     return response.data;
   } catch (error) {
+    if (error instanceof AxiosError) {
+      handleApiError(error);
+    }
     throw error;
   }
 };
@@ -2191,6 +2195,9 @@ export const createDailyReport = async (data: DailyReportFormData) => {
     });
     return response.data;
   } catch (error) {
+    if (error instanceof AxiosError) {
+      handleApiError(error);
+    }
     throw error;
   }
 };
