@@ -40,11 +40,13 @@ const createLeave = async (req, res, next) => {
 
     // Validate foreign keys
     const trainingBatch = await TrainingBatch.findByPk(tb_id);
-    const center = await Center.findByPk(course_id);
-    const course = await Course.findByPk(center_id);
+    const center = await Center.findByPk(center_id);
+    const course = await Course.findByPk(course_id);
 
     if (!trainingBatch || !center || !course) {
-      return res.status(404).json({ message: "Invalid foreign key reference" });
+      return res.status(404).json({
+        message: "Invalid batch, center, or course reference",
+      });
     }
 
     // Check existing leaves count
@@ -188,15 +190,15 @@ const updateLeave = async (req, res, next) => {
     }
 
     if (req.body.course_id) {
-      const center = await Center.findByPk(req.body.course_id);
-      if (!center)
-        return res.status(404).json({ message: "Invalid Center ID" });
+      const course = await Course.findByPk(req.body.course_id);
+      if (!course)
+        return res.status(404).json({ message: "Invalid Course ID" });
     }
 
     if (req.body.center_id) {
-      const course = await Course.findByPk(req.body.center_id);
-      if (!course)
-        return res.status(404).json({ message: "Invalid Course ID" });
+      const center = await Center.findByPk(req.body.center_id);
+      if (!center)
+        return res.status(404).json({ message: "Invalid Center ID" });
     }
 
     await leave.update(req.body);

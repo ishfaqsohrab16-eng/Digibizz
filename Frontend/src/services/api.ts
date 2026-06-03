@@ -1614,17 +1614,9 @@ export const updateEarningStatus = async (
 };
 export const StudentLeave = async (data: StudentLeaveFormData) => {
   try {
-    const formDataToSend = new FormData();
-    Object.entries(data).forEach(([key, value]) => {
-      formDataToSend.append(
-        key,
-        value !== null && value !== undefined ? String(value) : ""
-      );
-    });
-
     const response = await axios.post(
       `${API_URL}/studentLeave/leaves`,
-      formDataToSend,
+      data,
       {
         headers: {
           Authorization: `Bearer ${getCurrentUserToken()}`,

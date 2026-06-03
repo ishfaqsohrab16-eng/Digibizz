@@ -2,12 +2,7 @@ import React, { useState, useEffect } from "react";
 import { useBatch } from "../../../context/BatchContext";
 import SettingsHeader from "../../Settings/SettingsHeader";
 import CustomCKEditor from "../../Assignment/CustomCKEditor";
-import {
-  postAssignment,
-  StudentLeave,
-} from "../../../services/api";
-import { Center, Course } from "../../../types/trainer";
-import { AssignmentFormErrors } from "../../../types/assignment";
+import { StudentLeave } from "../../../services/api";
 import {
   StudentLeaveFormData,
   StudentLeaveFormErrors,
@@ -150,7 +145,11 @@ const StudentLeaveForm = ({
       openForm("StudentLeave");
     } catch (error) {
       console.error("Submission error:", error);
-      alert("Error submitting leave application");
+      const errorMessage =
+        error instanceof Error
+          ? error.message
+          : "Error submitting leave application";
+      toast.error(errorMessage);
     } finally {
       setIsSubmitting(false);
     }
