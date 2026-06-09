@@ -59,6 +59,16 @@ router.put(
   isAdminAuthenticated,
   adminController.resetStudentPasswordByAdmin
 );
+router.get(
+  "/app-settings",
+  isAdminAuthenticated,
+  adminController.getAppSettings
+);
+router.put(
+  "/app-settings",
+  isAdminAuthenticated,
+  adminController.updateAppSettings
+);
 
 // Forgot Password
 router.post("/forgot-password", adminController.forgotPassword);

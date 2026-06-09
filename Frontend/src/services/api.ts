@@ -326,6 +326,44 @@ export const resetStudentPasswordByAdmin = async (
     throw error;
   }
 };
+
+export const getAppSettings = async () => {
+  try {
+    const response = await axios.get(`${API_URL}/admin/app-settings`, {
+      headers: {
+        Authorization: `Bearer ${getCurrentUserToken()}`,
+        "Content-Type": "application/json",
+      },
+    });
+
+    return response.data;
+  } catch (error) {
+    if (error instanceof AxiosError) {
+      handleApiError(error);
+    }
+    throw error;
+  }
+};
+
+export const updateAppSettings = async (settings: {
+  requireStudentDocuments: boolean;
+}) => {
+  try {
+    const response = await axios.put(`${API_URL}/admin/app-settings`, settings, {
+      headers: {
+        Authorization: `Bearer ${getCurrentUserToken()}`,
+        "Content-Type": "application/json",
+      },
+    });
+
+    return response.data;
+  } catch (error) {
+    if (error instanceof AxiosError) {
+      handleApiError(error);
+    }
+    throw error;
+  }
+};
 export async function getUserProfile() {
   try {
     const response = await axios.get(`${API_URL}/user/profile`, {

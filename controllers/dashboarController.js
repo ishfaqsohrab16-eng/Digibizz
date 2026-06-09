@@ -26,6 +26,7 @@ const Holiday = require("../models/holidaysModel");
 const ExamAssignment = require("../models/examAssessmentModel");
 const CenterUsers = require("../models/centerUsersModel");
 const profileController = require("./profileController");
+const { getAppSettings } = require("../utils/appSettings");
 
 exports.getStudentDashoard = async (req, res) => {
   try {
@@ -80,8 +81,12 @@ exports.getStudentDashoard = async (req, res) => {
 
     const hasAllApprovedDocs = missingDocuments.length === 0;
 
+    const appSettings = getAppSettings();
+    const requireStudentDocuments =
+      appSettings.requireStudentDocuments !== false;
+
     // If documents are missing and user is a student, return early with document upload requirement
-    if (userType === "student" && !hasAllApprovedDocs) {
+    if (userType === "student" && requireStudentDocuments && !hasAllApprovedDocs) {
       return res.status(200).json({
         success: false,
         documents_uploaded: false,

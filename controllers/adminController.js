@@ -15,6 +15,10 @@ const TrainersCenterAllocationModel = require("../models/trainersCenterAllocatio
 const TrainingBatchModel = require("../models/trainingBatcheModel");
 const ActivityLogModel = require("../models/activityLogModel");
 const sendEmail = require("../servec/emailConfig"); // Import email utility
+const {
+  getAppSettings,
+  updateAppSettings,
+} = require("../utils/appSettings");
 
 // In-memory store for verification codes
 const verificationCodes = {};
@@ -817,6 +821,41 @@ exports.resetStudentPasswordByAdmin = async (req, res) => {
     return res.status(500).json({
       success: false,
       message: "Server error during student password reset",
+    });
+  }
+};
+
+exports.getAppSettings = async (req, res) => {
+  try {
+    return res.json({
+      success: true,
+      data: getAppSettings(),
+    });
+  } catch (error) {
+    console.error("Get app settings error:", error);
+    return res.status(500).json({
+      success: false,
+      message: "Failed to load app settings",
+    });
+  }
+};
+
+exports.updateAppSettings = async (req, res) => {
+  try {
+    const settings = updateAppSettings({
+      requireStudentDocuments: req.body.requireStudentDocuments !== false,
+    });
+
+    return res.json({
+      success: true,
+      message: "Settings updated successfully",
+      data: settings,
+    });
+  } catch (error) {
+    console.error("Update app settings error:", error);
+    return res.status(500).json({
+      success: false,
+      message: "Failed to update app settings",
     });
   }
 };
