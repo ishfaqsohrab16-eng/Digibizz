@@ -37,10 +37,17 @@ const createFeedback = async (req, res) => {
       return res.status(404).json({ message: "Student not found" });
     }
     const trainer = await TrainerCenterAllocation.findOne({
-      where: { center_id: student.center_id, course_id: student.course_id },
+      where: {
+        tb_id: student.tb_id,
+        center_id: student.center_id,
+        course_id: student.course_id,
+      },
     });
     if (!trainer) {
-      return res.status(404).json({ message: "Trainer not found" });
+      return res.status(400).json({
+        message:
+          "Trainer allocation not found for this student's batch, center, and course",
+      });
     }
     const newFeedback = await StudentsFeedback.create({
       std_rollno: student.std_rollno,
@@ -61,6 +68,7 @@ const createFeedback = async (req, res) => {
     });
     res.status(201).json(newFeedback);
   } catch (error) {
+    console.error("Create feedback error:", error);
     res.status(400).json({ message: error.message });
   }
 };

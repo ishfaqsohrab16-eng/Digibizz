@@ -66,8 +66,8 @@ const StudentsFeedback = sequelize.define(
       allowNull: false,
     },
     sf_trainer_feedback: {
-      type: DataTypes.STRING(255),
-      allowNull: false,
+      type: DataTypes.TEXT("long"),
+      allowNull: true,
     },
     sf_lab_clean: {
       type: DataTypes.INTEGER,
@@ -78,8 +78,8 @@ const StudentsFeedback = sequelize.define(
       allowNull: false,
     },
     sf_lab_feedback: {
-      type: DataTypes.STRING(255),
-      allowNull: false,
+      type: DataTypes.TEXT("long"),
+      allowNull: true,
     },
     sf_date: {
       type: DataTypes.STRING(50),

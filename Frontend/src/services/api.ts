@@ -2027,6 +2027,9 @@ export const submitFeedback = async (data: FeedbackSubmission) => {
     });
     return response.data;
   } catch (error) {
+    if (error instanceof AxiosError) {
+      handleApiError(error);
+    }
     throw error;
   }
 };
