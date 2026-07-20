@@ -13,6 +13,21 @@ const { Op } = require("sequelize");
 const { Console } = require("console");
 const MasterTrainer = require("../models/masterTrainersModel");
 
+const getMasterTrainerCourseIds = async (userId) => {
+  const assignments = await MasterTrainer.findAll({
+    where: { user_id: userId },
+    attributes: ["mt_course_id"],
+  });
+
+  return [
+    ...new Set(
+      assignments
+        .map((assignment) => Number(assignment.mt_course_id))
+        .filter(Boolean)
+    ),
+  ];
+};
+
 // Create new earning
 exports.createEarning = async (req, res) => {
   try {
@@ -748,14 +763,12 @@ exports.getEarningsByTrainingBatch = async (req, res) => {
     const { tb_id, user_id } = req.params;
     let conditions = { tb_id };
 
-    const mt = await MasterTrainer.findOne({
-      where: { user_id },
-    });
+    const masterTrainerCourseIds = await getMasterTrainerCourseIds(user_id);
 
-    if (mt) {
+    if (masterTrainerCourseIds.length > 0) {
       conditions = {
         tb_id,
-        course_id: mt.mt_course_id,
+        course_id: { [Op.in]: masterTrainerCourseIds },
       };
     }
 

@@ -835,16 +835,34 @@ exports.getMasterTrainerDashoard = async (req, res) => {
   try {
     const { user_id, tb_id } = req.params;
 
-    const masterTrainer = await MasterTrainer.findOne({
+    const masterTrainerAssignments = await MasterTrainer.findAll({
       where: { user_id: user_id },
+      attributes: ["mt_course_id"],
     });
 
-    if (!masterTrainer) {
+    if (!masterTrainerAssignments || masterTrainerAssignments.length === 0) {
       return res.status(404).json({ message: "Master Trainer not found" });
     }
 
+    const masterTrainerCourseIds = [
+      ...new Set(
+        masterTrainerAssignments
+          .map((assignment) => Number(assignment.mt_course_id))
+          .filter(Boolean)
+      ),
+    ];
+
+    if (masterTrainerCourseIds.length === 0) {
+      return res
+        .status(404)
+        .json({ message: "No courses assigned to this Master Trainer" });
+    }
+
     const trainerCenters = await TrainerCenterAllocation.findAll({
-      where: { course_id: masterTrainer.mt_course_id, tb_id: tb_id },
+      where: {
+        course_id: { [Op.in]: masterTrainerCourseIds },
+        tb_id: tb_id,
+      },
       include: [
         {
           model: TrainerModel,
@@ -862,6 +880,11 @@ exports.getMasterTrainerDashoard = async (req, res) => {
           as: "center",
           attributes: ["center_name"], // Include center name
         },
+        {
+          model: Course,
+          as: "course",
+          attributes: ["course_name"],
+        },
       ],
     });
 
@@ -876,7 +899,7 @@ exports.getMasterTrainerDashoard = async (req, res) => {
 
     const totalStudents = await student.count({
       where: { 
-        course_id: masterTrainer.mt_course_id, 
+        course_id: { [Op.in]: masterTrainerCourseIds },
         center_id: { [Op.in]: allowedCenters },
         tb_id: tb_id 
       },
@@ -885,7 +908,7 @@ exports.getMasterTrainerDashoard = async (req, res) => {
     const totalTickets = await Ticket.count({
       where: { 
         tb_id, 
-        course_id: masterTrainer.mt_course_id,
+        course_id: { [Op.in]: masterTrainerCourseIds },
         center_id: { [Op.in]: allowedCenters }
       },
     });
@@ -893,7 +916,7 @@ exports.getMasterTrainerDashoard = async (req, res) => {
     const totalAssignments = await Assignment.count({
       where: { 
         tb_id, 
-        course_id: masterTrainer.mt_course_id,
+        course_id: { [Op.in]: masterTrainerCourseIds },
         center_id: { [Op.in]: allowedCenters }
       },
     });
@@ -911,7 +934,7 @@ exports.getMasterTrainerDashoard = async (req, res) => {
     const totalEarnings = await Earnings.sum("earning_amount", {
       where: {
         tb_id,
-        course_id: masterTrainer.mt_course_id,
+        course_id: { [Op.in]: masterTrainerCourseIds },
         center_id: { [Op.in]: allowedCenters },
         earning_status: 1,
       },
@@ -924,6 +947,7 @@ exports.getMasterTrainerDashoard = async (req, res) => {
             tb_id,
             t_id: allocation.t_id,
             center_id: allocation.center_id,
+            course_id: allocation.course_id,
             earning_status: 1,
           },
         });
@@ -980,6 +1004,8 @@ exports.getMasterTrainerDashoard = async (req, res) => {
             where: {
               tb_id,
               t_id: allocation.t_id,
+              center_id: allocation.center_id,
+              course_id: allocation.course_id,
             },
             attributes: ["dlr_date"],
             raw: true,
@@ -1005,6 +1031,7 @@ exports.getMasterTrainerDashoard = async (req, res) => {
           trainer_user_id: allocation.trainer.user_id,
           trainerName: allocation.trainer?.user.user_name,
           centerName: allocation.center?.center_name,
+          courseName: allocation.course?.course_name,
           earnings: parseFloat(trainerEarnings || 0).toFixed(2),
           totalDays,
           submittedDays,

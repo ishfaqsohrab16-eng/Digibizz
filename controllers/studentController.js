@@ -559,20 +559,30 @@ exports.getStudentProfile = async (req, res) => {
           AND s.tb_id = ${tb_id}`;
       }
     } else if (userType === "MasterTrainer") {
-      const masterTrainer = await MasterTrainer.findOne({ where: { user_id } });
+      const masterTrainerAssignments = await MasterTrainer.findAll({
+        where: { user_id },
+        attributes: ["mt_course_id"],
+      });
 
-      if (!masterTrainer) {
+      if (!masterTrainerAssignments || masterTrainerAssignments.length === 0) {
         return res.status(404).json({
           success: false,
           message: "Master Trainer not found",
         });
       }
 
-      // Check if mt_course_id is defined before using it in the query
-      if (masterTrainer.mt_course_id) {
+      const masterTrainerCourseIds = [
+        ...new Set(
+          masterTrainerAssignments
+            .map((assignment) => Number(assignment.mt_course_id))
+            .filter(Boolean)
+        ),
+      ];
+
+      if (masterTrainerCourseIds.length > 0) {
         whereClause = `WHERE u.user_type = 'Student'
           AND s.tb_id = ${tb_id}
-          AND s.course_id = ${masterTrainer.mt_course_id}`;
+          AND s.course_id IN (${masterTrainerCourseIds.join(",")})`;
       } else {
         whereClause = `WHERE u.user_type = 'Student'
           AND s.tb_id = ${tb_id}`;

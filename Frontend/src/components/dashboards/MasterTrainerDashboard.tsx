@@ -27,6 +27,7 @@ export interface MasterTrainerDashboardData {
       trainer_user_id: number;
       trainerName: string;
       centerName: string;
+      courseName: string;
       earnings: string;
       totalDays: number;
       submittedDays: number;
@@ -201,6 +202,9 @@ const MasterTrainerDashboard: React.FC<AdminDashboardProps> = ({ openForm }) => 
                     Center Name
                   </th>
                   <th className="border border-gray-200 px-4 py-2 text-left text-[hsl(var(--foreground))] font-medium">
+                    Course
+                  </th>
+                  <th className="border border-gray-200 px-4 py-2 text-left text-[hsl(var(--foreground))] font-medium">
                     Earnings
                   </th>
                    <th className="border border-gray-200 px-4 py-2 text-left text-[hsl(var(--foreground))] font-medium">
@@ -231,6 +235,9 @@ const MasterTrainerDashboard: React.FC<AdminDashboardProps> = ({ openForm }) => 
                     </td>
                     <td className="border border-gray-200 px-4 py-2 text-[hsl(var(--foreground))]">
                       {data.centerName}
+                    </td>
+                    <td className="border border-gray-200 px-4 py-2 text-[hsl(var(--foreground))]">
+                      {data.courseName}
                     </td>
                     <td className="border border-gray-200 px-4 py-2 text-teal font-semibold">
                       ${data.earnings}

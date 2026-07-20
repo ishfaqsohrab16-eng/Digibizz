@@ -182,9 +182,15 @@ export const DashboardNav = ({
           />
           <NavItem
             icon={<MessageCircle size={20} />}
-            label="Batch Earnings"
-            onClick={() => openForm("course-earnings")}
-            href={createNavUrl("/dashboard/course-earnings")}
+            label={userType === "MasterTrainer" ? "Earnings" : "Batch Earnings"}
+            onClick={() =>
+              openForm(userType === "MasterTrainer" ? "EarningsReports" : "course-earnings")
+            }
+            href={createNavUrl(
+              userType === "MasterTrainer"
+                ? "/dashboard/EarningsReports"
+                : "/dashboard/course-earnings"
+            )}
             hasSubmenu
           />
         </>

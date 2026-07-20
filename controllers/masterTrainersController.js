@@ -116,20 +116,45 @@ exports.getMasterTrainerProfile = async (req, res) => {
       });
     }
 
-    // Transform the data to match the frontend interface
-    const transformedData = rows.map((trainer) => ({
-      user_id: trainer.user_id,
-      user_name: trainer.user_name,
-      user_username: trainer.user_username,
-      user_email: trainer.user_email,
-      user_type: trainer.user_type,
-      user_status: trainer.user_status,
-      user_profile_photo: trainer.user_profile_photo,
-      courseId: trainer.mt_course_id,
-      course_name: trainer.course_name,
-      mt_added_on: trainer.mt_added_on,
-      mt_id: trainer.mt_id,
-    }));
+    // Master trainers can have multiple rows, one per assigned course.
+    // Return one user row with all assigned courses so the UI does not show only one course.
+    const trainersByUser = new Map();
+
+    rows.forEach((trainer) => {
+      const existing = trainersByUser.get(trainer.user_id);
+      const courseIds = trainer.mt_course_id ? [trainer.mt_course_id] : [];
+      const courseNames = trainer.course_name ? [trainer.course_name] : [];
+
+      if (!existing) {
+        trainersByUser.set(trainer.user_id, {
+          user_id: trainer.user_id,
+          user_name: trainer.user_name,
+          user_username: trainer.user_username,
+          user_email: trainer.user_email,
+          user_type: trainer.user_type,
+          user_status: trainer.user_status,
+          user_profile_photo: trainer.user_profile_photo,
+          courseId: trainer.mt_course_id,
+          courseIds,
+          course_name: courseNames.join(", "),
+          course_names: courseNames,
+          mt_added_on: trainer.mt_added_on,
+          mt_id: trainer.mt_id,
+        });
+        return;
+      }
+
+      if (trainer.mt_course_id && !existing.courseIds.includes(trainer.mt_course_id)) {
+        existing.courseIds.push(trainer.mt_course_id);
+      }
+
+      if (trainer.course_name && !existing.course_names.includes(trainer.course_name)) {
+        existing.course_names.push(trainer.course_name);
+        existing.course_name = existing.course_names.join(", ");
+      }
+    });
+
+    const transformedData = Array.from(trainersByUser.values());
 
     return res.status(200).json({
       success: true,
