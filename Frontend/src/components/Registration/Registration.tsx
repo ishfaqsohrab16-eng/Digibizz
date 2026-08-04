@@ -9,6 +9,7 @@ import {
 
 function Registration() {
   const [currentBatchId, setCurrentBatchId] = useState<number>(0);
+  const [currentBatchName, setCurrentBatchName] = useState<string>("");
   const [admissionOpen, setAdmissionOpen] = useState(true);
 
   const [cnic, setCnic] = useState({
@@ -18,6 +19,7 @@ function Registration() {
   const [error, setError] = useState<string>("");
   const [loading, setLoading] = useState(false);
   const [step, setStep] = useState(1);
+  const [, setCandName] = useState("");
   const [candidateAlreadyExists, setCandidateAlreadyExists] = useState(false);
   const [studentData, setStudentData] = useState<string>("");
   const formatCnic = (value: string) => {
@@ -44,15 +46,21 @@ function Registration() {
         );
 
         if (sortedBatches.length > 0) {
-          const latestBatchId = sortedBatches[0].tb_id;
+          const latestBatch = sortedBatches[0];
+          const latestBatchId = latestBatch.tb_id;
           setCurrentBatchId(latestBatchId);
+          setCurrentBatchName(latestBatch.tb_name || `Batch-${latestBatchId}`);
           const admissionState = await getPublicAdmissionControl(latestBatchId);
           setAdmissionOpen((admissionState?.totalOpen || 0) > 0);
         } else {
+          setCurrentBatchId(0);
+          setCurrentBatchName("");
           setAdmissionOpen(false);
         }
       } catch (error) {
         console.error("Failed to fetch admission state:", error);
+        setCurrentBatchId(0);
+        setCurrentBatchName("");
         setAdmissionOpen(false);
       }
     };
@@ -75,6 +83,12 @@ function Registration() {
     const cleanedCnic = cnic.cnicNo.replace(/\D/g, "");
     if (cleanedCnic.length !== 13) {
       setError("CNIC must be exactly 13 digits long");
+      setLoading(false);
+      return;
+    }
+
+    if (!currentBatchId) {
+      setError("No active training batch found for admissions");
       setLoading(false);
       return;
     }
@@ -132,7 +146,7 @@ function Registration() {
               <div className="bg-white border border-gray-300 rounded-md shadow-md w-full max-w-6xl p-6">
                 <div className="bg-green-700 text-white text-center py-3 rounded-t-md">
                   <h2 className="text-xl font-semibold">
-                    Batch-9 Admission Undertaking & Registration
+                    {currentBatchName || "Current Batch"} Admission Undertaking & Registration
                   </h2>
                 </div>
                 <div className="p-4">
@@ -248,7 +262,7 @@ function Registration() {
                     <div className="flex gap-4">
                       <button
                         type="submit"
-                        disabled={loading || candidateAlreadyExists || !admissionOpen}
+                        disabled={loading || candidateAlreadyExists || !admissionOpen || !currentBatchId}
                         className={`font-bold py-2 px-4 rounded focus:outline-none focus:shadow-outline ${
                           candidateAlreadyExists
                             ? "bg-gray-400 cursor-not-allowed"
@@ -285,6 +299,7 @@ function Registration() {
             handleNext={handleNext}
             isIttiRegistration={false}
             batchId={currentBatchId}
+            batchName={currentBatchName}
           />
         );
       // case 3:

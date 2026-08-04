@@ -1264,10 +1264,11 @@ export const saveBatchAdmissionControl = async (data: {
   return response.data;
 };
 
-export const getCandidateProfileByCnic = async (cnic: string, tbId: number = 9) => {
+export const getCandidateProfileByCnic = async (cnic: string, tbId?: number) => {
   try {
+    const query = tbId ? `?tb_id=${tbId}` : "";
     const response = await axios.get(
-      `${API_URL}/candidateRoutes/check-cnic/${cnic}?tb_id=${tbId}`,
+      `${API_URL}/candidateRoutes/check-cnic/${cnic}${query}`,
       {
         headers: {
           Authorization: `Bearer ${getCurrentUserToken()}`,

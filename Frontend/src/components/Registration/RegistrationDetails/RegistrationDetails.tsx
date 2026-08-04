@@ -20,6 +20,7 @@ interface RegistrationDetailsProps {
   handleNext: (test: number, name?: string) => void;
   isIttiRegistration?: boolean;
   batchId: number;
+  batchName?: string;
 }
 const today = new Date();
 const formattedToday = today.toISOString().split("T")[0]; // Extract only the date part (YYYY-MM-DD)
@@ -29,7 +30,7 @@ const initialFormData: CandidateFormData = {
   cand_cnic: "",
   cand_name: "",
   cand_fathername: "",
-  tb_id: 9,
+  tb_id: 0,
   course_id: 0,
   center_id: 0,
   cand_email: "",
@@ -69,6 +70,7 @@ const RegistrationDetails: React.FC<RegistrationDetailsProps> = ({
   cnicNo,
   isIttiRegistration = false,
   batchId,
+  batchName,
 }) => {
   const [formData, setFormData] = useState<CandidateFormData>(initialFormData);
   const [errors, setErrors] = useState<{ [key: string]: string }>({});
@@ -310,7 +312,7 @@ const RegistrationDetails: React.FC<RegistrationDetailsProps> = ({
         <div className="bg-white border border-gray-300 rounded-md shadow-md w-full max-w-6xl">
           <div className="bg-green-700 text-white text-center py-3 rounded-t-md px-4">
             <h2 className="text-lg sm:text-xl font-semibold">
-              Batch-9 Admission Undertaking & Registration
+              {batchName || "Current Batch"} Admission Undertaking & Registration
             </h2>
           </div>
 

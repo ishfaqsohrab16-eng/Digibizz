@@ -16,6 +16,7 @@ import Logo from "../../assets/logo.png";
 import { useNavigate } from "react-router-dom";
 import {
   getCandidateProfileByCnic,
+  getTrainingBatches,
   updateCandidateTestScore,
 } from "../../services/api";
 import { UpdateCandidateTestScoreType } from "../../types/registration";
@@ -61,7 +62,17 @@ const QuizInterface: React.FC<RegistrationDetailsProps> = ({
   }
   const fetchCandidateProfile = async () => {
     try {
-      const response = await getCandidateProfileByCnic(cnicNo);
+      const batchResponse = await getTrainingBatches();
+      const sortedBatches = (batchResponse?.data || []).sort(
+        (a: { tb_id: number }, b: { tb_id: number }) => b.tb_id - a.tb_id
+      );
+      const latestBatchId = sortedBatches[0]?.tb_id;
+
+      if (!latestBatchId) {
+        throw new Error("No active training batch found");
+      }
+
+      const response = await getCandidateProfileByCnic(cnicNo, latestBatchId);
 
       setCandidate({
         candName: response.candidate.name || "Unknown Candidate",
