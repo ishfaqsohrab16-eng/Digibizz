@@ -5,7 +5,6 @@ import path from 'path'
 // https://vitejs.dev/config/
 export default defineConfig({
   plugins: [reactSWC()],
-  base: '/',
   css: {
     // Ensure CSS processing happens correctly
     postcss: './postcss.config.js',
@@ -14,9 +13,5 @@ export default defineConfig({
     alias: {
       '@': path.resolve(__dirname, './src'),
     },
-  },
-  build: {
-    outDir: path.resolve(__dirname, '../dist'),
-    emptyOutDir: true,
-  },
+  }
 })

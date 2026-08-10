@@ -1,5 +1,4 @@
 import React, { useEffect, useState } from "react";
-import { useParams } from "react-router-dom";
 import logo from "../../assets/logo.png";
 import RegistrationDetails from "./RegistrationDetails/RegistrationDetails";
 import {
@@ -23,14 +22,6 @@ function Registration() {
   const [, setCandName] = useState("");
   const [candidateAlreadyExists, setCandidateAlreadyExists] = useState(false);
   const [studentData, setStudentData] = useState<string>("");
-  const { centerId: centerIdParam } = useParams<{ centerId?: string }>();
-  const routeCenterId = Number(centerIdParam || 0);
-  const isCenterRegistration = routeCenterId > 0;
-
-  const registrationHeader = isCenterRegistration
-    ? "Center-Specific Admission & Registration"
-    : "Batch 10 Admission Undertaking & Registration";
-
   const formatCnic = (value: string) => {
     const cleanedValue = value.replace(/\D/g, "");
     // Limit to 13 digits maximum
@@ -155,7 +146,7 @@ function Registration() {
               <div className="bg-white border border-gray-300 rounded-md shadow-md w-full max-w-6xl p-6">
                 <div className="bg-green-700 text-white text-center py-3 rounded-t-md">
                   <h2 className="text-xl font-semibold">
-                    {registrationHeader}
+                    {currentBatchName || "Current Batch"} Admission Undertaking & Registration
                   </h2>
                 </div>
                 <div className="p-4">
@@ -309,8 +300,6 @@ function Registration() {
             isIttiRegistration={false}
             batchId={currentBatchId}
             batchName={currentBatchName}
-            fixedCenterId={routeCenterId}
-            routeLabel={registrationHeader}
           />
         );
       // case 3:
