@@ -532,6 +532,14 @@ const RegistrationDetails: React.FC<RegistrationDetailsProps> = ({
   const activeStep = STEPS[stepIndex];
   const isLastStep = stepIndex === STEPS.length - 1;
 
+  // On a dedicated center link there is nothing to choose, so the center step
+  // just states which center the application is for.
+  const centerStepIsLocked = activeStep.key === "center" && Boolean(lockedCenter);
+  const stepTitle = centerStepIsLocked ? "Your DigiBizz center" : activeStep.title;
+  const stepSubtitle = centerStepIsLocked
+    ? "Your application is for the center shown below."
+    : activeStep.subtitle;
+
   const renderStepBody = () => {
     switch (activeStep.key) {
       case "personal":
@@ -670,10 +678,8 @@ const RegistrationDetails: React.FC<RegistrationDetailsProps> = ({
         {/* Body */}
         <div className="grid grid-cols-1 lg:grid-cols-[minmax(0,1fr)_340px]">
           <form onSubmit={handleSubmit} noValidate className="px-5 py-7 sm:px-8">
-            <h1 className="text-2xl font-bold text-gray-900 sm:text-3xl">
-              {activeStep.title}
-            </h1>
-            <p className="mt-2 text-sm text-gray-500">{activeStep.subtitle}</p>
+            <h1 className="text-2xl font-bold text-gray-900 sm:text-3xl">{stepTitle}</h1>
+            <p className="mt-2 text-sm text-gray-500">{stepSubtitle}</p>
 
             <div className="mt-7">{renderStepBody()}</div>
 
