@@ -73,6 +73,12 @@ const AdmissionControlPanel: React.FC = () => {
   const isOpen = (centerId: number, courseId: number) =>
     Boolean(rules[getBatchRuleKey(centerId, courseId)]);
 
+  const isCenterOpen = (centerId: number) =>
+    courses.some((course) => isOpen(centerId, course.course_id));
+
+  const getCenterRegistrationLink = (centerId: number) =>
+    `${window.location.origin}/registration/center/${centerId}`;
+
   const getAllowedGender = (centerId: number, courseId: number): GenderRule =>
     rules[getBatchRuleKey(centerId, courseId)] || "all";
 
@@ -82,6 +88,28 @@ const AdmissionControlPanel: React.FC = () => {
       const next = { ...prev };
       if (checked) next[key] = prev[key] || "all";
       else delete next[key];
+      return next;
+    });
+  };
+
+  const handleCenterToggle = (centerId: number, checked: boolean) => {
+    const batchKey = `-${selectedBatchId}`;
+    setRules((prev) => {
+      const next = { ...prev };
+      if (checked) {
+        courses.forEach((course) => {
+          const key = `${makeRuleKey(centerId, course.course_id)}${batchKey}`;
+          if (!next[key]) {
+            next[key] = "all";
+          }
+        });
+      } else {
+        Object.keys(next).forEach((key) => {
+          if (key.startsWith(`${centerId}-`) && key.endsWith(batchKey)) {
+            delete next[key];
+          }
+        });
+      }
       return next;
     });
   };
@@ -155,7 +183,7 @@ const AdmissionControlPanel: React.FC = () => {
         <table className="min-w-full text-sm">
           <thead className="bg-gray-100">
             <tr>
-              <th className="p-2 text-left">Center</th>
+              <th className="p-2 text-left">Center / Link</th>
               {courses.map((course) => (
                 <th key={course.course_id} className="p-2 text-left min-w-[220px]">
                   {course.course_full_name}
@@ -166,7 +194,38 @@ const AdmissionControlPanel: React.FC = () => {
           <tbody>
             {centers.map((center) => (
               <tr key={center.center_id} className="border-t align-top">
-                <td className="p-2 font-medium">{center.center_name}</td>
+                <td className="p-2 align-top">
+                  <div className="space-y-2">
+                    <div className="font-medium">{center.center_name}</div>
+                    <label className="inline-flex items-center gap-2 text-sm">
+                      <input
+                        type="checkbox"
+                        checked={isCenterOpen(center.center_id)}
+                        onChange={(e) =>
+                          handleCenterToggle(center.center_id, e.target.checked)
+                        }
+                      />
+                      <span>Enable center registration link</span>
+                    </label>
+                    {isCenterOpen(center.center_id) && selectedBatchId ? (
+                      <div className="text-xs text-blue-600 break-all">
+                        <div className="font-semibold">Center registration link:</div>
+                        <a
+                          href={getCenterRegistrationLink(center.center_id)}
+                          target="_blank"
+                          rel="noreferrer"
+                          className="underline"
+                        >
+                          {getCenterRegistrationLink(center.center_id)}
+                        </a>
+                      </div>
+                    ) : (
+                      <div className="text-xs text-gray-500">
+                        Toggle on to publish a center-specific registration link.
+                      </div>
+                    )}
+                  </div>
+                </td>
                 {courses.map((course) => (
                   <td key={course.course_id} className="p-2">
                     <div className="flex flex-col gap-2">
