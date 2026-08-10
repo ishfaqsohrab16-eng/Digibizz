@@ -24,7 +24,7 @@ const ThankYou: React.FC<RegistrationDetailsProps> = ({
         <div className="bg-white border border-gray-300 rounded-md shadow-md w-full max-w-6xl p-6">
           <div className="bg-green-700 text-white text-center py-3 rounded-t-md">
             <h2 className="text-xl font-semibold">
-              Admission Undertaking & Registration
+              Batch-8 Admission Undertaking & Registration
             </h2>
           </div>
           <div className="flex justify-center min-h-screen mt-10 bg-white">

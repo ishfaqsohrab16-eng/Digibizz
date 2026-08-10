@@ -21,7 +21,6 @@ import {
   getCenter,
 } from "../../services/api";
 import { Course } from "../../types/trainer";
-import { useBatch } from "../../context/BatchContext";
 
 interface FormData {
   cand_interview_marks: string;
@@ -139,7 +138,6 @@ const InterviewPortal = () => {
   const [candidateStatus, setCandidateStatus] = useState<number>(0); // 0: pending, 1: passed, 2: rejected/suspended
   const [hasInterviewMarks, setHasInterviewMarks] = useState(false);
   const [hideButtons, setHideButtons] = useState(false);
-  const { selectedBatchId, selectedBatchName } = useBatch();
 
   const BACKEND_URL = import.meta.env.VITE_BACKEND_URL;
   const formatCnic = (value: string) => {
@@ -187,15 +185,11 @@ const InterviewPortal = () => {
       toast.error("Please enter a CNIC number");
       return;
     }
-    if (!selectedBatchId) {
-      toast.error("Please select a training batch first");
-      return;
-    }
     setRejectReason("");
     setIsSearching(true);
     setHasData(false);
     try {
-      const response = await getCandidateProfileByCnic(searchCnic, selectedBatchId);
+      const response = await getCandidateProfileByCnic(searchCnic);
 
       if (response.success === false) {
         throw new Error("Student not found");
@@ -661,7 +655,7 @@ const InterviewPortal = () => {
                 <Info className="w-5 h-5 text-[hsl(var(--muted-foreground))]" />
               </span>
               <h1 className="text-2xl font-semibold text-[hsl(var(--foreground))]">
-                {selectedBatchName || "Selected Batch"} Admissions
+                Batch-8 Admissions
               </h1>
               <p className="text-sm text-[hsl(var(--muted-foreground))] mt-1">
                 Review and score candidate information

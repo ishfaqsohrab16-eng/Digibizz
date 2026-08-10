@@ -52,7 +52,6 @@ function AppContent() {
           <Route path="/signup" element={<SignupForm />} />
           <Route path="/forgot-password" element={<ForgotPasswordForm />} />
           <Route path="/registration" element={<Registration />} />
-          <Route path="/registration/center/:centerId" element={<Registration />} />
           <Route path="/itti-registration" element={<Registration />} />
           <Route
             path="/dashboard/:activeForm?"
