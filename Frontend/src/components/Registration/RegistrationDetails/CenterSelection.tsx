@@ -5,6 +5,7 @@ interface DigiBizzCenterSelectionProps {
   errors: { [key: string]: string };
   handleInputChange: (e: React.ChangeEvent<HTMLSelectElement>) => void;
   center: { center_id: number; center_name: string }[];
+  fixedCenterId?: number;
   admissionRules: Array<{
     center_id: number;
     course_id: number;
@@ -17,10 +18,16 @@ const DigiBizzCenterSelection: React.FC<DigiBizzCenterSelectionProps> = ({
   errors,
   handleInputChange,
   center,
+  fixedCenterId,
   admissionRules,
 }) => {
   const allowedCenterIds = new Set(admissionRules.map((rule) => Number(rule.center_id)));
   const selectedGender = String(formData.cand_gender || "").toLowerCase();
+  const selectedCenterId = fixedCenterId ? Number(fixedCenterId) : undefined;
+  const centerOptions = selectedCenterId
+    ? center.filter((centerItem) => centerItem.center_id === selectedCenterId)
+    : center;
+  const isCenterLocked = Boolean(fixedCenterId);
 
   return (
     <div className="p-2 rounded-md">
@@ -59,10 +66,11 @@ const DigiBizzCenterSelection: React.FC<DigiBizzCenterSelectionProps> = ({
             name="center_id"
             value={formData.center_id}
             onChange={handleInputChange}
-            className="shadow appearance-none border rounded w-full py-2 px-3 text-gray-700 leading-tight focus:outline-none focus:shadow-outline"
+            disabled={isCenterLocked}
+            className="shadow appearance-none border rounded w-full py-2 px-3 text-gray-700 leading-tight focus:outline-none focus:shadow-outline disabled:bg-gray-100"
           >
             <option value="">Please Select Center</option>
-            {center
+            {centerOptions
               .filter((centerItem) => {
                 if (!allowedCenterIds.has(centerItem.center_id)) {
                   return false;
@@ -82,24 +90,24 @@ const DigiBizzCenterSelection: React.FC<DigiBizzCenterSelectionProps> = ({
                 </option>
               ))}
           </select>
-          {errors.center && (
-            <p className="text-red-500 text-xs mt-1">{errors.center}</p>
+          {(errors.center_id || errors.center) && (
+            <p className="text-red-500 text-xs mt-1">
+              {errors.center_id || errors.center}
+            </p>
           )}
         </div>
 
         <div>
           <h4 className="font-semibold mb-2 text-sm">Class Timings:</h4>
           <ul className="list-disc list-inside text-sm">
-            <li>BUITEMS: 03:00 PM to 05:00 PM</li>
-            <li>UoB: 03:00 PM to 05:00 PM</li>
-            <li>UoL: 03:00 PM to 05:00 PM</li>
-            <li>Govt Girls College: 03:00 PM to 05:00 PM</li>
-            <li>ITTI Peshin Stop: 03:00 PM to 05:00 PM</li>
-            <li>ITTI Zhob:</li>
+            <li>BUITEMS: 02:00 PM to 04:00 PM</li>
+            <li>UoB: 02:00 PM to 04:00 PM</li>
+            <li>Girls College Quetta Cantt: 12:00 PM to 02:00 PM</li>
+            <li>ITTI Pishin Stop Quetta:</li>
             <ul className="list-disc list-inside ml-4">
-              <li>Content Marketing & Advertising: 11:00 AM to 1:00 PM</li>
-              <li>Amazon Web & e-Commerce: 3:00 PM to 5:00 PM</li>
-              <li>Creative Designing: 11:00 AM to 1:00 PM</li>
+              <li>Digital Marketing: 11:30 AM to 01:30 PM</li>
+              <li>Graphic Design: 01:00 PM to 03:00 PM</li>
+              <li>Amazon & Ecoomerce: 03:00 PM to 05:00 PM</li>
             </ul>
           </ul>
         </div>

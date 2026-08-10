@@ -1,7 +1,7 @@
 import { existsSync, readFileSync, readdirSync, statSync } from "node:fs";
 import { extname, join } from "node:path";
 
-const distDir = join(process.cwd(), "dist");
+const distDir = join(process.cwd(), "..", "dist");
 const forbiddenPatterns = [
   "http://localhost:3000",
   "https://localhost:3000",

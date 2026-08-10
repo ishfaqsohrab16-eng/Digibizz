@@ -21,6 +21,8 @@ interface RegistrationDetailsProps {
   isIttiRegistration?: boolean;
   batchId: number;
   batchName?: string;
+  fixedCenterId?: number;
+  routeLabel?: string;
 }
 const today = new Date();
 const formattedToday = today.toISOString().split("T")[0]; // Extract only the date part (YYYY-MM-DD)
@@ -71,6 +73,8 @@ const RegistrationDetails: React.FC<RegistrationDetailsProps> = ({
   isIttiRegistration = false,
   batchId,
   batchName,
+  fixedCenterId = 0,
+  routeLabel,
 }) => {
   const [formData, setFormData] = useState<CandidateFormData>(initialFormData);
   const [errors, setErrors] = useState<{ [key: string]: string }>({});
@@ -80,6 +84,12 @@ const RegistrationDetails: React.FC<RegistrationDetailsProps> = ({
       setFormData((prev) => ({ ...prev, tb_id: batchId }));
     }
   }, [batchId]);
+
+  useEffect(() => {
+    if (fixedCenterId) {
+      setFormData((prev) => ({ ...prev, center_id: fixedCenterId }));
+    }
+  }, [fixedCenterId]);
 
   const [center, setCenters] = useState<
     { center_id: number; center_name: string }[]
@@ -312,7 +322,7 @@ const RegistrationDetails: React.FC<RegistrationDetailsProps> = ({
         <div className="bg-white border border-gray-300 rounded-md shadow-md w-full max-w-6xl">
           <div className="bg-green-700 text-white text-center py-3 rounded-t-md px-4">
             <h2 className="text-lg sm:text-xl font-semibold">
-              {batchName || "Current Batch"} Admission Undertaking & Registration
+              {routeLabel || "Batch 10 Admission Undertaking & Registration"}
             </h2>
           </div>
 
@@ -354,6 +364,7 @@ const RegistrationDetails: React.FC<RegistrationDetailsProps> = ({
                     errors={errors}
                     handleInputChange={handleInputChange}
                     center={center}
+                    fixedCenterId={fixedCenterId}
                     isIttiRegistration={isIttiRegistration}
                     admissionRules={admissionRules}
                   />
