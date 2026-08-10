@@ -1,25 +1,62 @@
-import React, { useEffect, useState } from "react";
+import React, { useEffect, useMemo, useState } from "react";
+import { Link, useParams } from "react-router-dom";
+import { AlertTriangle, ArrowRight, CheckCircle2, MapPin } from "lucide-react";
 import logo from "../../assets/logo.png";
 import RegistrationDetails from "./RegistrationDetails/RegistrationDetails";
 import {
   getCandidateProfileByCnic,
+  getCenter,
   getPublicAdmissionControl,
   getTrainingBatches,
 } from "../../services/api";
+import { findCenterBySlug } from "../../utils/centerSlug";
+
+interface CenterOption {
+  center_id: number;
+  center_name: string;
+}
+
+type AdmissionRule = {
+  center_id: number;
+  course_id: number;
+  allowed_gender: "all" | "male" | "female";
+};
+
+const PageShell: React.FC<{ children: React.ReactNode }> = ({ children }) => (
+  <div className="min-h-screen bg-gray-100">
+    <div className="bg-[#006537] px-4 py-2 text-center text-sm text-white">
+      For admissions help:{" "}
+      <a href="mailto:support@digibizz.gob.pk" className="underline">
+        support@digibizz.gob.pk
+      </a>
+    </div>
+    <div className="mx-auto max-w-3xl px-4 py-8 sm:py-10">
+      <div className="mb-6 flex justify-center">
+        <img src={logo} alt="DigiBizz Balochistan" className="h-16 sm:h-20" />
+      </div>
+      {children}
+    </div>
+  </div>
+);
 
 function Registration() {
-  const [currentBatchId, setCurrentBatchId] = useState<number>(0);
-  const [admissionOpen, setAdmissionOpen] = useState(true);
+  const { centerSlug } = useParams<{ centerSlug?: string }>();
 
-  const [cnic, setCnic] = useState({
-    cnicNo: "",
-    confirmCnicNo: "",
-  });
+  const [currentBatchId, setCurrentBatchId] = useState<number>(0);
+  const [currentBatchName, setCurrentBatchName] = useState<string>("");
+  const [admissionOpen, setAdmissionOpen] = useState(true);
+  const [rules, setRules] = useState<AdmissionRule[]>([]);
+  const [centers, setCenters] = useState<CenterOption[]>([]);
+  const [bootstrapping, setBootstrapping] = useState(true);
+
+  const [cnic, setCnic] = useState({ cnicNo: "", confirmCnicNo: "" });
   const [error, setError] = useState<string>("");
   const [loading, setLoading] = useState(false);
   const [step, setStep] = useState(1);
+  const [candName, setCandName] = useState<string>("");
   const [candidateAlreadyExists, setCandidateAlreadyExists] = useState(false);
   const [studentData, setStudentData] = useState<string>("");
+
   const formatCnic = (value: string) => {
     const cleanedValue = value.replace(/\D/g, "");
     // Limit to 13 digits maximum
@@ -38,15 +75,23 @@ function Registration() {
   useEffect(() => {
     const loadAdmissionState = async () => {
       try {
-        const batchResponse = await getTrainingBatches();
+        const [batchResponse, centersData] = await Promise.all([
+          getTrainingBatches(),
+          getCenter().catch(() => []),
+        ]);
+
+        setCenters(Array.isArray(centersData) ? centersData : []);
+
         const sortedBatches = (batchResponse?.data || []).sort(
           (a: { tb_id: number }, b: { tb_id: number }) => b.tb_id - a.tb_id
         );
 
         if (sortedBatches.length > 0) {
-          const latestBatchId = sortedBatches[0].tb_id;
-          setCurrentBatchId(latestBatchId);
-          const admissionState = await getPublicAdmissionControl(latestBatchId);
+          const latestBatch = sortedBatches[0];
+          setCurrentBatchId(latestBatch.tb_id);
+          setCurrentBatchName(latestBatch.tb_name || "");
+          const admissionState = await getPublicAdmissionControl(latestBatch.tb_id);
+          setRules(admissionState?.rules || []);
           setAdmissionOpen((admissionState?.totalOpen || 0) > 0);
         } else {
           setAdmissionOpen(false);
@@ -54,11 +99,28 @@ function Registration() {
       } catch (error) {
         console.error("Failed to fetch admission state:", error);
         setAdmissionOpen(false);
+      } finally {
+        setBootstrapping(false);
       }
     };
 
     loadAdmissionState();
   }, []);
+
+  /** The center this dedicated link points at (undefined on the unified form). */
+  const lockedCenter = useMemo(() => {
+    if (!centerSlug) return null;
+    return findCenterBySlug(centers, centerSlug) || null;
+  }, [centers, centerSlug]);
+
+  const linkIsInvalid = Boolean(centerSlug) && !bootstrapping && !lockedCenter;
+
+  const lockedCenterOpen = useMemo(() => {
+    if (!lockedCenter) return false;
+    return rules.some((rule) => Number(rule.center_id) === Number(lockedCenter.center_id));
+  }, [lockedCenter, rules]);
+
+  const canApply = centerSlug ? lockedCenterOpen : admissionOpen;
 
   const handleSubmit = async (e: React.FormEvent<HTMLFormElement>) => {
     e.preventDefault();
@@ -90,14 +152,14 @@ function Registration() {
         }
         // Stay on current step - do NOT proceed
         return;
-      } else if (response.admissions_open === false || !admissionOpen) {
+      } else if (response.admissions_open === false || !canApply) {
         setError("Admissions are currently closed for this batch");
         return;
       } else {
         // New candidate - proceed to registration
         setCandidateAlreadyExists(false); // Reset in case user tries different CNIC
         setStudentData(""); // Reset student data
-        handleNext(2, "John Doe");
+        handleNext(2);
       }
     } catch (err) {
       setError(err instanceof Error ? err.message : "Submission failed");
@@ -106,178 +168,198 @@ function Registration() {
       setLoading(false);
     }
   };
+
   const handleNext = (stepNumber: number, name?: string) => {
+    if (name) setCandName(name);
     setStep(stepNumber);
+    window.scrollTo({ top: 0, behavior: "smooth" });
   };
+
+  const renderStartScreen = () => {
+    if (linkIsInvalid) {
+      return (
+        <PageShell>
+          <div className="rounded-lg border border-gray-200 bg-white p-8 text-center shadow-sm">
+            <AlertTriangle className="mx-auto text-orange-500" size={36} />
+            <h1 className="mt-4 text-xl font-bold text-gray-900">
+              This apply link is not valid
+            </h1>
+            <p className="mx-auto mt-2 max-w-md text-sm text-gray-600">
+              We could not find a DigiBizz center for{" "}
+              <span className="font-semibold">/registration/{centerSlug}</span>. The link may
+              have changed.
+            </p>
+            <Link
+              to="/registration"
+              className="mt-6 inline-flex items-center gap-2 rounded-md bg-[#006537] px-5 py-2.5 text-sm font-semibold text-white hover:bg-[#00522c]"
+            >
+              Go to the main admission form
+              <ArrowRight size={16} />
+            </Link>
+          </div>
+        </PageShell>
+      );
+    }
+
+    return (
+      <PageShell>
+        <div className="overflow-hidden rounded-lg border border-gray-200 bg-white shadow-sm">
+          <div className="bg-[#006537] px-6 py-4 text-center text-white">
+            <h1 className="text-lg font-semibold sm:text-xl">
+              {currentBatchName || "Admission"} — Undertaking &amp; Registration
+            </h1>
+            {lockedCenter && (
+              <p className="mt-1.5 inline-flex items-center gap-1.5 rounded-full bg-white/15 px-3 py-1 text-xs font-medium">
+                <MapPin size={13} />
+                Applying to {lockedCenter.center_name}
+              </p>
+            )}
+          </div>
+
+          <div className="p-6 sm:p-8">
+            <div className="rounded-md border border-sky-100 bg-sky-50 p-4 text-sm text-sky-900">
+              <h2 className="mb-2 text-[11px] font-semibold uppercase tracking-wider">
+                Important
+              </h2>
+              <ul className="list-inside list-disc space-y-1">
+                <li>
+                  All communication regarding registration process, shortlisting process and
+                  class orientation details will be done through email so please make sure you
+                  provide the correct email address at time of registration.
+                </li>
+                <li>
+                  Please check your spam or junk e-mail folder just in case email got delivered
+                  there instead of your Inbox.
+                </li>
+              </ul>
+            </div>
+
+            {candidateAlreadyExists && !studentData && (
+              <div className="mt-5 rounded-md border border-red-200 bg-red-50 p-4 text-sm text-red-700">
+                <strong>Uh oh!</strong> You have already applied.
+              </div>
+            )}
+
+            {candidateAlreadyExists && studentData && (
+              <div className="mt-5 rounded-md border border-yellow-300 bg-yellow-50 p-4 text-sm text-yellow-800">
+                <strong>Notice: </strong>
+                <span className="font-semibold">{studentData}</span>
+                <span className="mt-2 block">
+                  If you want to update your information, please contact support at{" "}
+                  <strong>support@digibizz.gob.pk</strong>
+                </span>
+              </div>
+            )}
+
+            {!bootstrapping && !canApply && (
+              <div className="mt-5 rounded-md border border-red-200 bg-red-50 p-4 text-sm text-red-700">
+                {lockedCenter
+                  ? `Admissions for ${lockedCenter.center_name} are currently closed. Please check back later.`
+                  : "Admissions are currently closed. Please check back later."}
+              </div>
+            )}
+
+            <form onSubmit={handleSubmit} className="mt-6">
+              <div className="grid grid-cols-1 gap-5 sm:grid-cols-2">
+                <div>
+                  <label
+                    htmlFor="cnicNo"
+                    className="mb-2 block text-[11px] font-semibold uppercase tracking-wider text-gray-600"
+                  >
+                    CNIC no. <span className="text-red-500">*</span>
+                  </label>
+                  <input
+                    type="text"
+                    id="cnicNo"
+                    placeholder="00000-0000000-0"
+                    maxLength={15}
+                    className="w-full rounded-md border border-gray-300 px-3 py-2.5 text-sm text-gray-900 placeholder:text-gray-400 focus:border-[#006537] focus:outline-none focus:ring-2 focus:ring-[#006537]/15"
+                    value={cnic.cnicNo}
+                    onChange={handleChange}
+                  />
+                </div>
+                <div>
+                  <label
+                    htmlFor="confirmCnicNo"
+                    className="mb-2 block text-[11px] font-semibold uppercase tracking-wider text-gray-600"
+                  >
+                    Confirm CNIC no. <span className="text-red-500">*</span>
+                  </label>
+                  <input
+                    type="text"
+                    id="confirmCnicNo"
+                    placeholder="00000-0000000-0"
+                    maxLength={15}
+                    className="w-full rounded-md border border-gray-300 px-3 py-2.5 text-sm text-gray-900 placeholder:text-gray-400 focus:border-[#006537] focus:outline-none focus:ring-2 focus:ring-[#006537]/15"
+                    value={cnic.confirmCnicNo}
+                    onChange={handleChange}
+                  />
+                </div>
+              </div>
+
+              {error && <p className="mt-3 text-sm text-red-600">{error}</p>}
+
+              <div className="mt-5 border-l-[3px] border-orange-400 bg-orange-50/60 px-4 py-3.5 text-sm text-gray-700">
+                <span className="font-semibold">Note:</span> If you&apos;re under 18, please
+                use B-Form Number in CNIC fields. Your admission request will be cancelled if
+                you entered CNIC of someone else.
+              </div>
+
+              <div className="mt-6">
+                <h3 className="mb-2 text-[11px] font-semibold uppercase tracking-wider text-gray-600">
+                  Undertaking
+                </h3>
+                <ul className="list-inside list-disc space-y-1 text-sm text-gray-700">
+                  <li>
+                    I fully authorize Government of Balochistan to verify the authenticity of
+                    any or all of the information submitted by me according to their official
+                    requirements.
+                  </li>
+                  <li>
+                    If any forgery / discrepancy with respect to any of the information if
+                    found otherwise at any stage shall result in cancellation of the
+                    application, management may reserve right to the initiation of legal
+                    proceedings as per rules.
+                  </li>
+                </ul>
+              </div>
+
+              <div className="mt-7 flex flex-wrap gap-3">
+                <button
+                  type="submit"
+                  disabled={loading || candidateAlreadyExists || !canApply || bootstrapping}
+                  className="inline-flex items-center gap-2 rounded-md bg-[#006537] px-5 py-2.5 text-sm font-semibold text-white transition-colors hover:bg-[#00522c] disabled:cursor-not-allowed disabled:opacity-50"
+                >
+                  {loading ? "Checking..." : "Start application"}
+                  {!loading && <ArrowRight size={16} />}
+                </button>
+
+                {candidateAlreadyExists && (
+                  <button
+                    type="button"
+                    onClick={() => {
+                      setCandidateAlreadyExists(false);
+                      setStudentData("");
+                      setCnic({ cnicNo: "", confirmCnicNo: "" });
+                      setError("");
+                    }}
+                    className="rounded-md border border-gray-300 bg-white px-5 py-2.5 text-sm font-medium text-gray-700 hover:bg-gray-50"
+                  >
+                    Try different CNIC
+                  </button>
+                )}
+              </div>
+            </form>
+          </div>
+        </div>
+      </PageShell>
+    );
+  };
+
   const renderStep = () => {
     switch (step) {
       case 1:
-        return (
-          <div className="bg-white">
-            <div className="bg-green-700 text-white text-center py-2">
-              For Admissions Help:{" "}
-              <a href="mailto:support@digibizz.gob.pk" className="underline">
-                support@digibizz.gob.pk
-              </a>
-            </div>
-            <div className="flex justify-center mt-4">
-              <img
-                src={logo}
-                alt="Digibizz Balochistan Logo"
-                className="h-24"
-              />
-            </div>
-
-            <div className="flex justify-center items-center flex-grow">
-              <div className="bg-white border border-gray-300 rounded-md shadow-md w-full max-w-6xl p-6">
-                <div className="bg-green-700 text-white text-center py-3 rounded-t-md">
-                  <h2 className="text-xl font-semibold">
-                    Batch-9 Admission Undertaking & Registration
-                  </h2>
-                </div>
-                <div className="p-4">
-                  <div className="bg-blue-100 p-4 rounded-md mb-4">
-                    <h3 className="font-semibold mb-2 text-lg">Important:</h3>
-                    <ul className="list-disc list-inside text-base">
-                      <li>
-                        All communication regarding registration process,
-                        shortlisting process and class orientation details will
-                        be done through email so please make sure you provide
-                        the correct email address at time of registration.
-                      </li>
-                      <li>
-                        Please check your spam or junk e-mail folder just in
-                        case email got delivered there instead of your Inbox.
-                      </li>
-                    </ul>
-                  </div>
-                  {candidateAlreadyExists && !studentData && (
-                    <div className="bg-red-100 border border-red-400 text-red-700 p-4 rounded-md mb-4">
-                      <strong>Uh ho!</strong> You have already applied.{" "}
-                      {/* <button
-                        className="text-white bg-blue-500 px-4 py-2 rounded-md hover:bg-blue-600 focus:outline-none"
-                        onClick={() => handleNext(4)}
-                      >
-                        Check your Admission Status
-                      </button> */}
-                    </div>
-                  )}
-                  {candidateAlreadyExists && studentData && (
-                    <div className="bg-yellow-100 border border-yellow-400 text-yellow-700 p-4 rounded-md mb-4">
-                      <strong>Notice: </strong>
-                      <span className="font-semibold">{studentData}</span>
-                      <span className="block mt-2">
-                        If you want to update your information, please contact
-                        support. <strong>support@digibizz.gob.pk</strong>
-                      </span>
-                    </div>
-                  )}
-                  <form onSubmit={handleSubmit}>
-                    {!admissionOpen && (
-                      <div className="bg-red-100 border border-red-400 text-red-700 p-4 rounded-md mb-4">
-                        Admissions are currently closed. Please check back later.
-                      </div>
-                    )}
-                    <div className="grid grid-cols-2 gap-4 mb-5">
-                      <div className="">
-                        <label
-                          htmlFor="cnicNo"
-                          className="block text-gray-700 text-sm font-bold mb-2"
-                        >
-                          CNIC No.
-                        </label>
-                        <input
-                          type="text"
-                          id="cnicNo"
-                          placeholder="00000-0000000-0"
-                          maxLength={15}
-                          className="shadow appearance-none border rounded w-full py-2 px-3 text-gray-700 leading-tight focus:outline-none focus:shadow-outline"
-                          value={cnic.cnicNo}
-                          onChange={handleChange}
-                        />
-                      </div>
-                      <div className="">
-                        <label
-                          htmlFor="confirmCnicNo"
-                          className="block text-gray-700 text-sm font-bold mb-2"
-                        >
-                          Confirm CNIC No.
-                        </label>
-                        <input
-                          type="text"
-                          id="confirmCnicNo"
-                          placeholder="00000-0000000-0"
-                          maxLength={15}
-                          className="shadow appearance-none border rounded w-full py-2 px-3 text-gray-700 leading-tight focus:outline-none focus:shadow-outline"
-                          value={cnic.confirmCnicNo}
-                          onChange={handleChange}
-                        />
-                      </div>
-                    </div>
-                    {error && (
-                      <p className="text-red-500 text-sm mb-4">{error}</p>
-                    )}
-                    <div className="bg-yellow-100 p-4 rounded-md mb-4">
-                      <p className="text-sm text-base">
-                        <span className="font-semibold">Note:</span> If you're
-                        under 18, please use B-Form Number in CNIC fields. Your
-                        Admission request will be cancelled if you entered CNIC
-                        of someone else.
-                      </p>
-                    </div>
-                    <div className="mb-4">
-                      <h3 className="font-semibold mb-2 text-lg">
-                        Undertaking
-                      </h3>
-                      <ul className="list-disc list-inside text-base">
-                        <li>
-                          I fully authorize Government of Balochistan to verify
-                          the authenticity of any or all of the information
-                          submitted by me according to their official
-                          requirements.
-                        </li>
-                        <li>
-                          If any forgery / discrepancy with respect to any of
-                          the information if found otherwise at any stage shall
-                          result in cancellation of the application, management
-                          may reserve right to the initiation of legal
-                          proceedings as per rules.
-                        </li>
-                      </ul>
-                    </div>
-                    <div className="flex gap-4">
-                      <button
-                        type="submit"
-                        disabled={loading || candidateAlreadyExists || !admissionOpen}
-                        className={`font-bold py-2 px-4 rounded focus:outline-none focus:shadow-outline ${
-                          candidateAlreadyExists
-                            ? "bg-gray-400 cursor-not-allowed"
-                            : "bg-orange-500 hover:bg-orange-700 text-white"
-                        }`}
-                      >
-                        {loading ? "Checking..." : "Next >>"}
-                      </button>
-                      {candidateAlreadyExists && (
-                        <button
-                          type="button"
-                          onClick={() => {
-                            setCandidateAlreadyExists(false);
-                            setStudentData("");
-                            setCnic({ cnicNo: "", confirmCnicNo: "" });
-                            setError("");
-                          }}
-                          className="bg-blue-500 hover:bg-blue-700 text-white font-bold py-2 px-4 rounded focus:outline-none focus:shadow-outline"
-                        >
-                          Try Different CNIC
-                        </button>
-                      )}
-                    </div>
-                  </form>
-                </div>
-              </div>
-            </div>
-          </div>
-        );
+        return renderStartScreen();
       case 2:
         return (
           <RegistrationDetails
@@ -285,24 +367,41 @@ function Registration() {
             handleNext={handleNext}
             isIttiRegistration={false}
             batchId={currentBatchId}
+            batchName={currentBatchName}
+            lockedCenter={lockedCenter}
           />
         );
-      // case 3:
-      //   return <ThankYou candName={candName} handleNext={handleNext} />;
-      // case 4:
-      //   return <TestInstructions candName={candName} handleNext={handleNext} />;
-      // case 5:
-      //   return (
-      //     <QuizInterface
-      //       candName={candName}
-      //       handleNext={handleNext}
-      //       cnicNo={cnic.cnicNo}
-      //     />
-      //   );
+      case 3:
+        return (
+          <PageShell>
+            <div className="rounded-lg border border-gray-200 bg-white p-8 text-center shadow-sm">
+              <CheckCircle2 className="mx-auto text-[#006537]" size={40} />
+              <h1 className="mt-4 text-xl font-bold text-gray-900">
+                Application submitted
+              </h1>
+              <p className="mx-auto mt-2 max-w-md text-sm text-gray-600">
+                Thank you{candName ? `, ${candName}` : ""}. Your registration for{" "}
+                {currentBatchName || "this batch"} has been received. Shortlisting and
+                orientation details will be emailed to the address you provided — please check
+                your spam folder too.
+              </p>
+              <p className="mt-6 text-xs text-gray-500">
+                Questions? Email{" "}
+                <a
+                  href="mailto:support@digibizz.gob.pk"
+                  className="font-medium text-[#006537] underline"
+                >
+                  support@digibizz.gob.pk
+                </a>
+              </p>
+            </div>
+          </PageShell>
+        );
       default:
         return null;
     }
   };
+
   return <>{renderStep()}</>;
 }
 

@@ -1,4 +1,4 @@
-import React, { useState, useEffect } from "react";
+import React, { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import {
   registerCandidate,
   getCenter,
@@ -14,13 +14,18 @@ import CourseTrackSelection from "./CourseTrackSelection";
 import AgreementPolicy from "./AgreementPolicy";
 import logo from "../../../assets/logo.png";
 import { toast } from "sonner";
+import { ArrowLeft, ArrowRight, Check, Save } from "lucide-react";
 
 interface RegistrationDetailsProps {
   cnicNo: string;
   handleNext: (test: number, name?: string) => void;
   isIttiRegistration?: boolean;
   batchId: number;
+  batchName?: string;
+  /** Present when the applicant used a center's dedicated apply link. */
+  lockedCenter?: { center_id: number; center_name: string } | null;
 }
+
 const today = new Date();
 const formattedToday = today.toISOString().split("T")[0]; // Extract only the date part (YYYY-MM-DD)
 
@@ -64,20 +69,86 @@ const initialFormData: CandidateFormData = {
   where_find_us: "",
 };
 
+const STEPS = [
+  {
+    key: "personal",
+    label: "Personal",
+    title: "Personal information",
+    subtitle: "Enter your details exactly as they appear on your CNIC / B-Form.",
+    nextLabel: "Continue to contact details",
+  },
+  {
+    key: "contact",
+    label: "Contact",
+    title: "Contact information",
+    subtitle:
+      "All updates are sent to this email and WhatsApp number, so double-check them.",
+    nextLabel: "Continue to academic information",
+  },
+  {
+    key: "academic",
+    label: "Academic",
+    title: "Academic information",
+    subtitle: "Enter your highest completed qualification.",
+    nextLabel: "Continue to center selection",
+  },
+  {
+    key: "center",
+    label: "Center",
+    title: "DigiBizz center selection",
+    subtitle: "Pick the center you can travel to for the class timings shown below.",
+    nextLabel: "Continue to course track",
+  },
+  {
+    key: "course",
+    label: "Course track",
+    title: "Course track selection",
+    subtitle: "Only the tracks currently open at your center are listed.",
+    nextLabel: "Continue to agreement",
+  },
+  {
+    key: "agreement",
+    label: "Agreement",
+    title: "Agreement & policy",
+    subtitle: "Read the terms and confirm before submitting your application.",
+    nextLabel: "Submit application",
+  },
+] as const;
+
+const draftKey = (cnic: string) =>
+  `digibizz_registration_draft_v1_${String(cnic).replace(/\D/g, "")}`;
+
+const savedAgo = (timestamp: number | null) => {
+  if (!timestamp) return "";
+  const seconds = Math.floor((Date.now() - timestamp) / 1000);
+  if (seconds < 60) return "just now";
+  const minutes = Math.floor(seconds / 60);
+  if (minutes < 60) return `${minutes} minute${minutes === 1 ? "" : "s"} ago`;
+  const hours = Math.floor(minutes / 60);
+  return `${hours} hour${hours === 1 ? "" : "s"} ago`;
+};
+
 const RegistrationDetails: React.FC<RegistrationDetailsProps> = ({
   handleNext,
   cnicNo,
   isIttiRegistration = false,
   batchId,
+  batchName,
+  lockedCenter = null,
 }) => {
-  const [formData, setFormData] = useState<CandidateFormData>(initialFormData);
+  const [formData, setFormData] = useState<CandidateFormData>({
+    ...initialFormData,
+    cand_cnic: cnicNo,
+    center_id: lockedCenter?.center_id || 0,
+  });
   const [errors, setErrors] = useState<{ [key: string]: string }>({});
   const [isSubmitting, setIsSubmitting] = useState(false);
-  useEffect(() => {
-    if (batchId) {
-      setFormData((prev) => ({ ...prev, tb_id: batchId }));
-    }
-  }, [batchId]);
+  const [agreeToTerms, setAgreeToTerms] = useState(false);
+  const [stepIndex, setStepIndex] = useState(0);
+  const [maxStepReached, setMaxStepReached] = useState(0);
+  const [savedAt, setSavedAt] = useState<number | null>(null);
+  const [, forceClockTick] = useState(0);
+  const draftLoaded = useRef(false);
 
   const [center, setCenters] = useState<
     { center_id: number; center_name: string }[]
@@ -88,6 +159,24 @@ const RegistrationDetails: React.FC<RegistrationDetailsProps> = ({
   const [admissionRules, setAdmissionRules] = useState<
     Array<{ center_id: number; course_id: number; allowed_gender: "all" | "male" | "female" }>
   >([]);
+  const [profilePhoto, setProfilePhoto] = useState<File | null>(null);
+
+  useEffect(() => {
+    if (batchId) {
+      setFormData((prev) => ({ ...prev, tb_id: batchId }));
+    }
+  }, [batchId]);
+
+  useEffect(() => {
+    setFormData((prev) => ({ ...prev, cand_cnic: cnicNo }));
+  }, [cnicNo]);
+
+  useEffect(() => {
+    if (lockedCenter) {
+      setFormData((prev) => ({ ...prev, center_id: lockedCenter.center_id }));
+    }
+  }, [lockedCenter]);
+
   const fetchData = async () => {
     try {
       const [centersData, coursesData, admissionData] = await Promise.all([
@@ -103,91 +192,231 @@ const RegistrationDetails: React.FC<RegistrationDetailsProps> = ({
       console.error("Error fetching data:", error);
     }
   };
+
   useEffect(() => {
     fetchData();
   }, [batchId]);
-  const [profilePhoto, setProfilePhoto] = useState<File | null>(null);
 
-  const validateForm = () => {
-    const newErrors: { [key: string]: string } = {};
-
-    // Profile photo validation
-    if (!profilePhoto) {
-      newErrors.profilePhoto = "Profile photo is required";
-      toast.error("Please upload your profile photo");
-    } else if (!["image/jpeg", "image/png"].includes(profilePhoto.type)) {
-      newErrors.profilePhoto = "Only JPEG and PNG files are allowed";
-      toast.error("Profile photo must be in JPEG or PNG format");
-    } else if (profilePhoto.size > 2 * 1024 * 1024) {
-      newErrors.profilePhoto = "File size must be less than 2MB";
-      toast.error("Profile photo must be less than 2MB");
+  // ---- Draft autosave -------------------------------------------------
+  useEffect(() => {
+    try {
+      const raw = window.localStorage.getItem(draftKey(cnicNo));
+      if (raw) {
+        const draft = JSON.parse(raw);
+        if (draft?.formData) {
+          setFormData((prev) => ({
+            ...prev,
+            ...draft.formData,
+            cand_cnic: cnicNo,
+            tb_id: batchId || prev.tb_id,
+            center_id: lockedCenter?.center_id || draft.formData.center_id || 0,
+          }));
+          setAgreeToTerms(Boolean(draft.agreeToTerms));
+          setStepIndex(Math.min(Number(draft.stepIndex) || 0, STEPS.length - 1));
+          setMaxStepReached(Math.min(Number(draft.maxStepReached) || 0, STEPS.length - 1));
+          setSavedAt(Number(draft.savedAt) || null);
+        }
+      }
+    } catch (error) {
+      console.error("Could not restore saved draft:", error);
+    } finally {
+      draftLoaded.current = true;
     }
+    // Restoring once per CNIC is enough.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [cnicNo]);
 
-    // Email validation
-    if (!formData.cand_email) {
-      newErrors.cand_email = "Email is required";
-      toast.error("Please enter your email address");
-    } else if (formData.cand_email !== formData.confirm_email) {
-      newErrors.cand_email = "Email addresses do not match";
-      toast.error("Email addresses do not match");
+  useEffect(() => {
+    if (!draftLoaded.current) return;
+
+    const timer = window.setTimeout(() => {
+      try {
+        const timestamp = Date.now();
+        window.localStorage.setItem(
+          draftKey(cnicNo),
+          JSON.stringify({
+            formData,
+            agreeToTerms,
+            stepIndex,
+            maxStepReached,
+            savedAt: timestamp,
+          })
+        );
+        setSavedAt(timestamp);
+      } catch (error) {
+        console.error("Could not save draft:", error);
+      }
+    }, 800);
+
+    return () => window.clearTimeout(timer);
+  }, [formData, agreeToTerms, stepIndex, maxStepReached, cnicNo]);
+
+  // Keeps the "Draft saved ..." label honest without re-saving.
+  useEffect(() => {
+    const interval = window.setInterval(() => forceClockTick((tick) => tick + 1), 30000);
+    return () => window.clearInterval(interval);
+  }, []);
+
+  const clearDraft = useCallback(() => {
+    try {
+      window.localStorage.removeItem(draftKey(cnicNo));
+    } catch (error) {
+      console.error("Could not clear draft:", error);
     }
+  }, [cnicNo]);
 
-    // Phone validation
-    if (!formData.cand_phone) {
-      newErrors.cand_phone = "Phone number is required";
-      toast.error("Please enter your phone number");
-    } else if (formData.cand_phone !== formData.confirm_phone) {
-      newErrors.cand_phone = "Phone numbers do not match";
-      toast.error("Phone numbers do not match");
-    }
-
-    // Required fields validation with toast messages
-    const requiredFields = {
-      cand_name: "Full name",
-      cand_dob: "Date of birth",
-      cand_fathername: "Father's name",
-      cand_gender: "Gender",
-      cand_degree_level: "Degree level",
-      center_id: "Center",
-      course_id: "Course",
-      cand_whatsapp: "WhatsApp number",
-      guardian_whatsapp: "Guardian's WhatsApp number",
-      cand_local_domicile: "Local domicile",
-      degree_area: "Degree area",
-      institute: "Institute",
-      current_address: "Current address",
-      permanent_address: "Permanent address",
-      current_city: "Current city",
-      permanent_city: "Permanent city",
-      where_find_us: "Where did you find us",
+  // ---- Validation -----------------------------------------------------
+  const validateStep = (index: number) => {
+    const stepErrors: { [key: string]: string } = {};
+    const requireAll = (fields: Record<string, string>) => {
+      Object.entries(fields).forEach(([field, label]) => {
+        if (!formData[field as keyof CandidateFormData]) {
+          stepErrors[field] = `${label} is required`;
+        }
+      });
     };
 
-    Object.entries(requiredFields).forEach(([field, label]) => {
-      if (!formData[field as keyof CandidateFormData]) {
-        newErrors[field] = `${label} is required`;
-        toast.error(`Please enter your ${label.toLowerCase()}`);
+    switch (STEPS[index].key) {
+      case "personal": {
+        requireAll({
+          cand_name: "Full name",
+          cand_dob: "Date of birth",
+          cand_fathername: "Father's name",
+          cand_gender: "Gender",
+          cand_local_domicile: "Local domicile",
+        });
+        if (!profilePhoto) {
+          stepErrors.profilePhoto = "Profile photo is required";
+        } else if (!["image/jpeg", "image/png"].includes(profilePhoto.type)) {
+          stepErrors.profilePhoto = "Only JPEG and PNG files are allowed";
+        } else if (profilePhoto.size > 2 * 1024 * 1024) {
+          stepErrors.profilePhoto = "File size must be less than 2MB";
+        }
+        break;
       }
-    });
-
-    // Date validations
-    if (formData.degree_start_date && formData.degree_end_date) {
-      if (new Date(formData.degree_start_date) > new Date(formData.degree_end_date)) {
-        newErrors.degree_end_date = "End date cannot be earlier than start date";
-        toast.error("Degree end date cannot be earlier than start date");
+      case "contact": {
+        requireAll({
+          cand_email: "Email address",
+          confirm_email: "Email confirmation",
+          cand_phone: "Phone number",
+          confirm_phone: "Phone confirmation",
+          cand_whatsapp: "WhatsApp number",
+          guardian_whatsapp: "Guardian's WhatsApp number",
+          current_address: "Current address",
+          permanent_address: "Permanent address",
+          current_city: "Current city",
+          permanent_city: "Permanent city",
+          where_find_us: "Where did you find us",
+        });
+        if (
+          formData.cand_email &&
+          formData.confirm_email &&
+          formData.cand_email !== formData.confirm_email
+        ) {
+          stepErrors.confirm_email = "Email addresses do not match";
+        }
+        if (
+          formData.cand_phone &&
+          formData.confirm_phone &&
+          formData.cand_phone !== formData.confirm_phone
+        ) {
+          stepErrors.confirm_phone = "Phone numbers do not match";
+        }
+        break;
+      }
+      case "academic": {
+        requireAll({
+          cand_degree_level: "Degree level",
+          institute: "Institute",
+          degree_area: "Degree area",
+          degree_start_date: "Start date",
+          degree_end_date: "End date",
+        });
+        if (
+          formData.degree_start_date &&
+          formData.degree_end_date &&
+          new Date(formData.degree_start_date) > new Date(formData.degree_end_date)
+        ) {
+          stepErrors.degree_end_date = "End date cannot be earlier than start date";
+        }
+        break;
+      }
+      case "center": {
+        if (!formData.center_id) stepErrors.center_id = "Center is required";
+        break;
+      }
+      case "course": {
+        if (!formData.course_id) stepErrors.course_id = "Course is required";
+        break;
+      }
+      case "agreement": {
+        if (!agreeToTerms) {
+          stepErrors.agreeToTerms = "Please accept the terms and program policy";
+        }
+        break;
       }
     }
 
-    setErrors(newErrors);
-    return Object.keys(newErrors).length === 0;
+    return stepErrors;
+  };
+
+  const firstInvalidStep = () => {
+    for (let index = 0; index < STEPS.length; index += 1) {
+      if (Object.keys(validateStep(index)).length > 0) return index;
+    }
+    return -1;
+  };
+
+  const goToStep = (index: number) => {
+    setStepIndex(index);
+    setMaxStepReached((prev) => Math.max(prev, index));
+    window.scrollTo({ top: 0, behavior: "smooth" });
+  };
+
+  const handleContinue = () => {
+    const stepErrors = validateStep(stepIndex);
+    setErrors(stepErrors);
+
+    if (Object.keys(stepErrors).length > 0) {
+      toast.error(Object.values(stepErrors)[0]);
+      return;
+    }
+
+    if (stepIndex < STEPS.length - 1) {
+      goToStep(stepIndex + 1);
+    }
+  };
+
+  const handleBack = () => {
+    if (stepIndex === 0) return;
+    setErrors({});
+    goToStep(stepIndex - 1);
   };
 
   const handleFileChange = (e: React.ChangeEvent<HTMLInputElement>) => {
     if (e.target.files && e.target.files[0]) {
       setProfilePhoto(e.target.files[0]);
+      setErrors((prev) => ({ ...prev, profilePhoto: "" }));
     }
   };
 
   const handleSubmit = async (e: React.FormEvent) => {
+    e.preventDefault();
+
+    if (stepIndex < STEPS.length - 1) {
+      handleContinue();
+      return;
+    }
+
+    const invalidStep = firstInvalidStep();
+    if (invalidStep !== -1) {
+      const stepErrors = validateStep(invalidStep);
+      setErrors(stepErrors);
+      goToStep(invalidStep);
+      toast.error(Object.values(stepErrors)[0]);
+      return;
+    }
+
     const selectedRule = admissionRules.find(
       (rule) =>
         Number(rule.center_id) === Number(formData.center_id) &&
@@ -196,7 +425,6 @@ const RegistrationDetails: React.FC<RegistrationDetailsProps> = ({
 
     if (!selectedRule) {
       toast.error("Admissions are closed for selected center/course.");
-      setIsSubmitting(false);
       return;
     }
 
@@ -207,15 +435,9 @@ const RegistrationDetails: React.FC<RegistrationDetailsProps> = ({
       toast.error(
         `Selected center allows only ${selectedRule.allowed_gender} candidates for this course.`
       );
-      setIsSubmitting(false);
       return;
     }
 
-    e.preventDefault();
-
-    if (!validateForm()) {
-      return;
-    }
     setIsSubmitting(true);
     try {
       const response = await registerCandidate(
@@ -225,13 +447,17 @@ const RegistrationDetails: React.FC<RegistrationDetailsProps> = ({
 
       if (response?.status === 201) {
         const candName = formData.cand_name;
-        setFormData((prev) => ({
+        clearDraft();
+        setFormData({
           ...initialFormData,
           tb_id: batchId,
-        }));
+          cand_cnic: cnicNo,
+          center_id: lockedCenter?.center_id || 0,
+        });
         setProfilePhoto(null); // Reset file input
-        handleNext(1, candName);
+        setAgreeToTerms(false);
         toast.success("Registration successful!");
+        handleNext(3, candName);
       } else {
         toast.error("Registration failed. Please try again.");
       }
@@ -249,6 +475,8 @@ const RegistrationDetails: React.FC<RegistrationDetailsProps> = ({
     >
   ) => {
     const { name, type, value } = e.target;
+    setErrors((prev) => ({ ...prev, [name]: "" }));
+
     setFormData((prev) => {
       const next = {
         ...prev,
@@ -265,7 +493,7 @@ const RegistrationDetails: React.FC<RegistrationDetailsProps> = ({
             (rule.allowed_gender === "all" || rule.allowed_gender === selectedGender)
         );
         if (!centerAllowed) {
-          next.center_id = 0;
+          next.center_id = lockedCenter ? lockedCenter.center_id : 0;
           next.course_id = 0;
           return next;
         }
@@ -286,97 +514,233 @@ const RegistrationDetails: React.FC<RegistrationDetailsProps> = ({
     });
   };
 
+  const selectedCenterName = useMemo(() => {
+    if (lockedCenter) return lockedCenter.center_name;
+    return (
+      center.find((item) => Number(item.center_id) === Number(formData.center_id))
+        ?.center_name || ""
+    );
+  }, [center, formData.center_id, lockedCenter]);
+
+  const selectedCourseName = useMemo(
+    () =>
+      course.find((item) => Number(item.course_id) === Number(formData.course_id))
+        ?.course_full_name || "",
+    [course, formData.course_id]
+  );
+
+  const activeStep = STEPS[stepIndex];
+  const isLastStep = stepIndex === STEPS.length - 1;
+
+  const renderStepBody = () => {
+    switch (activeStep.key) {
+      case "personal":
+        return (
+          <PersonalInformation
+            formData={formData}
+            errors={errors}
+            handleInputChange={handleInputChange}
+            handleFileChange={handleFileChange}
+            profilePhoto={profilePhoto}
+            cnicNo={cnicNo}
+            selectedCenterId={Number(formData.center_id)}
+            admissionRules={admissionRules}
+          />
+        );
+      case "contact":
+        return (
+          <ContactInformation
+            formData={formData}
+            errors={errors}
+            handleInputChange={handleInputChange}
+          />
+        );
+      case "academic":
+        return (
+          <AcademicInformation
+            formData={formData}
+            errors={errors}
+            handleInputChange={handleInputChange}
+          />
+        );
+      case "center":
+        return (
+          <DigiBizzCenterSelection
+            formData={formData}
+            errors={errors}
+            handleInputChange={handleInputChange}
+            center={center}
+            isIttiRegistration={isIttiRegistration}
+            admissionRules={admissionRules}
+            lockedCenter={lockedCenter}
+          />
+        );
+      case "course":
+        return (
+          <CourseTrackSelection
+            formData={formData}
+            errors={errors}
+            handleInputChange={handleInputChange}
+            course={course}
+            admissionRules={admissionRules}
+          />
+        );
+      case "agreement":
+        return (
+          <AgreementPolicy
+            errors={errors}
+            agreeToTerms={agreeToTerms}
+            onAgreeChange={(checked) => {
+              setAgreeToTerms(checked);
+              setErrors((prev) => ({ ...prev, agreeToTerms: "" }));
+            }}
+          />
+        );
+      default:
+        return null;
+    }
+  };
+
+  const summaryRows = [
+    { label: "Applicant", value: formData.cand_name || "—" },
+    { label: "CNIC", value: cnicNo },
+    { label: "District", value: formData.cand_local_domicile || "—" },
+    { label: "Center", value: selectedCenterName || "Not chosen yet" },
+    { label: "Preferred track", value: selectedCourseName || "Not chosen yet" },
+  ];
+
   return (
-    <div className="bg-white min-h-screen">
-      <div className="bg-green-700 text-white text-center py-2 px-4 text-sm sm:text-base">
-        For Admissions Help:{" "}
-        <a
-          href="mailto:support@digibizz.gob.pk"
-          className="underline hover:text-gray-200"
-        >
-          support@digibizz.gob.pk
-        </a>
-      </div>
-
-      <div className="flex justify-center mt-4 px-4">
-        <img
-          src={logo}
-          alt="Digibizz Balochistan Logo"
-          className="h-16 sm:h-24"
-        />
-      </div>
-
-      <div className="flex justify-center items-center p-4 sm:p-6 md:p-8">
-        <div className="bg-white border border-gray-300 rounded-md shadow-md w-full max-w-6xl">
-          <div className="bg-green-700 text-white text-center py-3 rounded-t-md px-4">
-            <h2 className="text-lg sm:text-xl font-semibold">
-              Batch-9 Admission Undertaking & Registration
-            </h2>
+    <div className="min-h-screen bg-gray-100">
+      <div className="mx-auto max-w-6xl bg-white shadow-sm">
+        {/* Header */}
+        <header className="flex flex-wrap items-center justify-between gap-3 border-b border-gray-200 px-5 py-4 sm:px-8">
+          <img src={logo} alt="DigiBizz Balochistan" className="h-10 sm:h-12" />
+          <div className="flex items-center gap-2 text-sm text-gray-500">
+            <Save size={16} />
+            <span>{savedAt ? `Draft saved ${savedAgo(savedAt)}` : "Draft saves automatically"}</span>
           </div>
+        </header>
 
-          <div className="flex justify-center items-center">
-            <div className="bg-gray-50 p-4 sm:p-6 md:p-8 rounded shadow-md w-full">
-              <div className="bg-blue-100 p-3 sm:p-4 rounded-md mb-4">
-                <p className="text-xs sm:text-sm">
-                  <span className="font-semibold">
-                    <b>Important:</b>
-                  </span>{" "}
-                  Make sure the information provided is correct.
-                </p>
-              </div>
+        {/* Stepper */}
+        <nav className="flex overflow-x-auto border-b border-gray-200" aria-label="Progress">
+          {STEPS.map((step, index) => {
+            const isActive = index === stepIndex;
+            const isDone = index < stepIndex;
+            const isReachable = index <= maxStepReached;
 
-              <form onSubmit={handleSubmit} className="space-y-4">
-                <div className="grid gap-6 md:gap-8">
-                  <PersonalInformation
-                    formData={formData}
-                    errors={errors}
-                    handleInputChange={handleInputChange}
-                    handleFileChange={handleFileChange}
-                    profilePhoto={profilePhoto}
-                    cnicNo={cnicNo}
-                    selectedCenterId={Number(formData.center_id)}
-                    admissionRules={admissionRules}
-                  />
-                  <AcademicInformation
-                    formData={formData}
-                    errors={errors}
-                    handleInputChange={handleInputChange}
-                  />
-                  <ContactInformation
-                    formData={formData}
-                    errors={errors}
-                    handleInputChange={handleInputChange}
-                  />
-                  <DigiBizzCenterSelection
-                    formData={formData}
-                    errors={errors}
-                    handleInputChange={handleInputChange}
-                    center={center}
-                    isIttiRegistration={isIttiRegistration}
-                    admissionRules={admissionRules}
-                  />
-                  <CourseTrackSelection
-                    formData={formData}
-                    errors={errors}
-                    handleInputChange={handleInputChange}
-                    course={course}
-                    admissionRules={admissionRules}
-                  />
-                  <AgreementPolicy errors={errors} />
-                </div>
+            return (
+              <button
+                key={step.key}
+                type="button"
+                disabled={!isReachable}
+                onClick={() => isReachable && goToStep(index)}
+                className={`min-w-[150px] flex-1 border-r border-gray-200 px-4 py-3.5 text-left transition-colors last:border-r-0 ${
+                  isActive
+                    ? "border-t-[3px] border-t-[#006537] bg-white"
+                    : isDone
+                    ? "bg-[#006537]/5 hover:bg-[#006537]/10"
+                    : "bg-gray-50"
+                } ${isReachable ? "cursor-pointer" : "cursor-not-allowed"}`}
+                aria-current={isActive ? "step" : undefined}
+              >
+                <span
+                  className={`flex items-center gap-1.5 text-[10px] font-semibold uppercase tracking-wider ${
+                    isActive || isDone ? "text-[#006537]" : "text-gray-400"
+                  }`}
+                >
+                  {isDone && <Check size={12} />}
+                  Step {index + 1}
+                </span>
+                <span
+                  className={`mt-0.5 block text-sm ${
+                    isActive
+                      ? "font-bold text-gray-900"
+                      : isDone
+                      ? "font-medium text-[#006537]"
+                      : "text-gray-400"
+                  }`}
+                >
+                  {step.label}
+                </span>
+              </button>
+            );
+          })}
+        </nav>
 
-                <div className="mt-6 sm:mt-8">
-                  <button
-                    type="submit"
-                    className="bg-orange-500 hover:bg-orange-700 text-white font-bold py-2 px-4 rounded focus:outline-none focus:shadow-outline w-full disabled:opacity-50 text-sm sm:text-base transition-colors duration-200"
-                    disabled={isSubmitting}
-                  >
-                    {isSubmitting ? "Submitting..." : "Submit"}
-                  </button>
-                </div>
-              </form>
+        {/* Body */}
+        <div className="grid grid-cols-1 lg:grid-cols-[minmax(0,1fr)_340px]">
+          <form onSubmit={handleSubmit} noValidate className="px-5 py-7 sm:px-8">
+            <h1 className="text-2xl font-bold text-gray-900 sm:text-3xl">
+              {activeStep.title}
+            </h1>
+            <p className="mt-2 text-sm text-gray-500">{activeStep.subtitle}</p>
+
+            <div className="mt-7">{renderStepBody()}</div>
+
+            <div className="mt-9 flex items-center justify-between gap-3 border-t border-gray-200 pt-6">
+              <button
+                type="button"
+                onClick={handleBack}
+                disabled={stepIndex === 0}
+                className="inline-flex items-center gap-2 rounded-md border border-gray-300 bg-white px-4 py-2.5 text-sm font-medium text-gray-700 transition-colors hover:bg-gray-50 disabled:cursor-not-allowed disabled:opacity-40"
+              >
+                <ArrowLeft size={16} />
+                Back
+              </button>
+
+              <button
+                type={isLastStep ? "submit" : "button"}
+                onClick={isLastStep ? undefined : handleContinue}
+                disabled={isSubmitting}
+                className="inline-flex items-center gap-2 rounded-md bg-[#006537] px-5 py-2.5 text-sm font-semibold text-white transition-colors hover:bg-[#00522c] disabled:cursor-not-allowed disabled:opacity-60"
+              >
+                {isSubmitting ? "Submitting..." : activeStep.nextLabel}
+                {!isSubmitting && <ArrowRight size={16} />}
+              </button>
             </div>
-          </div>
+          </form>
+
+          {/* Summary sidebar */}
+          <aside className="border-t border-gray-200 bg-gray-50 px-5 py-7 sm:px-8 lg:border-l lg:border-t-0">
+            <h2 className="text-[11px] font-semibold uppercase tracking-wider text-gray-500">
+              Your application
+            </h2>
+
+            <dl className="mt-4">
+              {summaryRows.map((row) => (
+                <div
+                  key={row.label}
+                  className="flex items-start justify-between gap-4 border-b border-gray-200 py-3 last:border-b-0"
+                >
+                  <dt className="text-sm text-gray-500">{row.label}</dt>
+                  <dd className="text-right text-sm font-semibold text-gray-900">
+                    {row.value}
+                  </dd>
+                </div>
+              ))}
+            </dl>
+
+            {batchName && (
+              <p className="mt-4 text-xs text-gray-500">
+                Applying for <span className="font-semibold text-gray-700">{batchName}</span>
+              </p>
+            )}
+
+            <div className="mt-6 border-l-[3px] border-orange-400 bg-orange-50/60 px-4 py-3.5 text-sm text-gray-700">
+              All communication about your application is sent by email, so make sure the
+              address you enter is correct — and check your spam folder just in case.
+            </div>
+
+            <p className="mt-6 text-xs text-gray-500">
+              Need help? Email{" "}
+              <a
+                href="mailto:support@digibizz.gob.pk"
+                className="font-medium text-[#006537] underline"
+              >
+                support@digibizz.gob.pk
+              </a>
+            </p>
+          </aside>
         </div>
       </div>
     </div>

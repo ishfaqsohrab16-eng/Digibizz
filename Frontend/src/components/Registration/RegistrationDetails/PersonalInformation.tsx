@@ -1,5 +1,6 @@
 import React, { useEffect, useState } from "react";
 import { domicileOptions } from "../../../types/degreeAreas";
+import { Field, SelectInput, TextInput, fieldGrid } from "./fields";
 
 interface PersonalInformationProps {
   formData: any;
@@ -35,8 +36,9 @@ const PersonalInformation: React.FC<PersonalInformationProps> = ({
   const centerAllowsOnlyFemale =
     selectedCenterRules.length > 0 &&
     selectedCenterRules.every((rule) => rule.allowed_gender === "female");
+
   const [photoPreview, setPhotoPreview] = useState<string | null>(null);
-  const API_URL = import.meta.env.VITE_BACKEND_URL;
+
   useEffect(() => {
     if (profilePhoto) {
       const objectUrl = URL.createObjectURL(profilePhoto);
@@ -49,191 +51,144 @@ const PersonalInformation: React.FC<PersonalInformationProps> = ({
     setPhotoPreview(null);
   }, [profilePhoto]);
 
+  const genderOptions = [
+    { value: "male", label: "Male" },
+    { value: "female", label: "Female" },
+  ];
+
   return (
-    <div className="p-2 rounded-md">
-      <h3 className="font-semibold mb-2 text-lg text-[#006537]">
-        <div className="bg-green-700 text-white text-start pl-10 py-3 rounded-t-md">
-          <h2 className="text-xl font-semibold">Personal Information</h2>
+    <div className={fieldGrid}>
+      <Field label="Full name" htmlFor="cand_name" required error={errors.cand_name}>
+        <TextInput
+          type="text"
+          id="cand_name"
+          name="cand_name"
+          value={formData.cand_name}
+          onChange={handleInputChange}
+          placeholder="Enter your full name"
+          hasError={Boolean(errors.cand_name)}
+        />
+      </Field>
+
+      <Field label="CNIC" htmlFor="cand_cnic" required>
+        <TextInput type="text" id="cand_cnic" name="cand_cnic" value={cnicNo} readOnly />
+      </Field>
+
+      <Field label="Date of birth" htmlFor="cand_dob" required error={errors.cand_dob}>
+        <TextInput
+          type="date"
+          id="cand_dob"
+          name="cand_dob"
+          value={formData.cand_dob}
+          onChange={handleInputChange}
+          hasError={Boolean(errors.cand_dob)}
+        />
+      </Field>
+
+      <Field
+        label="Father name"
+        htmlFor="cand_fathername"
+        required
+        error={errors.cand_fathername}
+      >
+        <TextInput
+          type="text"
+          id="cand_fathername"
+          name="cand_fathername"
+          value={formData.cand_fathername}
+          onChange={handleInputChange}
+          placeholder="Enter your father's name"
+          hasError={Boolean(errors.cand_fathername)}
+        />
+      </Field>
+
+      <Field
+        label="Local / domicile district"
+        htmlFor="cand_local_domicile"
+        required
+        error={errors.cand_local_domicile}
+      >
+        <SelectInput
+          id="cand_local_domicile"
+          name="cand_local_domicile"
+          value={formData.cand_local_domicile}
+          onChange={handleInputChange}
+          hasError={Boolean(errors.cand_local_domicile)}
+        >
+          <option value="">Please select</option>
+          {domicileOptions.map((domicileOption) => (
+            <option key={domicileOption} value={domicileOption}>
+              {domicileOption}
+            </option>
+          ))}
+        </SelectInput>
+      </Field>
+
+      <Field label="Gender" required error={errors.cand_gender}>
+        <div className="grid grid-cols-2 gap-3">
+          {genderOptions.map((option) => {
+            const checked = formData.cand_gender === option.value;
+            return (
+              <label
+                key={option.value}
+                className={`flex cursor-pointer items-center gap-2.5 rounded-md border px-3 py-2.5 text-sm transition-colors ${
+                  checked
+                    ? "border-[#006537] bg-[#006537]/5 text-[#006537] font-medium"
+                    : "border-gray-300 text-gray-700 hover:border-gray-400"
+                }`}
+              >
+                <input
+                  type="radio"
+                  name="cand_gender"
+                  value={option.value}
+                  checked={checked}
+                  onChange={handleInputChange}
+                  className="h-3.5 w-3.5 appearance-none rounded-full border border-gray-400 checked:border-[5px] checked:border-[#006537] focus:outline-none"
+                />
+                {option.label}
+              </label>
+            );
+          })}
         </div>
-      </h3>
-      <div className="grid grid-cols-2 gap-4">
-        <div>
-          <label
-            htmlFor="cand_name"
-            className="block text-gray-700 text-sm font-bold mb-2"
-          >
-            Full Name <span className="text-red-500">*</span>
-          </label>
+        {(centerAllowsOnlyMale || centerAllowsOnlyFemale) && (
+          <p className="mt-2 text-xs text-orange-700">
+            The selected center currently allows{" "}
+            <strong>{centerAllowsOnlyMale ? "male" : "female"}</strong> candidates only.
+          </p>
+        )}
+      </Field>
+
+      <Field
+        label="Passport size photo"
+        htmlFor="cand_photo"
+        required
+        error={errors.profilePhoto}
+        hint="JPEG or PNG, up to 2MB."
+        className="md:col-span-2"
+      >
+        <div className="flex items-center gap-4">
           <input
-            type="text"
-            id="cand_name"
-            name="cand_name"
-            value={formData.cand_name}
-            onChange={handleInputChange}
-            className="shadow appearance-none border rounded w-full py-2 px-3 text-gray-700 leading-tight focus:outline-none focus:shadow-outline"
-            placeholder="Enter your full name"
+            id="cand_photo"
+            type="file"
+            onChange={handleFileChange}
+            accept="image/png, image/jpeg"
+            className="block w-full cursor-pointer rounded-md border border-gray-300 bg-white text-sm text-gray-600 file:mr-4 file:cursor-pointer file:border-0 file:bg-gray-100 file:px-4 file:py-2.5 file:text-sm file:font-medium file:text-gray-700 hover:file:bg-gray-200"
           />
-          {errors.cand_name && (
-            <p className="text-red-500 text-xs mt-1">{errors.cand_name}</p>
-          )}
-        </div>
-
-        <div>
-          <label
-            htmlFor="cand_cnic"
-            className="block text-gray-700 text-sm font-bold mb-2"
-          >
-            CNIC <span className="text-red-500">*</span>
-          </label>
-          <input
-            type="text"
-            id="cand_cnic"
-            name="cand_cnic"
-            value={(formData.cand_cnic = cnicNo)}
-            readOnly
-            className="shadow appearance-none border rounded w-full py-2 px-3 text-gray-700 leading-tight focus:outline-none focus:shadow-outline bg-gray-100"
-          />
-        </div>
-
-        <div>
-          <label
-            htmlFor="cand_dob"
-            className="block text-gray-700 text-sm font-bold mb-2"
-          >
-            Date of Birth <span className="text-red-500">*</span>
-          </label>
-          <input
-            type="date"
-            id="cand_dob"
-            name="cand_dob"
-            value={formData.cand_dob}
-            onChange={handleInputChange}
-            className="shadow appearance-none border rounded w-full py-2 px-3 text-gray-700 leading-tight focus:outline-none focus:shadow-outline"
-          />
-          {errors.cand_dob && (
-            <p className="text-red-500 text-xs mt-1">{errors.cand_dob}</p>
-          )}
-        </div>
-
-        <div>
-          <label
-            htmlFor="cand_fathername"
-            className="block text-gray-700 text-sm font-bold mb-2"
-          >
-            Father Name <span className="text-red-500">*</span>
-          </label>
-          <input
-            type="text"
-            id="cand_fathername"
-            name="cand_fathername"
-            value={formData.cand_fathername}
-            onChange={handleInputChange}
-            className="shadow appearance-none border rounded w-full py-2 px-3 text-gray-700 leading-tight focus:outline-none focus:shadow-outline"
-            placeholder="Enter your father's name"
-          />
-          {errors.cand_fathername && (
-            <p className="text-red-500 text-xs mt-1">
-              {errors.cand_fathername}
-            </p>
-          )}
-        </div>
-
-        <div>
-          <label
-            htmlFor="cand_local_domicile"
-            className="block text-gray-700 text-sm font-bold mb-2"
-          >
-            Local / Domicile District <span className="text-red-500">*</span>
-          </label>
-          <select
-            id="cand_local_domicile"
-            name="cand_local_domicile"
-            value={formData.cand_local_domicile}
-            onChange={handleInputChange}
-            className="shadow appearance-none border rounded w-full py-2 px-3 text-gray-700 leading-tight focus:outline-none focus:shadow-outline"
-          >
-            <option value="">Please Select</option>
-            {domicileOptions.map((domicileOption) => (
-              <option key={domicileOption} value={domicileOption}>
-                {domicileOption}
-              </option>
-            ))}
-          </select>
-          {errors.cand_local_domicile && (
-            <p className="text-red-500 text-xs mt-1">
-              {errors.cand_local_domicile}
-            </p>
-          )}
-        </div>
-
-        <div className="">
-          <label className="block text-gray-700 text-sm font-bold mb-2">
-            Gender <span className="text-red-500">*</span>
-          </label>
-          <div className="flex items-center">
-            <input
-              type="radio"
-              id="cand_gender"
-              name="cand_gender"
-              value="male"
-              checked={formData.cand_gender === "male"}
-              onChange={handleInputChange}
-              className="appearance-none w-3 h-3 border border-gray-300 rounded-full checked:bg-[#ffa500] checked:border-[#ffa500] focus:outline-none focus:ring-2 focus:ring-[#ffa500] focus:ring-offset-2 mr-2"
-            />
-            <label htmlFor="cand_gender" className="mr-4">
-              Male
-            </label>
-            <input
-              type="radio"
-              id="cand_gender"
-              name="cand_gender"
-              value="female"
-              checked={formData.cand_gender === "female"}
-              onChange={handleInputChange}
-              className="appearance-none w-3 h-3 border border-gray-300 rounded-full checked:bg-[#ffa500] checked:border-[#ffa500] focus:outline-none focus:ring-2 focus:ring-pink-400 focus:ring-offset-2 mr-2"
-            />
-            <label htmlFor="cand_gender">Female</label>
-          </div>
-          {(centerAllowsOnlyMale || centerAllowsOnlyFemale) && (
-            <p className="text-xs text-orange-700 mt-2">
-              This selected center currently allows{" "}
-              <strong>{centerAllowsOnlyMale ? "male" : "female"}</strong> candidates only.
-            </p>
-          )}
-
-          <div>
-            <label className="block text-gray-700 text-sm font-bold mb-2">
-              Passport Size Photo <span className="text-red-500">*</span>
-            </label>
-            <div className="flex items-center">
-              <input
-                type="file"
-                onChange={handleFileChange}
-                className="w-full p-2 border border-gray-300 rounded focus:ring-2 focus:ring-emerald-500 outline-none"
-                accept="image/*"
-              />
-
-              <div className="border border-gray-300 rounded ml-4 w-35 h-24 flex items-center justify-center">
-                {photoPreview ? (
-                  <img
-                    src={photoPreview}
-                    alt="Preview"
-                    className="w-full h-full object-cover"
-                  />
-                ) : (
-                  <span className="text-gray-400 text-xs text-center">
-                    YOUR
-                    <br />
-                    PASSPORT
-                    <br />
-                    PHOTO
-                  </span>
-                )}
-              </div>
-            </div>
+          <div className="flex h-24 w-20 shrink-0 items-center justify-center overflow-hidden rounded-md border border-dashed border-gray-300 bg-gray-50">
+            {photoPreview ? (
+              <img src={photoPreview} alt="Preview" className="h-full w-full object-cover" />
+            ) : (
+              <span className="px-1 text-center text-[10px] uppercase leading-tight tracking-wide text-gray-400">
+                Your
+                <br />
+                passport
+                <br />
+                photo
+              </span>
+            )}
           </div>
         </div>
-      </div>
+      </Field>
     </div>
   );
 };

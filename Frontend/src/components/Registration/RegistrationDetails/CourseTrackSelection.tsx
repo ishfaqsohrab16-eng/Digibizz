@@ -1,4 +1,6 @@
 import React from "react";
+import { ExternalLink } from "lucide-react";
+import { Field, SelectInput } from "./fields";
 
 interface CourseTrackSelectionProps {
   formData: any;
@@ -25,46 +27,62 @@ const CourseTrackSelection: React.FC<CourseTrackSelectionProps> = ({
     admissionRules
       .filter((rule) => Number(rule.center_id) === selectedCenterId)
       .filter(
-        (rule) => !selectedGender || rule.allowed_gender === "all" || rule.allowed_gender === selectedGender
+        (rule) =>
+          !selectedGender ||
+          rule.allowed_gender === "all" ||
+          rule.allowed_gender === selectedGender
       )
       .map((rule) => Number(rule.course_id))
   );
 
+  const availableCourses = course.filter((courseItem) =>
+    selectedCenterId ? allowedCourseIds.has(courseItem.course_id) : false
+  );
+
   return (
-    <div className="p-2 rounded-md">
-      <h3 className="font-semibold mb-2 text-lg text-[#006537]">
-        Course Track Selection <span className="text-red-500">*</span>
-      </h3>
-      <div className="flex items-center justify-between">
-        <select
+    <div className="space-y-5">
+      <Field
+        label="Course track"
+        htmlFor="course_id"
+        required
+        error={errors.course_id}
+        className="max-w-xl"
+      >
+        <SelectInput
           id="course_id"
           name="course_id"
-          value={formData.course_id}
+          value={formData.course_id || ""}
           onChange={handleInputChange}
-          className="shadow appearance-none border rounded w-1/2 py-2 px-3 text-gray-700 leading-tight focus:outline-none focus:shadow-outline"
+          hasError={Boolean(errors.course_id)}
         >
-          <option value="">Please Select Course</option>
-          {course
-            .filter((course) => {
-              return selectedCenterId ? allowedCourseIds.has(course.course_id) : false;
-            })
-            .map((course) => (
-              <option key={course.course_id} value={course.course_id}>
-                {course.course_full_name}
-              </option>
-            ))}
-        </select>
-        {errors.course_id && (
-          <p className="text-red-500 text-xs mt-1">{errors.course_id}</p>
+          <option value="">Please select course</option>
+          {availableCourses.map((courseItem) => (
+            <option key={courseItem.course_id} value={courseItem.course_id}>
+              {courseItem.course_full_name}
+            </option>
+          ))}
+        </SelectInput>
+        {!selectedCenterId && (
+          <p className="mt-1.5 text-xs text-orange-700">
+            Select your center first to see the available course tracks.
+          </p>
         )}
-        <a
-          href="https://digibizz.gob.pk/courses-helping-material/"
-          className="bg-blue-500 hover:bg-blue-700 text-white font-bold py-2 px-4 rounded focus:outline-none focus:shadow-outline"
-        >
-          Prepare your Interview with the{" "}
-          <span className="underline">Learning Resources</span>
-        </a>
-      </div>
+        {selectedCenterId > 0 && availableCourses.length === 0 && (
+          <p className="mt-1.5 text-xs text-orange-700">
+            No course track is currently open for the selected center.
+          </p>
+        )}
+      </Field>
+
+      <a
+        href="https://digibizz.gob.pk/courses-helping-material/"
+        target="_blank"
+        rel="noreferrer"
+        className="inline-flex items-center gap-2 rounded-md border border-gray-300 bg-white px-4 py-2.5 text-sm font-medium text-gray-700 transition-colors hover:border-[#006537] hover:text-[#006537]"
+      >
+        Prepare your interview with the Learning Resources
+        <ExternalLink size={14} />
+      </a>
     </div>
   );
 };

@@ -52,6 +52,8 @@ function AppContent() {
           <Route path="/signup" element={<SignupForm />} />
           <Route path="/forgot-password" element={<ForgotPasswordForm />} />
           <Route path="/registration" element={<Registration />} />
+          {/* Dedicated per-center apply link, e.g. /registration/gcc */}
+          <Route path="/registration/:centerSlug" element={<Registration />} />
           <Route path="/itti-registration" element={<Registration />} />
           <Route
             path="/dashboard/:activeForm?"
