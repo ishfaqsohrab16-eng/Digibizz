@@ -39,6 +39,21 @@ const PageShell: React.FC<{ children: React.ReactNode }> = ({ children }) => (
   </div>
 );
 
+/**
+ * TEMPORARY: the name shown to applicants on the registration form.
+ *
+ * Intake is for Batch 10, but no Batch 10 row exists in training_batches yet,
+ * so the batch resolved from the database still reads "Batch-9". Only the
+ * label is overridden here - currentBatchId keeps resolving from the database,
+ * because candidates.tb_id is a foreign key to training_batches and admissions
+ * can only be opened for a batch that actually exists.
+ *
+ * To remove this: create Batch-10 under Settings -> Training Batches, open its
+ * centers/courses under Admissions -> Admission Control, then delete this
+ * constant and the line that applies it in loadAdmissionState().
+ */
+const ADMISSION_BATCH_LABEL = "Batch 10";
+
 function Registration() {
   const { centerSlug } = useParams<{ centerSlug?: string }>();
 
@@ -75,9 +90,13 @@ function Registration() {
   useEffect(() => {
     const loadAdmissionState = async () => {
       try {
-        const [batchResponse, centersData] = await Promise.all([
+        const [batchResponse, centersData, admissionState] = await Promise.all([
           getTrainingBatches(),
           getCenter().catch(() => []),
+          // Deliberately unfiltered: we need every open rule so we can work out
+          // which batch admissions are actually running for, before we know
+          // which batch to show.
+          getPublicAdmissionControl().catch(() => null),
         ]);
 
         setCenters(Array.isArray(centersData) ? centersData : []);
@@ -86,16 +105,38 @@ function Registration() {
           (a: { tb_id: number }, b: { tb_id: number }) => b.tb_id - a.tb_id
         );
 
-        if (sortedBatches.length > 0) {
-          const latestBatch = sortedBatches[0];
-          setCurrentBatchId(latestBatch.tb_id);
-          setCurrentBatchName(latestBatch.tb_name || "");
-          const admissionState = await getPublicAdmissionControl(latestBatch.tb_id);
-          setRules(admissionState?.rules || []);
-          setAdmissionOpen((admissionState?.totalOpen || 0) > 0);
-        } else {
+        if (sortedBatches.length === 0) {
           setAdmissionOpen(false);
+          return;
         }
+
+        const openRules = admissionState?.rules || [];
+
+        // Applications belong to whichever batch the Admission Control panel has
+        // centers/courses open on - that is the batch the candidate row is
+        // written against. Picking the newest batch instead (the old behaviour)
+        // advertises the batch currently in training as soon as a later batch
+        // row exists but has not been opened yet, and then reports admissions
+        // closed because the open rules sit on a different batch.
+        const openBatchId = openRules.reduce(
+          (highest, rule) => Math.max(highest, Number(rule.tb_id)),
+          0
+        );
+
+        const admissionBatch =
+          sortedBatches.find(
+            (batch: { tb_id: number }) => Number(batch.tb_id) === openBatchId
+          ) || sortedBatches[0];
+
+        setCurrentBatchId(admissionBatch.tb_id);
+        // Label only - see ADMISSION_BATCH_LABEL. The id above stays real.
+        setCurrentBatchName(ADMISSION_BATCH_LABEL);
+
+        const rulesForBatch = openRules.filter(
+          (rule) => Number(rule.tb_id) === Number(admissionBatch.tb_id)
+        );
+        setRules(rulesForBatch);
+        setAdmissionOpen(rulesForBatch.length > 0);
       } catch (error) {
         console.error("Failed to fetch admission state:", error);
         setAdmissionOpen(false);

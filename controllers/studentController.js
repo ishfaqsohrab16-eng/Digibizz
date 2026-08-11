@@ -625,6 +625,7 @@ exports.getStudentProfile = async (req, res) => {
         u.user_password,
         u.user_type,
         u.user_status,
+        s.std_id,
         s.std_rollno,
         s.std_cnic,
         s.std_gender,
@@ -715,6 +716,9 @@ exports.getStudentProfile = async (req, res) => {
       return {
         user_id: student.user_id,
         user_profile_photo: student.user_profile_photo,
+        // The row-level delete action keys off std_id, so it has to survive
+        // this mapping - without it every row arrives with no id.
+        std_id: student.std_id,
         std_rollno: student.std_rollno,
         std_cnic: student.std_cnic,
         user_name: student.user_name,

@@ -176,6 +176,15 @@ function AdmissionPortal() {
     setIsSubmenuOpen(isSubmenuOpen === menu ? null : menu);
   };
 
+  /**
+   * The interview panel stores the recommendation as the string "Yes"/"No",
+   * and the server enforces the same value before it will enrol anyone. The
+   * table relabels it for display, so the raw answer is normalised here once
+   * and kept alongside it for the Enroll guard to use.
+   */
+  const isRecommended = (value: unknown) =>
+    String(value ?? "").trim().toLowerCase() === "yes";
+
   const fetchCandidateProfile = async () => {
     try {
       // Extract tb_id from props
@@ -192,12 +201,12 @@ function AdmissionPortal() {
               candidate.cand_interview_marks === undefined
                 ? "TBD"
                 : candidate.cand_interview_marks,
-            recommended:
-              candidate.recommended === "Yes"
-                ? "Recommended"
-                : candidate.recommended === "No"
-                ? "Not Recommend"
-                : "",
+            is_recommended: isRecommended(candidate.recommended),
+            recommended: isRecommended(candidate.recommended)
+              ? "Recommended"
+              : String(candidate.recommended ?? "").trim().toLowerCase() === "no"
+              ? "Not Recommend"
+              : "",
           }))
         : [];
 
@@ -310,9 +319,12 @@ function AdmissionPortal() {
     };
   };
 
+  // Refetch on tab change as well as on batch change: recommending someone in
+  // the interview panel happens in a sibling tab, so without this the list
+  // still holds the pre-interview rows and Enroll stays disabled.
   useEffect(() => {
     fetchCandidateProfile();
-  }, [selectedBatchId]);
+  }, [selectedBatchId, activeTab]);
 
   return (
     <div className="h-screen flex flex-col bg-mesh">
@@ -473,7 +485,7 @@ function AdmissionPortal() {
               canEnroll
                 ? {
                     label: "Enroll",
-                    isEnabled: (row: any) => row?.recommended === "Yes",
+                    isEnabled: (row: any) => row?.is_recommended === true,
                     onClick: (row: any) => setCandidateToEnroll(row.cand_id),
                   }
                 : undefined

@@ -12,6 +12,7 @@ import {
   ExternalLink,
   Loader2,
   LockKeyhole,
+  Trash2,
 } from "lucide-react";
 import { useBatch } from "../../context/BatchContext";
 import {
@@ -26,6 +27,8 @@ import { toast } from "sonner";
 import Loader from "../Loader";
 import StudentForm from "./StudentForm";
 import StudentSendMail from "./StudentSendMail";
+import DeleteStudentDialog from "./DeleteStudentDialog";
+import { isRole, ROLE } from "../../utils/roles";
 
 interface AssignmentProgress {
   total: number;
@@ -136,6 +139,11 @@ const SearchStudent = () => {
     confirmPassword: "",
   });
   const [isPasswordResetting, setIsPasswordResetting] = useState(false);
+  const [showDeleteDialog, setShowDeleteDialog] = useState(false);
+
+  // Same rule as the enrolled-student table: permanent deletion is SuperAdmin
+  // only, and the server enforces it independently of this flag.
+  const canDeleteStudents = isRole(userType, ROLE.SUPER_ADMIN);
 
   const handleChange = (e: React.ChangeEvent<HTMLInputElement>) => {
     const { value } = e.target;
@@ -328,6 +336,14 @@ const SearchStudent = () => {
     }
   };
 
+  const handleDeleted = () => {
+    setShowDeleteDialog(false);
+    setShowProfile(false);
+    setStudentData(null);
+    setSearchCNIC("");
+    setSearchEmail("");
+  };
+
   const closePasswordReset = () => {
     setShowPasswordReset(false);
     setPasswordResetData({ newPassword: "", confirmPassword: "" });
@@ -494,6 +510,15 @@ const SearchStudent = () => {
                   <LockKeyhole className="w-4 h-4" />
                   Reset Password
                 </button>
+                {canDeleteStudents && (
+                  <button
+                    className="px-4 py-2 bg-[hsl(var(--destructive))] text-[hsl(var(--destructive-foreground))] rounded-md hover:opacity-90 transition-colors flex items-center gap-2"
+                    onClick={() => setShowDeleteDialog(true)}
+                  >
+                    <Trash2 className="w-4 h-4" />
+                    Delete Student
+                  </button>
+                )}
               </div>
             )}
               {showPasswordReset && (
@@ -936,6 +961,12 @@ const SearchStudent = () => {
           )
         )}
       </div>
+
+      <DeleteStudentDialog
+        student={showDeleteDialog && studentData ? studentData : null}
+        onClose={() => setShowDeleteDialog(false)}
+        onDeleted={handleDeleted}
+      />
     </div>
   );
 };
