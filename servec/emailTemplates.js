@@ -44,7 +44,6 @@ const documentShell = (title, contentHtml) => `<!doctype html>
     <title>${escapeHtml(title)}</title>
   </head>
   <body style="margin:0;padding:0;background-color:#eef2f5;">
-    <div style="display:none;max-height:0;overflow:hidden;opacity:0;">${escapeHtml(title)}</div>
     <table role="presentation" width="100%" cellpadding="0" cellspacing="0" style="background-color:#eef2f5;padding:24px 12px;">
       <tr>
         <td align="center">

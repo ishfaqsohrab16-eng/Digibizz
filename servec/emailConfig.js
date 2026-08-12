@@ -181,8 +181,16 @@ const sendEmail = async (to, subject, text, html) => {
       attachments: options.attachments,
     });
 
+    // Log what the SMTP server actually answered. "accepted" only means the
+    // server took responsibility for the message - if it later fails to relay
+    // (spam rejection, bad DKIM, blocklist) that shows up in the mail server's
+    // own queue/logs and as a bounce to SMTP_FROM, never here.
     console.log(
-      `[email] sent "${options.subject}" to ${options.to} (id: ${info.messageId})`
+      `[email] sent "${options.subject}" to ${options.to}`,
+      `| id=${info.messageId}`,
+      `| accepted=${JSON.stringify(info.accepted || [])}`,
+      `| rejected=${JSON.stringify(info.rejected || [])}`,
+      `| response=${info.response || "-"}`
     );
     return info;
   } catch (error) {
