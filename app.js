@@ -83,7 +83,11 @@ app.use(
         connectSrc: ["'self'", ...allowedOrigins],
         scriptSrc: ["'self'", "'unsafe-inline'"],
         styleSrc: ["'self'", "'unsafe-inline'"],
-        imgSrc: ["'self'", "data:"],
+        // `blob:` is required for client-side image previews: the registration
+        // form renders the chosen passport photo via URL.createObjectURL(),
+        // which produces a blob: URL. Without it the preview is blocked and
+        // shows a broken-image icon.
+        imgSrc: ["'self'", "data:", "blob:"],
         fontSrc: ["'self'"],
       },
     },
@@ -209,6 +213,11 @@ const initializeDatabase = async () => {
 };
 
 initializeDatabase();
+
+// Surface SMTP problems at boot instead of on the first failed registration.
+const { verifyTransport } = require("./servec/emailConfig");
+verifyTransport();
+
 const PORT = process.env.PORT || 5000;
 
 app.listen(PORT, () => {

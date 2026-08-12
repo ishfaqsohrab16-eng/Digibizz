@@ -94,13 +94,19 @@ const CandidateModel = sequelize.define(
       type: DataTypes.STRING(255),
       allowNull: false,
     },
+    // degree_start_date, degree_end_date, permanent_address and permanent_city
+    // are no longer collected on the registration form. The columns are kept
+    // (historic records and the Interview Portal still read them) but new
+    // applications store an empty value, so they must not be required here.
     degree_start_date: {
       type: DataTypes.STRING(100),
-      allowNull: false,
+      allowNull: true,
+      defaultValue: "",
     },
     degree_end_date: {
       type: DataTypes.STRING(100),
-      allowNull: false,
+      allowNull: true,
+      defaultValue: "",
     },
     current_address: {
       type: DataTypes.STRING(255),
@@ -108,7 +114,8 @@ const CandidateModel = sequelize.define(
     },
     permanent_address: {
       type: DataTypes.STRING(255),
-      allowNull: false,
+      allowNull: true,
+      defaultValue: "",
     },
     current_city: {
       type: DataTypes.STRING(100),
@@ -116,7 +123,8 @@ const CandidateModel = sequelize.define(
     },
     permanent_city: {
       type: DataTypes.STRING(100),
-      allowNull: false,
+      allowNull: true,
+      defaultValue: "",
     },
     cand_test_code: {
       type: DataTypes.STRING(255),

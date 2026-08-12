@@ -7,9 +7,77 @@ const { Op } = require("sequelize");
 const db = require("../config/db"); // Add this line to import your database configuration
 const sequelize = db.sequelize;
 const Student = require("../models/studentModel");
-const sendEmail = require("../servec/emailConfig");
+const { sendEmailSafe } = require("../servec/emailConfig");
+const { applicationReceived } = require("../servec/emailTemplates");
 const { validateAdmissionAvailability } = require("./admissionControlController");
 const AdmissionControl = require("../models/admissionControlModel");
+
+/**
+ * Fields dropped from the registration form. Their columns are still NOT NULL
+ * in the database and are read by existing screens (e.g. the Interview Portal
+ * shows permanent_city), so new applications write a blank instead.
+ */
+const RETIRED_FIELDS = [
+  "permanent_address",
+  "permanent_city",
+  "degree_start_date",
+  "degree_end_date",
+];
+
+/**
+ * Send the personalised "application received" email to a new candidate.
+ * Runs after the HTTP response so a slow/unavailable SMTP server can never
+ * delay or fail an admission. Never throws.
+ */
+const sendApplicationReceivedEmail = async (candidate) => {
+  try {
+    if (!candidate || !candidate.cand_email) {
+      console.warn(
+        `[email] candidate ${candidate?.cand_id} has no email address - skipping confirmation`
+      );
+      return;
+    }
+
+    const [course, center, batch] = await Promise.all([
+      candidate.course_id
+        ? Course.findByPk(candidate.course_id, {
+            attributes: ["course_name", "course_full_name"],
+          })
+        : null,
+      candidate.center_id
+        ? Center.findByPk(candidate.center_id, { attributes: ["center_name"] })
+        : null,
+      candidate.tb_id
+        ? TrainingBatch.findByPk(candidate.tb_id, {
+            attributes: ["tb_name", "tb_start"],
+          })
+        : null,
+    ]);
+
+    const { subject, text, html } = applicationReceived({
+      applicationId: candidate.cand_id,
+      name: candidate.cand_name,
+      fatherName: candidate.cand_fathername,
+      cnic: candidate.cand_cnic,
+      phone: candidate.cand_phone,
+      gender: candidate.cand_gender,
+      courseName: course?.course_full_name || course?.course_name || "",
+      centerName: center?.center_name || "",
+      batchName: batch?.tb_name || "",
+      batchStart: batch?.tb_start || "",
+      appliedOn: candidate.cand_apply_date,
+    });
+
+    await sendEmailSafe({ to: candidate.cand_email, subject, text, html });
+  } catch (error) {
+    // Confirmation mail is best-effort; the application itself is already saved.
+    console.error(
+      `[email] could not build/send confirmation for candidate ${candidate?.cand_id}:`,
+      error.message
+    );
+  }
+};
+
 // Create Candidate
 exports.createCandidate = async (req, res) => {
   const errors = validationResult(req);
@@ -49,18 +117,17 @@ exports.createCandidate = async (req, res) => {
         .json({ message: "You have already applied for this batch" });
     }
 
-    // Validate guardian WhatsApp number and where_find_us
-    if (!candidateData.guardian_whatsapp) {
-      return res
-        .status(400)
-        .json({ message: "Guardian WhatsApp number is required" });
-    }
-
     if (!candidateData.where_find_us) {
       return res
         .status(400)
         .json({ message: "Information about where you found us is required" });
     }
+
+    // These are no longer collected on the form, but the columns are still
+    // NOT NULL in the database - write blanks so the insert succeeds.
+    RETIRED_FIELDS.forEach((field) => {
+      if (!candidateData[field]) candidateData[field] = "";
+    });
 
     // Create new candidate
     const newCandidate = await Candidate.create(candidateData);
@@ -68,6 +135,9 @@ exports.createCandidate = async (req, res) => {
       message: "Candidate created successfully",
       candidate: newCandidate,
     });
+
+    // Fire-and-forget: the applicant already has their response.
+    sendApplicationReceivedEmail(newCandidate);
   } catch (error) {
     console.error("Candidate creation error:", error);
     res.status(500).json({ message: "Server error during candidate creation" });
@@ -770,13 +840,7 @@ exports.updateCandidate = async (req, res) => {
     const candidateId = req.params.id;
     const updateData = req.body;
 
-    // Validate guardian WhatsApp number and where_find_us if they're being updated
-    if (updateData.guardian_whatsapp === "") {
-      return res
-        .status(400)
-        .json({ message: "Guardian WhatsApp number cannot be empty" });
-    }
-
+    // Validate where_find_us if it is being updated
     if (updateData.where_find_us === "") {
       return res.status(400).json({
         message: "Information about where you found us cannot be empty",

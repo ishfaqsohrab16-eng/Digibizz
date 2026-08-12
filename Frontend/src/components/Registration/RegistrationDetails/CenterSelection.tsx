@@ -96,17 +96,15 @@ const DigiBizzCenterSelection: React.FC<DigiBizzCenterSelectionProps> = ({
               Class timings
             </h4>
             <ul className="list-inside list-disc space-y-1 text-sm text-gray-700">
-              <li>BUITEMS: 03:00 PM to 05:00 PM</li>
-              <li>UoB: 03:00 PM to 05:00 PM</li>
-              <li>UoL: 03:00 PM to 05:00 PM</li>
-              <li>Govt Girls College: 03:00 PM to 05:00 PM</li>
-              <li>ITTI Peshin Stop: 03:00 PM to 05:00 PM</li>
+              <li>BUITEMS: 02:00 PM to 04:00 PM</li>
+              <li>UoB: 02:00 PM to 04:00 PM</li>
+              <li>Girls College Quetta Cantt: 12:00 PM to 02:00 PM</li>
               <li>
-                ITTI Zhob:
+                ITTI Pishin Stop Quetta:
                 <ul className="ml-4 list-inside list-disc">
-                  <li>Content Marketing &amp; Advertising: 11:00 AM to 1:00 PM</li>
-                  <li>Amazon Web &amp; e-Commerce: 3:00 PM to 5:00 PM</li>
-                  <li>Creative Designing: 11:00 AM to 1:00 PM</li>
+                  <li>Digital Marketing: 11:30 AM to 01:30 PM</li>
+                  <li>Graphic Design: 01:00 PM to 03:00 PM</li>
+                  <li>Amazon &amp; e-Commerce: 03:00 PM to 05:00 PM</li>
                 </ul>
               </li>
             </ul>

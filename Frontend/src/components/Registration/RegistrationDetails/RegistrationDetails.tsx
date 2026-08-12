@@ -38,23 +38,16 @@ const initialFormData: CandidateFormData = {
   course_id: 0,
   center_id: 0,
   cand_email: "",
-  confirm_email: "",
   cand_phone: "",
-  confirm_phone: "",
   cand_whatsapp: "",
-  guardian_whatsapp: "",
   cand_gender: "",
   cand_dob: "",
   cand_local_domicile: "",
   cand_degree_level: "",
   degree_area: "",
   institute: "",
-  degree_start_date: "",
-  degree_end_date: "",
   current_address: "",
-  permanent_address: "",
   current_city: "",
-  permanent_city: "",
   cand_test_code: "",
   cand_test_marks: 0,
   cand_interview_marks: "",
@@ -297,31 +290,12 @@ const RegistrationDetails: React.FC<RegistrationDetailsProps> = ({
       case "contact": {
         requireAll({
           cand_email: "Email address",
-          confirm_email: "Email confirmation",
           cand_phone: "Phone number",
-          confirm_phone: "Phone confirmation",
           cand_whatsapp: "WhatsApp number",
-          guardian_whatsapp: "Guardian's WhatsApp number",
           current_address: "Current address",
-          permanent_address: "Permanent address",
           current_city: "Current city",
-          permanent_city: "Permanent city",
           where_find_us: "Where did you find us",
         });
-        if (
-          formData.cand_email &&
-          formData.confirm_email &&
-          formData.cand_email !== formData.confirm_email
-        ) {
-          stepErrors.confirm_email = "Email addresses do not match";
-        }
-        if (
-          formData.cand_phone &&
-          formData.confirm_phone &&
-          formData.cand_phone !== formData.confirm_phone
-        ) {
-          stepErrors.confirm_phone = "Phone numbers do not match";
-        }
         break;
       }
       case "academic": {
@@ -329,16 +303,7 @@ const RegistrationDetails: React.FC<RegistrationDetailsProps> = ({
           cand_degree_level: "Degree level",
           institute: "Institute",
           degree_area: "Degree area",
-          degree_start_date: "Start date",
-          degree_end_date: "End date",
         });
-        if (
-          formData.degree_start_date &&
-          formData.degree_end_date &&
-          new Date(formData.degree_start_date) > new Date(formData.degree_end_date)
-        ) {
-          stepErrors.degree_end_date = "End date cannot be earlier than start date";
-        }
         break;
       }
       case "center": {

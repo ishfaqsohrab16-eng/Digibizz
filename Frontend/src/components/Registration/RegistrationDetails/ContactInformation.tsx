@@ -32,23 +32,6 @@ const ContactInformation: React.FC<ContactInformationProps> = ({
         />
       </Field>
 
-      <Field
-        label="Confirm email address"
-        htmlFor="confirm_email"
-        required
-        error={errors.confirm_email}
-      >
-        <TextInput
-          type="email"
-          id="confirm_email"
-          name="confirm_email"
-          value={formData.confirm_email}
-          onChange={handleInputChange}
-          placeholder="Confirm your email address"
-          hasError={Boolean(errors.confirm_email)}
-        />
-      </Field>
-
       <Field label="Phone no." htmlFor="cand_phone" required error={errors.cand_phone}>
         <TextInput
           type="tel"
@@ -58,23 +41,6 @@ const ContactInformation: React.FC<ContactInformationProps> = ({
           onChange={handleInputChange}
           placeholder="Enter your phone number"
           hasError={Boolean(errors.cand_phone)}
-        />
-      </Field>
-
-      <Field
-        label="Confirm phone no."
-        htmlFor="confirm_phone"
-        required
-        error={errors.confirm_phone}
-      >
-        <TextInput
-          type="tel"
-          id="confirm_phone"
-          name="confirm_phone"
-          value={formData.confirm_phone}
-          onChange={handleInputChange}
-          placeholder="Confirm your phone number"
-          hasError={Boolean(errors.confirm_phone)}
         />
       </Field>
 
@@ -97,23 +63,6 @@ const ContactInformation: React.FC<ContactInformationProps> = ({
       </Field>
 
       <Field
-        label="Guardian WhatsApp no."
-        htmlFor="guardian_whatsapp"
-        required
-        error={errors.guardian_whatsapp}
-      >
-        <TextInput
-          type="tel"
-          id="guardian_whatsapp"
-          name="guardian_whatsapp"
-          value={formData.guardian_whatsapp}
-          onChange={handleInputChange}
-          placeholder="Enter guardian's WhatsApp number"
-          hasError={Boolean(errors.guardian_whatsapp)}
-        />
-      </Field>
-
-      <Field
         label="Current address"
         htmlFor="current_address"
         required
@@ -130,22 +79,6 @@ const ContactInformation: React.FC<ContactInformationProps> = ({
       </Field>
 
       <Field
-        label="Permanent address"
-        htmlFor="permanent_address"
-        required
-        error={errors.permanent_address}
-      >
-        <TextareaInput
-          id="permanent_address"
-          name="permanent_address"
-          value={formData.permanent_address}
-          onChange={handleInputChange}
-          placeholder="Enter your permanent address"
-          hasError={Boolean(errors.permanent_address)}
-        />
-      </Field>
-
-      <Field
         label="Current city"
         htmlFor="current_city"
         required
@@ -157,28 +90,6 @@ const ContactInformation: React.FC<ContactInformationProps> = ({
           value={formData.current_city}
           onChange={handleInputChange}
           hasError={Boolean(errors.current_city)}
-        >
-          <option value="">Please select</option>
-          {domicileOptions.map((domicileOption) => (
-            <option key={domicileOption} value={domicileOption}>
-              {domicileOption}
-            </option>
-          ))}
-        </SelectInput>
-      </Field>
-
-      <Field
-        label="Permanent city"
-        htmlFor="permanent_city"
-        required
-        error={errors.permanent_city}
-      >
-        <SelectInput
-          id="permanent_city"
-          name="permanent_city"
-          value={formData.permanent_city}
-          onChange={handleInputChange}
-          hasError={Boolean(errors.permanent_city)}
         >
           <option value="">Please select</option>
           {domicileOptions.map((domicileOption) => (

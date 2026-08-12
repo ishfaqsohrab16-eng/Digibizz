@@ -4,7 +4,7 @@ import {
   degreeAreas,
   institutions,
 } from "../../../types/degreeAreas";
-import { Field, SelectInput, TextInput, fieldGrid } from "./fields";
+import { Field, SelectInput, fieldGrid } from "./fields";
 
 interface AcademicInformationProps {
   formData: any;
@@ -75,37 +75,6 @@ const AcademicInformation: React.FC<AcademicInformationProps> = ({
         </SelectInput>
       </Field>
 
-      <Field
-        label="Start date"
-        htmlFor="degree_start_date"
-        required
-        error={errors.degree_start_date}
-      >
-        <TextInput
-          type="date"
-          id="degree_start_date"
-          name="degree_start_date"
-          value={formData.degree_start_date}
-          onChange={handleInputChange}
-          hasError={Boolean(errors.degree_start_date)}
-        />
-      </Field>
-
-      <Field
-        label="End date"
-        htmlFor="degree_end_date"
-        required
-        error={errors.degree_end_date}
-      >
-        <TextInput
-          type="date"
-          id="degree_end_date"
-          name="degree_end_date"
-          value={formData.degree_end_date}
-          onChange={handleInputChange}
-          hasError={Boolean(errors.degree_end_date)}
-        />
-      </Field>
     </div>
   );
 };

@@ -14,6 +14,7 @@ const MasterTrainer = require("../models/masterTrainersModel");
 const CenterDates = require("../models/centersDatesModel");
 const Attendance = require("../models/attendanceModel");
 const sendEmail = require("../servec/emailConfig"); // Make sure you have a sendEmail utility
+const { sendEmailSafe, escapeHtml } = require("../servec/emailConfig");
 const Earning = require("../models/earningsModel");
 const CenterManager = require("../models/centerUsersModel");
 const HolidayDates = require("../models/holidaysModel");
@@ -102,12 +103,13 @@ exports.registerStudent = async (req, res) => {
 
     // Commit transaction
     await transaction.commit();
-    // Send email with the verification code
-    await sendEmail(
+    // Welcome email is best-effort: the student is already committed, so a mail
+    // failure here must not roll back (impossible) or return an error.
+    sendEmailSafe(
       user_email,
       "Welcome to DigiBizz LMS",
-      `You are part of the DIGIBIZZ training. Kindly create your account in the DIGIBIZZ LMS and start your learning journey together.`,
-      `<p>You are part of the DIGIBIZZ training. Kindly create your account in the DIGIBIZZ LMS and start your learning journey together.</p>`
+      `Dear ${user_name},\n\nYou are part of the DIGIBIZZ training. Kindly create your account in the DIGIBIZZ LMS and start your learning journey together.`,
+      `<p>Dear <strong>${escapeHtml(user_name)}</strong>,</p><p>You are part of the DIGIBIZZ training. Kindly create your account in the DIGIBIZZ LMS and start your learning journey together.</p>`
     );
     // Send success response
     res.status(201).json({
