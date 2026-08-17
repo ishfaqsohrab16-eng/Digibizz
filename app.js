@@ -6,6 +6,7 @@ const session = require("express-session");
 const path = require("path");
 require("dotenv").config();
 const { sequelize, testConnection } = require("./config/db");
+const { ensureSchema } = require("./utils/ensureSchema");
 
 // Import routes
 const adminRoutes = require("./routes/adminRoutes");
@@ -204,6 +205,10 @@ app.use((err, req, res, next) => {
 const initializeDatabase = async () => {
   try {
     await testConnection();
+    // Add any missing additive columns before models are used. sync({alter:false})
+    // never adds columns, so a model attribute without its column breaks every
+    // query against that table - not just the new feature.
+    await ensureSchema();
     await sequelize.sync({ alter: false });
     console.log("Database connected and models synced successfully");
   } catch (error) {
