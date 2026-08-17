@@ -170,6 +170,15 @@ const CandidateModel = sequelize.define(
       type: DataTypes.STRING(20),
       allowNull: false,
     },
+    // Interviewer-verified, and deliberately independent of `institute` (which
+    // is the applicant's own claim on the registration form).
+    // NULL = not asked yet, 0 = no, 1 = yes.
+    // Requires migration/009_add_is_uob_student_to_candidates.sql.
+    is_uob_student: {
+      type: DataTypes.BOOLEAN,
+      allowNull: true,
+      defaultValue: null,
+    },
   },
   {
     tableName: "candidates",

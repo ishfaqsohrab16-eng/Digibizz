@@ -13,6 +13,9 @@ import StudentForm from "./StudentForm/StudentForm";
 import StudentProfile from "./StudentForm/StudentProfile";
 import { StudentRegistrationData } from "../types/student";
 import { StudentData } from "./StudentForm/StudentProfile"; // Import StudentData for profile
+import DeleteStudentDialog from "./StudentForm/DeleteStudentDialog";
+import { isRole, ROLE } from "../utils/roles";
+import { toast } from "sonner";
 
 const StudentTable = () => {
   const [students, setStudents] = useState<StudentData[]>([]); // Use StudentData for table data
@@ -38,6 +41,19 @@ const StudentTable = () => {
   const [selectedStudentForForm, setSelectedStudentForForm] =
     useState<StudentRegistrationData | null>(null); // For StudentForm
   const [isFormVisible, setIsFormVisible] = useState(false);
+  const [studentToDelete, setStudentToDelete] = useState<StudentData | null>(null);
+
+  // Permanently deleting a student is SuperAdmin-only. The server enforces
+  // this as well - this only decides whether the button does anything.
+  const canDeleteStudents = isRole(userType, ROLE.SUPER_ADMIN);
+
+  const handleDeleteRequest = (item: StudentData) => {
+    if (!canDeleteStudents) {
+      toast.error("Only a Super Admin can delete a student");
+      return;
+    }
+    setStudentToDelete(item);
+  };
   const [isProfileVisible, setIsProfileVisible] = useState(false);
   // Add a refreshTrigger state to force re-fetching data
   const [refreshTrigger, setRefreshTrigger] = useState(0);
@@ -377,7 +393,6 @@ const StudentTable = () => {
               setColumns={setColumns}
               isActionBtn={true}
               onView={handleView}
-              onDelete={(item) => {}}
               photo="user_profile_photo"
               isLoading={loading}
             />
@@ -390,7 +405,7 @@ const StudentTable = () => {
               isActionBtn={true}
               onView={handleView}
               onEdit={handleEdit}
-              onDelete={(item) => {}}
+              onDelete={canDeleteStudents ? handleDeleteRequest : undefined}
               onEmail={(item) => {}}
               onLogin={(item) => LoginAsstudent(item)}
               photo="user_profile_photo"
@@ -400,6 +415,12 @@ const StudentTable = () => {
           )}
         </>
       )}
+
+      <DeleteStudentDialog
+        student={studentToDelete}
+        onClose={() => setStudentToDelete(null)}
+        onDeleted={() => fetchTrainingBatchesWithDates()}
+      />
     </div>
   );
 };

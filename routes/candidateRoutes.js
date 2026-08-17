@@ -1,8 +1,14 @@
 const express = require("express");
 const router = express.Router();
 const candidateController = require("../controllers/candidateController");
+const candidateEnrollmentController = require("../controllers/candidateEnrollmentController");
 const { body } = require("express-validator");
-const { isAdminAuthenticated } = require("../middleware/authMiddleware");
+const {
+  isAdminAuthenticated,
+  requireRoles,
+  ROLES,
+  ADMIN_ROLES,
+} = require("../middleware/authMiddleware");
 const upload = require("../middleware/uploadCandidates");
 const {
   checkCandidateByCnic,
@@ -41,6 +47,29 @@ router.put(
 // Suspend candidate
 router.put("/suspend/:candidateId", candidateController.suspendCandidate);
 router.get("/selected/:tb_id", isAdminAuthenticated, getAllSelectedCandidates);
+
+// --- Enrollment (recommended candidates only) -------------------------------
+router.get(
+  "/enrollment-preview/:cand_id",
+  isAdminAuthenticated,
+  requireRoles(ADMIN_ROLES),
+  candidateEnrollmentController.getEnrollmentPreview
+);
+
+router.post(
+  "/enroll/:cand_id",
+  isAdminAuthenticated,
+  requireRoles(ADMIN_ROLES),
+  candidateEnrollmentController.enrollCandidate
+);
+
+// --- Center / domain change (SuperAdmin only, pre-enrollment) ----------------
+router.patch(
+  "/change-center-course/:cand_id",
+  isAdminAuthenticated,
+  requireRoles(ROLES.SUPER_ADMIN),
+  candidateController.changeCandidateCenterOrCourse
+);
 // // Get candidate by ID
 // router.get("/:id", auth, candidateController.getCandidateById);
 

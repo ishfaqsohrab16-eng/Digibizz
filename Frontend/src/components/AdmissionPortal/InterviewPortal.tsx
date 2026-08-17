@@ -1,4 +1,4 @@
-import { useEffect, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import { cn } from "../../lib/utils";
 import {
   User,
@@ -32,6 +32,8 @@ interface FormData {
   isRecommended: boolean;
   courseTrack: string;
   centerPriority: string;
+  /** null = interviewer has not answered yet. */
+  isUobStudent: boolean | null;
   interview_date: string;
   cand_admission_status: number;
   course_second_priority: number;
@@ -114,6 +116,22 @@ const InterviewPortal = () => {
   const [academicInfo, setAcademicInfo] =
     useState<AcademicInfo>(initialAcademicInfo);
   const [hasData, setHasData] = useState(false);
+
+  /**
+   * The University of Balochistan question is only asked at the UoB center.
+   *
+   * Matched on "uob" or "university of balochistan". Note that BUITEMS's full
+   * name is "Balochistan University of Information Technology..." - it
+   * contains "balochistan university" but never "university of balochistan",
+   * so it is correctly excluded.
+   */
+  const isUobCenter = useMemo(() => {
+    const name = String(
+      admissionInfo?.centerName || admissionInfo?.center || ""
+    ).toLowerCase();
+    if (!name) return false;
+    return /\buob\b/.test(name) || name.includes("university of balochistan");
+  }, [admissionInfo]);
   const [formData, setFormData] = useState<FormData>({
     cand_interview_marks: "",
     basicSkills: "",
@@ -124,6 +142,7 @@ const InterviewPortal = () => {
     isRecommended: true, // default to true (Yes)
     courseTrack: "",
     centerPriority: "",
+    isUobStudent: null,
     interview_date: "",
     cand_admission_status: 0,
     course_second_priority: 0,
@@ -221,6 +240,12 @@ const InterviewPortal = () => {
         isRecommended: data.recommended === undefined || data.recommended === null || data.recommended === "" ? true : data.recommended === "Yes",
         courseTrack: data.course_second_priority?.toString() || "",
         centerPriority: data.center_second_priority?.toString() || "",
+        // null/undefined means the interviewer has not been asked yet, which
+        // must stay distinct from an explicit "No".
+        isUobStudent:
+          data.is_uob_student === null || data.is_uob_student === undefined
+            ? null
+            : Boolean(data.is_uob_student),
         interview_date: data.interview_date || "",
         cand_admission_status: status,
         course_second_priority: data.course_second_priority || 0,
@@ -922,34 +947,58 @@ const InterviewPortal = () => {
                     ))}
                   </select>
                 </div>
+                {/* University of Balochistan verification.
+                    Only shown for candidates who applied to the UoB center.
+                    Asked by the interviewer and stored independently of the
+                    institute the applicant selected at registration, so master
+                    trainers and admins can see the verified answer. */}
+                {isUobCenter && (
                 <div className="space-y-2">
                   <label className="block text-sm font-medium text-[hsl(var(--foreground))] flex items-center gap-2">
                     <School className="w-4 h-4" />
-                    Center (2nd Priority)
+                    Is this a University of Balochistan student?
                   </label>
-                  <select
-                    className={cn(
-                      "w-full px-3 py-2 border border-[hsl(var(--border))] rounded-md focus:outline-none focus:ring-2 focus:ring-[hsl(var(--primary))] bg-[hsl(var(--card))] text-[hsl(var(--foreground))]",
-                      hideButtons &&
-                        "bg-[hsl(var(--muted))] opacity-75 cursor-not-allowed"
-                    )}
-                    value={formData.centerPriority}
-                    onChange={(e) =>
-                      updateFormData("centerPriority", e.target.value)
-                    }
-                    disabled={hideButtons}
-                  >
-                    <option value="">Please Select</option>
-                    {center.map((centerItem) => (
-                      <option
-                        key={centerItem.center_id}
-                        value={centerItem.center_id}
-                      >
-                        {centerItem.center_name}
-                      </option>
-                    ))}
-                  </select>
+                  <div className="flex items-center gap-3 rounded-md border border-[hsl(var(--border))] bg-[hsl(var(--card))] px-3 py-2.5">
+                    <button
+                      type="button"
+                      role="switch"
+                      aria-checked={formData.isUobStudent === true}
+                      disabled={hideButtons}
+                      onClick={() =>
+                        updateFormData("isUobStudent", !(formData.isUobStudent === true))
+                      }
+                      className={cn(
+                        "relative inline-flex h-6 w-11 shrink-0 items-center rounded-full transition-colors",
+                        formData.isUobStudent === true
+                          ? "bg-[hsl(var(--primary))]"
+                          : "bg-[hsl(var(--muted))]",
+                        hideButtons && "opacity-75 cursor-not-allowed"
+                      )}
+                    >
+                      <span
+                        className={cn(
+                          "inline-block h-4 w-4 transform rounded-full bg-white shadow transition-transform",
+                          formData.isUobStudent === true
+                            ? "translate-x-6"
+                            : "translate-x-1"
+                        )}
+                      />
+                    </button>
+                    <span className="text-sm font-medium text-[hsl(var(--foreground))]">
+                      {formData.isUobStudent === true
+                        ? "Yes — University of Balochistan"
+                        : formData.isUobStudent === false
+                        ? "No"
+                        : "Not asked yet"}
+                    </span>
+                  </div>
+                  {academicInfo?.institute && (
+                    <p className="text-[11px] text-[hsl(var(--muted-foreground))]">
+                      Declared at registration: {academicInfo.institute}
+                    </p>
+                  )}
                 </div>
+                )}
               </div>
               {!hideButtons ? (
                 <button

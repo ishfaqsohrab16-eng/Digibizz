@@ -100,6 +100,24 @@ export default function EarningsForm({
   const handleSubmit = async (e: React.FormEvent<HTMLFormElement>) => {
     e.preventDefault();
 
+    // The platform Select has no native `required`, so without these checks an
+    // empty value was posted and the server rejected it with a validation
+    // error the user never saw.
+    if (!form.earning_platform?.trim()) {
+      toast.error("Please select an earning platform");
+      return;
+    }
+
+    if (!form.earning_amount || Number(form.earning_amount) <= 0) {
+      toast.error("Please enter an earning amount greater than zero");
+      return;
+    }
+
+    if (!form.earning_date?.trim()) {
+      toast.error("Please select an earning date");
+      return;
+    }
+
     if (!file) {
       toast.error("Please upload an earning proof file");
       return;

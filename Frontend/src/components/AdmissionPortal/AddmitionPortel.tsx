@@ -24,6 +24,9 @@ import { CourseSummary } from "./CourseSummary";
 import { CenterSummary } from "./CenterSummary";
 import { DivisionsSummary } from "./DivisionsSummary";
 import AddmitionSummary from "./AddmitionSummary";
+import CenterDomainChange from "./CenterDomainChange";
+import EnrollCandidateDialog from "./EnrollCandidateDialog";
+import { isAdmin } from "../../utils/roles";
 
 interface AdmissionPortalProps {
   tb_id: number;
@@ -156,13 +159,18 @@ function AdmissionPortal() {
     candidates: [],
   });
 
-  const { selectedBatchId } = useBatch();
+  const { selectedBatchId, userType } = useBatch();
   const { selectedBatchName } = useBatch();
   const [activeTab, setActiveTab] = useState("applicationsSummary");
   const [isSubmenuOpen, setIsSubmenuOpen] = useState<string | null>(null);
   const [filterStatus, setFilterStatus] = useState<FilterStatus>("all");
   const [columns, setColumns] = useState<Column[]>(DEFAULT_COLUMNS);
   const [filterBy, setFilterBy] = useState<FilterBy[]>(DEFAULT_FILTER_BY);
+  const [candidateToEnroll, setCandidateToEnroll] = useState<number | null>(null);
+
+  // Enrolling creates a real student and LMS account, so it is limited to the
+  // admin-style roles. The server enforces the same list.
+  const canEnroll = isAdmin(userType);
 
   const toggleSubmenu = (menu: string) => {
     setIsSubmenuOpen(isSubmenuOpen === menu ? null : menu);
@@ -458,9 +466,29 @@ function AdmissionPortal() {
             onDelete={() => {}}
             photo="cand_photo"
             filterBy={filterBy}
+            // Recommended candidates get an Enroll action. The row-level guard
+            // keeps the button off anyone who was not recommended, and the
+            // server refuses them regardless.
+            rowAction={
+              canEnroll
+                ? {
+                    label: "Enroll",
+                    isEnabled: (row: any) => row?.recommended === "Yes",
+                    onClick: (row: any) => setCandidateToEnroll(row.cand_id),
+                  }
+                : undefined
+            }
           />
         )}
+        {/* This tab had a button but no render branch, so it showed a blank page. */}
+        {activeTab === "centerDomainChange" && <CenterDomainChange />}
         {activeTab === "interviewPanel" && <InterviewPortal />}
+
+        <EnrollCandidateDialog
+          candId={candidateToEnroll}
+          onClose={() => setCandidateToEnroll(null)}
+          onEnrolled={() => fetchCandidateProfile()}
+        />
       </main>
     </div>
   );

@@ -40,6 +40,31 @@ exports.createEarning = async (req, res) => {
       earning_amount,
       earning_date,
     } = req.body;
+
+    // Validate before touching the database. Without this an empty platform
+    // (the form's Select had no required rule) reached Sequelize and threw
+    // SequelizeValidationError, which surfaced as a 500 and a stack trace in
+    // the logs instead of telling the user which field was missing.
+    const missing = [];
+    if (!String(earning_platform || "").trim()) missing.push("earning platform");
+    if (earning_amount === undefined || earning_amount === null || String(earning_amount).trim() === "")
+      missing.push("earning amount");
+    if (!String(earning_date || "").trim()) missing.push("earning date");
+
+    if (missing.length > 0) {
+      return res.status(400).json({
+        success: false,
+        message: `Please provide: ${missing.join(", ")}`,
+        fields: missing,
+      });
+    }
+
+    if (Number.isNaN(Number(earning_amount)) || Number(earning_amount) < 0) {
+      return res
+        .status(400)
+        .json({ success: false, message: "Earning amount must be a positive number" });
+    }
+
     // Check if user exists
     const user = await User.findByPk(user_id, {
       attributes: ["user_name", "user_email", "user_type"],
@@ -119,6 +144,22 @@ exports.createEarning = async (req, res) => {
         console.error("Error deleting file:", unlinkError);
       }
     }
+    // A validation failure is bad input, not a server fault. Returning 500 for
+    // it produced pages of Sequelize stack traces in the logs and told the
+    // user nothing about what to fix.
+    if (error.name === "SequelizeValidationError") {
+      const fields = (error.errors || []).map((item) => item.path);
+      console.warn(
+        "Earning rejected - invalid input on:",
+        [...new Set(fields)].join(", ") || "unknown field"
+      );
+      return res.status(400).json({
+        success: false,
+        message: "Some earning details are invalid or missing",
+        fields: [...new Set(fields)],
+      });
+    }
+
     console.error("Error creating earning:", error);
     res
       .status(500)

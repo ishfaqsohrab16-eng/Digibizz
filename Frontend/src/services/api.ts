@@ -2787,6 +2787,114 @@ export const updateAssignmentSubmission = async (
   }
 };
 
+export interface EnrollmentPreview {
+  success: boolean;
+  candidate: {
+    cand_id: number;
+    name: string;
+    father_name: string;
+    cnic: string;
+    email: string;
+    phone: string;
+    gender: string;
+    qualification: string;
+    district: string;
+    recommended: string;
+    admission_status: number;
+    is_uob_student: boolean | null;
+  };
+  enrollment: {
+    center_id: number;
+    center_name: string;
+    course_id: number;
+    course_name: string;
+    tb_id: number;
+    batch_name: string;
+  };
+  alreadyEnrolled: { std_id: number; std_rollno: string } | null;
+  eligible: boolean;
+}
+
+/** Details for the confirmation popup shown before enrolling a candidate. */
+export const getEnrollmentPreview = async (
+  candId: number
+): Promise<EnrollmentPreview> => {
+  try {
+    const response = await axios.get(
+      `${API_URL}/candidateRoutes/enrollment-preview/${candId}`,
+      {
+        headers: { Authorization: `Bearer ${getCurrentUserToken()}` },
+      }
+    );
+    return response.data;
+  } catch (error) {
+    if (axios.isAxiosError(error)) handleApiError(error);
+    throw error;
+  }
+};
+
+/** Enrol a recommended candidate as a student. */
+export const enrollCandidate = async (
+  candId: number,
+  overrides?: { center_id?: number; course_id?: number; tb_id?: number; std_rollno?: string }
+) => {
+  try {
+    const response = await axios.post(
+      `${API_URL}/candidateRoutes/enroll/${candId}`,
+      overrides || {},
+      {
+        headers: {
+          Authorization: `Bearer ${getCurrentUserToken()}`,
+          "Content-Type": "application/json",
+        },
+      }
+    );
+    return response.data;
+  } catch (error) {
+    if (axios.isAxiosError(error)) handleApiError(error);
+    throw error;
+  }
+};
+
+/** Move a candidate to a different center and/or course. SuperAdmin only. */
+export const changeCandidateCenterCourse = async (
+  candId: number,
+  payload: { center_id?: number; course_id?: number; reason?: string }
+) => {
+  try {
+    const response = await axios.patch(
+      `${API_URL}/candidateRoutes/change-center-course/${candId}`,
+      payload,
+      {
+        headers: {
+          Authorization: `Bearer ${getCurrentUserToken()}`,
+          "Content-Type": "application/json",
+        },
+      }
+    );
+    return response.data;
+  } catch (error) {
+    if (axios.isAxiosError(error)) handleApiError(error);
+    throw error;
+  }
+};
+
+/**
+ * Permanently delete a student and every record linked to them.
+ * Irreversible. SuperAdmin only - the server enforces this too.
+ */
+export const purgeStudent = async (stdId: number) => {
+  try {
+    const response = await axios.delete(`${API_URL}/student/${stdId}/purge`, {
+      headers: { Authorization: `Bearer ${getCurrentUserToken()}` },
+    });
+    return response.data;
+  } catch (error) {
+    if (axios.isAxiosError(error)) handleApiError(error);
+    throw error;
+  }
+};
+
 export const updateCandidateInterviewData = async (
   candidateId: number,
   data: {
@@ -2799,6 +2907,8 @@ export const updateCandidateInterviewData = async (
     isRecommended: boolean;
     courseTrack: string;
     centerPriority: string;
+    /** null when the interviewer was not asked (non-UoB centers). */
+    isUobStudent?: boolean | null;
   }
 ) => {
   try {
@@ -2813,7 +2923,7 @@ export const updateCandidateInterviewData = async (
         hasLaptop: data.hasLaptop,
         isRecommended: data.isRecommended,
         courseTrack: data.courseTrack,
-        centerPriority: data.centerPriority,
+        isUobStudent: data.isUobStudent ?? null,
       },
       {
         headers: {

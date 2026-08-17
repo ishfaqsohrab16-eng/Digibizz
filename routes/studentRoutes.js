@@ -4,7 +4,12 @@ const studentController = require("../controllers/studentController");
 const {
   validateStudentRegistration,
 } = require("../middleware/studentValidation");
-const { isAdminAuthenticated } = require("../middleware/authMiddleware");
+const {
+  isAdminAuthenticated,
+  requireRoles,
+  ROLES,
+} = require("../middleware/authMiddleware");
+const studentPurgeController = require("../controllers/studentPurgeController");
 // Register Student
 const upload = require("../middleware/uploadConfig");
 // Register Trainer
@@ -64,4 +69,14 @@ router.post(
   // Optionally add authentication middleware here
   studentController.sendStudentMail
 );
+
+// Permanently delete a student and every record linked to them.
+// Irreversible, SuperAdmin only.
+router.delete(
+  "/:std_id/purge",
+  isAdminAuthenticated,
+  requireRoles(ROLES.SUPER_ADMIN),
+  studentPurgeController.purgeStudent
+);
+
 module.exports = router;

@@ -957,21 +957,30 @@ exports.updateInterviewData = async (req, res) => {
       hasLaptop,
       isRecommended,
       courseTrack,
-      centerPriority,
+      isUobStudent,
     } = req.body;
 
-    const [updatedRowsCount] = await Candidate.update(
-      {
-        cand_interview_marks,
-        laptop_pc: hasLaptop ? "Yes" : "No", // Store as string 'Yes' or 'No'
-        recommended: isRecommended ? "Yes" : "No", // Store as string 'Yes' or 'No'
-        course_second_priority: courseTrack || null,
-        center_second_priority: centerPriority || null,
-        interview_date: new Date().toISOString().split("T")[0], // Format as YYYY-MM-DD string
-        cand_admission_status: isRecommended ? 1 : 0, // 1 for passed/recommended
-      },
-      { where: { cand_id: candidateId } }
-    );
+    const updateFields = {
+      cand_interview_marks,
+      laptop_pc: hasLaptop ? "Yes" : "No", // Store as string 'Yes' or 'No'
+      recommended: isRecommended ? "Yes" : "No", // Store as string 'Yes' or 'No'
+      course_second_priority: courseTrack || null,
+      interview_date: new Date().toISOString().split("T")[0], // Format as YYYY-MM-DD string
+      cand_admission_status: isRecommended ? 1 : 0, // 1 for passed/recommended
+    };
+
+    // Center (2nd priority) was removed from the interview form, so it is no
+    // longer written here - existing values on old records are left as-is.
+
+    // Only write the UoB flag when the interviewer actually answered, so
+    // "never asked" (NULL) stays distinguishable from an explicit "No".
+    if (isUobStudent === true || isUobStudent === false) {
+      updateFields.is_uob_student = isUobStudent;
+    }
+
+    const [updatedRowsCount] = await Candidate.update(updateFields, {
+      where: { cand_id: candidateId },
+    });
 
     if (updatedRowsCount === 0) {
       return res.status(404).json({ message: "Candidate not found" });
@@ -984,6 +993,102 @@ exports.updateInterviewData = async (req, res) => {
   } catch (error) {
     console.error("Interview data update error:", error);
     res.status(500).json({ message: "Server error updating interview data" });
+  }
+};
+
+/**
+ * Change a candidate's center and/or course before they are enrolled.
+ *
+ * Restricted to candidates on purpose: once a student is enrolled their
+ * attendance rows are tied to the old center/course, so moving them would
+ * leave historical percentages pointing at the wrong class.
+ *
+ * SuperAdmin only - enforced on the route.
+ */
+exports.changeCandidateCenterOrCourse = async (req, res) => {
+  try {
+    const { cand_id } = req.params;
+    const { center_id, course_id, reason } = req.body;
+
+    if (!center_id && !course_id) {
+      return res
+        .status(400)
+        .json({ success: false, message: "Provide a new center and/or course" });
+    }
+
+    const candidate = await Candidate.findByPk(cand_id);
+    if (!candidate) {
+      return res.status(404).json({ success: false, message: "Candidate not found" });
+    }
+
+    // Refuse once the candidate has become a student - use the student record
+    // instead, so attendance history stays consistent.
+    const enrolled = await Student.findOne({
+      where: { std_cnic: candidate.cand_cnic, tb_id: candidate.tb_id },
+      attributes: ["std_id", "std_rollno"],
+      raw: true,
+    });
+
+    if (enrolled) {
+      return res.status(409).json({
+        success: false,
+        message: `This candidate is already enrolled as ${enrolled.std_rollno}. Enrolled students cannot be moved from here.`,
+      });
+    }
+
+    const previous = {
+      center_id: candidate.center_id,
+      course_id: candidate.course_id,
+    };
+
+    const updates = {};
+    if (center_id) updates.center_id = center_id;
+    if (course_id) updates.course_id = course_id;
+
+    // The target center/course must actually be open for this batch and gender.
+    const check = await validateAdmissionAvailability({
+      tb_id: candidate.tb_id,
+      center_id: updates.center_id ?? candidate.center_id,
+      course_id: updates.course_id ?? candidate.course_id,
+      gender: candidate.cand_gender,
+    });
+
+    if (!check.allowed) {
+      return res.status(400).json({ success: false, message: check.message });
+    }
+
+    await candidate.update(updates);
+
+    const [newCenter, newCourse] = await Promise.all([
+      Center.findByPk(candidate.center_id, { attributes: ["center_name"] }),
+      Course.findByPk(candidate.course_id, {
+        attributes: ["course_name", "course_full_name"],
+      }),
+    ]);
+
+    console.log(
+      `[candidate-change] cand ${cand_id}: center ${previous.center_id} -> ${candidate.center_id}, course ${previous.course_id} -> ${candidate.course_id} by user ${req.user.id} (${req.user.username})${reason ? ` reason: ${reason}` : ""}`
+    );
+
+    return res.json({
+      success: true,
+      message: "Candidate center/course updated",
+      candidate: {
+        cand_id: candidate.cand_id,
+        cand_name: candidate.cand_name,
+        cand_cnic: candidate.cand_cnic,
+        center_id: candidate.center_id,
+        course_id: candidate.course_id,
+        center_name: newCenter?.center_name || "",
+        course_name: newCourse?.course_full_name || newCourse?.course_name || "",
+      },
+      previous,
+    });
+  } catch (error) {
+    console.error("Candidate center/course change error:", error);
+    return res
+      .status(500)
+      .json({ success: false, message: "Server error updating candidate" });
   }
 };
 

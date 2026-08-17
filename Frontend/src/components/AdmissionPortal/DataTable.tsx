@@ -67,6 +67,17 @@ interface DataTableProps {
   logInAsSubUser?: string;
   currentPage?: number;
   setCurrentPage?: (page: number) => void;
+  /**
+   * Optional extra action rendered as its own column, e.g. "Enroll" for
+   * recommended candidates. `isEnabled` decides per row whether the button is
+   * clickable; rows that fail it show a disabled button rather than nothing,
+   * so the column stays aligned.
+   */
+  rowAction?: {
+    label: string;
+    onClick: (row: any) => void;
+    isEnabled?: (row: any) => boolean;
+  };
 }
 
 export function DataTable({
@@ -93,6 +104,7 @@ export function DataTable({
   isLink = false,
   linkColumn,
   logInAsSubUser,
+  rowAction,
   currentPage: propCurrentPage,
   setCurrentPage: propSetCurrentPage,
 }: DataTableProps) {
@@ -354,6 +366,12 @@ export function DataTable({
               <TableHead className="w-[60px] px-4 py-3 font-semibold whitespace-nowrap text-[hsl(var(--foreground))]">
                 #
               </TableHead>
+              {/* Order must match the body cells below. */}
+              {rowAction && (
+                <TableHead className="w-[120px] px-4 py-3 font-semibold whitespace-nowrap text-[hsl(var(--foreground))]">
+                  {rowAction.label}
+                </TableHead>
+              )}
               {isActionBtn && (
                 <TableHead className="w-[120px] px-4 py-3 font-semibold whitespace-nowrap text-[hsl(var(--foreground))]">
                   Actions
@@ -398,7 +416,7 @@ export function DataTable({
                     columns.filter((col) => col.visible).length +
                     (isActionBtn ? 2 : 1) +
                     (isProofBtn ? 1 : 0) +
-                    (isEarningStatusBtn ? 1 : 0)
+                    (isEarningStatusBtn ? 1 : 0) +  (rowAction ? 1 : 0)
                   }
                   className="h-60 text-center"
                 >
@@ -419,6 +437,25 @@ export function DataTable({
                   <TableCell className="w-[60px] px-4 py-3 whitespace-nowrap">
                     {index + 1}
                   </TableCell>
+                  {rowAction && (
+                    <TableCell className="w-[120px] px-4 py-3">
+                      <Button
+                        size="sm"
+                        disabled={
+                          rowAction.isEnabled ? !rowAction.isEnabled(row) : false
+                        }
+                        onClick={() => rowAction.onClick(row)}
+                        className="h-8 bg-emerald-600 px-3 text-xs font-semibold text-white hover:bg-emerald-700 disabled:cursor-not-allowed disabled:opacity-40"
+                        title={
+                          rowAction.isEnabled && !rowAction.isEnabled(row)
+                            ? "Only recommended candidates can be enrolled"
+                            : rowAction.label
+                        }
+                      >
+                        {rowAction.label}
+                      </Button>
+                    </TableCell>
+                  )}
                   {isActionBtn && (
                     <TableCell className="w-[120px] px-4 py-3">
                       <div className="flex items-center gap-2">
@@ -618,7 +655,7 @@ export function DataTable({
                     columns.filter((col) => col.visible).length +
                     (isActionBtn ? 2 : 1) +
                     (isProofBtn ? 1 : 0) +
-                    (isEarningStatusBtn ? 1 : 0)
+                    (isEarningStatusBtn ? 1 : 0) +  (rowAction ? 1 : 0)
                   }
                   className="h-40 text-center"
                 >
