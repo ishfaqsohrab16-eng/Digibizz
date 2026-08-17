@@ -13,6 +13,11 @@ import {
 import { NavItem } from "../NavItem";
 import { SubNavItem } from "../SubNavItem";
 import { useBatch } from "../../../context/BatchContext";
+import {
+  canMarkAttendance,
+  canViewAttendance,
+  isStudent,
+} from "../../../utils/roles";
 
 interface ClassroomNavProps {
   openForm: (formName: string) => void;
@@ -44,7 +49,22 @@ export const ClassroomNav = ({
 
   return (
     <>
-      {userType !== "Student" && userType !== "Center Manager" && (
+      {/* Students get their own read-only view; everyone else sees the staff
+          screens. The old guard compared against "Student" with a capital S
+          while the database stores "student", so it never matched and students
+          could reach Take Attendance. */}
+      {isStudent(userType) && (
+        <div className="relative">
+          <NavItem
+            icon={<FontAwesomeIcon icon={faCalendarDays} />}
+            label="My Attendance"
+            onClick={() => openForm("MyAttendance")}
+            href={createNavUrl("/dashboard/MyAttendance")}
+          />
+        </div>
+      )}
+
+      {canViewAttendance(userType) && (
         <div className="relative">
           <NavItem
             icon={<FontAwesomeIcon icon={faCalendarDays} />}
@@ -55,17 +75,25 @@ export const ClassroomNav = ({
           />
           {isAttendanceSubmenuOpen && (
             <div className="mt-1 space-y-1 flex flex-col">
+              {canMarkAttendance(userType) && (
+                <SubNavItem
+                  label="Take Attendance"
+                  isParentOpen={isAttendanceSubmenuOpen}
+                  onClick={() => openForm("TakeAttendance")}
+                  href={createNavUrl("/dashboard/TakeAttendance")}
+                />
+              )}
               <SubNavItem
-                label="Take Attendance"
-                isParentOpen={isAttendanceSubmenuOpen}
-                onClick={() => openForm("TakeAttendance")}
-                href={createNavUrl("/dashboard/TakeAttendance")}
-              />
-              <SubNavItem
-                label="AttendanceHistory"
+                label="Attendance History"
                 isParentOpen={isAttendanceSubmenuOpen}
                 onClick={() => openForm("AttendanceHistory")}
                 href={createNavUrl("/dashboard/AttendanceHistory")}
+              />
+              <SubNavItem
+                label="Student Attendance Calendar"
+                isParentOpen={isAttendanceSubmenuOpen}
+                onClick={() => openForm("StudentAttendanceCalendar")}
+                href={createNavUrl("/dashboard/StudentAttendanceCalendar")}
               />
             </div>
           )}
@@ -268,7 +296,7 @@ export const ClassroomNav = ({
         />
         {isStudentsSubmenuOpen && (
           <div className="mt-1 space-y-1 flex flex-col">
-            {userType !== "Student" && (
+            {!isStudent(userType) && (
               <>
                 <SubNavItem
                   label="Enrolled Students"

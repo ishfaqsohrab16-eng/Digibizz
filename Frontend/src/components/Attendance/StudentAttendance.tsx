@@ -283,11 +283,14 @@ const StudentAttendance = () => {
         (acc: Record<string, { attend_status: string }>, student: any) => ({
           ...acc,
           [student.user_id]: {
+            // A student who hasn't activated their LMS login yet is still
+            // sitting in class - defaulting them to "A" silently marked real
+            // attendees absent. Leave them unset so the trainer decides.
             attend_status:
-              (student.has_leave_today === true || student.has_leave_today === 1) && student.leave_date === todaysDate
+              (student.has_leave_today === true ||
+                (student.has_leave_today as unknown as number) === 1) &&
+              student.leave_date === todaysDate
                 ? "L"
-                : student.std_lms_status !== 1
-                ? "A"
                 : student.attend_status || "Not Set",
           },
         }),
@@ -320,6 +323,30 @@ const StudentAttendance = () => {
     }
   }, [userId]);
 
+  // Re-fetch whenever the selected date changes. Without this the grid kept
+  // showing the previously loaded day until "Fetch" was pressed, so it was
+  // possible to review one day's marks and save them against another date.
+  useEffect(() => {
+    if (user_id > 0) {
+      fetchStudent();
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [date]);
+
+  /**
+   * True only when the student's approved leave falls on the date currently
+   * selected in the picker. The API's `has_leave_today` flag is hardcoded to
+   * CURDATE(), so it is meaningless on any other date and must always be
+   * paired with this check.
+   */
+  const hasLeaveOnSelectedDate = (student?: StudentAttendanceProps) => {
+    if (!student) return false;
+    const hasLeave =
+      student.has_leave_today === true ||
+      (student.has_leave_today as unknown as number) === 1;
+    return hasLeave && student.leave_date === format(date, "yyyy-MM-dd");
+  };
+
   const getStatusColor = (status: string) => {
     switch (status) {
       case "P":
@@ -334,14 +361,16 @@ const StudentAttendance = () => {
   };
 
   const handleAttendanceChange = (studentId: number, status: string) => {
-    // Find the student to check if they have leave today
-    const student = students.find(s => s.user_id === studentId);
-    
-    // If student has leave today, don't allow changing from "L" status
-    if (student?.has_leave_today && status !== "L") {
+    // Find the student to check if they have leave on the SELECTED date
+    const student = students.find((s) => s.user_id === studentId);
+
+    // has_leave_today is computed server-side for today only, so it must be
+    // paired with a date check. Without it, marking a past date was blocked
+    // for anyone who happened to be on leave today.
+    if (hasLeaveOnSelectedDate(student) && status !== "L") {
       return; // Prevent changing attendance for students with approved leave
     }
-    
+
     setAttendance((prev) => ({
       ...prev,
       [studentId]: { attend_status: status === "Not Set" ? "A" : status },
@@ -459,11 +488,11 @@ const StudentAttendance = () => {
 
   // Helper to get status for a student (by cnic) from attendanceCnicMap if attendance is marked
   const getStudentAttendanceStatus = (student: StudentAttendanceProps) => {
-    // If student has leave today, always return "L"
-    if (student.has_leave_today) {
+    // Only force "L" when the approved leave is for the selected date.
+    if (hasLeaveOnSelectedDate(student)) {
       return "L";
     }
-    
+
     if (
       attendanceExist &&
       student.student_cnic &&

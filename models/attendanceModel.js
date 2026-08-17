@@ -22,7 +22,11 @@ const AttendanceModel = sequelize.define(
       allowNull: false,
       defaultValue: "A",
       validate: {
-        isIn: [["P", "A", "L"]], // Present, Absent, Late
+        // P = Present, A = Absent, L = Leave (approved leave).
+        // The comment used to say "Late", which is why one endpoint reported
+        // this column as `late_count` while everything else treated it as
+        // leave. It is leave.
+        isIn: [["P", "A", "L"]],
       },
     },
     center_id: {

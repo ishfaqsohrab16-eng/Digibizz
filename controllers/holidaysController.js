@@ -1,3 +1,4 @@
+const { Op } = require("sequelize");
 const HolidaysModel = require("../models/holidaysModel");
 const TrainingBatch = require("../models/trainingBatcheModel");
 const Center = require("../models/center");
@@ -17,8 +18,18 @@ exports.getAllHolidays = async (req, res) => {
 exports.getHolidayByTBId = async (req, res) => {
   try {
     const { tb_id } = req.params;
+    const { center_id } = req.query;
+
+    // This used to be a hardcoded `center_id: 6` that ignored tb_id entirely,
+    // so every center was served center 6's holidays.
+    const where = { tb_id };
+    if (center_id && String(center_id) !== "0") {
+      // Global holidays (center_id NULL) apply everywhere, plus this center's.
+      where[Op.or] = [{ center_id: null }, { center_id }];
+    }
+
     const holiday = await HolidaysModel.findAll({
-      where: { center_id: 6 },
+      where,
       include: [
         { model: TrainingBatch, as: "training_batches" },
         { model: Center, as: "centers" },
@@ -37,9 +48,12 @@ exports.getHolidayByTBId = async (req, res) => {
 // Create a new holiday
 exports.createHoliday = async (req, res) => {
   try {
-    const { h_date, h_reason, tb_id, center_id } = req.body;
-    if (center_id === "null") {
-      center_id = null;
+    const { h_date, h_reason, tb_id } = req.body;
+    // `center_id` was destructured as a const and then reassigned, which threw
+    // "Assignment to constant variable" every time a global holiday was added.
+    let { center_id } = req.body;
+    if (center_id === "null" || center_id === "" || center_id === undefined) {
+      center_id = null; // null => holiday applies to every center
     }
     const newHoliday = await HolidaysModel.create({
       h_date,

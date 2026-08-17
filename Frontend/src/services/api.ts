@@ -1149,6 +1149,62 @@ export const getAttendanceHistory = async ({
     throw error;
   }
 };
+
+export interface AttendanceCalendarDay {
+  date: string;
+  /** null means the class ran but this student was never marked. */
+  status: "P" | "A" | "L" | null;
+}
+
+export interface AttendanceCalendarResponse {
+  student: {
+    std_cnic: string;
+    std_rollno: string;
+    center_id: number;
+    course_id: number;
+    tb_id: number;
+    center_name: string;
+    course_name: string;
+    enrolled_on: string | null;
+  };
+  firstMarkedDate: string | null;
+  daysCounted: number;
+  present: number;
+  absent: number;
+  leave: number;
+  unmarkedDays: number;
+  classDaysSinceFirstMark: number;
+  percentage: number;
+  days: AttendanceCalendarDay[];
+}
+
+/**
+ * Day-by-day attendance for one student.
+ *
+ * Students may omit std_cnic - the server always resolves them to their own
+ * record and ignores any CNIC they send. Staff pass the student's CNIC.
+ */
+export const getStudentAttendanceCalendar = async (params?: {
+  std_cnic?: string;
+  tb_id?: number;
+}): Promise<AttendanceCalendarResponse> => {
+  try {
+    const response = await axios.get(`${API_URL}/attendance/student-calendar`, {
+      headers: {
+        Authorization: `Bearer ${getCurrentUserToken()}`,
+        "Content-Type": "application/json",
+      },
+      params,
+    });
+    return response.data;
+  } catch (error) {
+    if (axios.isAxiosError(error)) {
+      handleApiError(error);
+    }
+    throw error;
+  }
+};
+
 export const getStudentAttendance = async (
   attendDate: string,
   centerId: number,

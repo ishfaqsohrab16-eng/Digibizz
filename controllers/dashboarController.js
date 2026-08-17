@@ -26,6 +26,7 @@ const Holiday = require("../models/holidaysModel");
 const ExamAssignment = require("../models/examAssessmentModel");
 const CenterUsers = require("../models/centerUsersModel");
 const profileController = require("./profileController");
+const { getStudentAttendanceStats } = require("../utils/attendanceCalculator");
 const { getAppSettings } = require("../utils/appSettings");
 
 exports.getStudentDashoard = async (req, res) => {
@@ -179,128 +180,22 @@ exports.getStudentDashoard = async (req, res) => {
       },
     });
 
-    // Get center dates for attendance calculation
-    const centerDates = await CenterDates.findOne({
-      where: {
-        center_id: center_id,
-        tb_id: tb_id,
-      },
-      attributes: ["tb_start", "tb_end"],
-      raw: true,
-    });
-
-    // Calculate attendance progress (OPTIMIZED - matches studentController logic)
+    // Attendance progress. Uses the shared calculator so the dashboard, the
+    // attendance summary and the student's own page can never disagree.
+    // Counting starts at the student's FIRST marked attendance for this class,
+    // approved leave counts as present, and days the class ran without a mark
+    // for this student are skipped rather than counted against them.
     let attendanceProgress = 0;
-    
+    let attendanceDetail = null;
+
     try {
-      // Normalize date function for consistent comparison
-      const normalizeDate = (date) => {
-        const d = new Date(date);
-        d.setHours(0, 0, 0, 0);
-        return d;
-      };
-
-      // Determine start date: use student's admission date if available, otherwise use center start date
-      let startDate = null;
-      if (studentProfile.std_added_on) {
-        startDate = normalizeDate(new Date(studentProfile.std_added_on));
-      } else if (centerDates?.tb_start) {
-        startDate = normalizeDate(new Date(centerDates.tb_start));
-      }
-
-      // Determine end date: use center end date
-      let endDate = null;
-      if (centerDates?.tb_end) {
-        endDate = normalizeDate(new Date(centerDates.tb_end));
-      }
-
-      if (startDate && endDate) {
-        const currentDate = normalizeDate(new Date());
-
-        // Fetch attendance records
-        const attendanceRecords = await Attendance.findAll({
-          where: {
-            std_cnic: studentProfile.std_cnic,
-            tb_id: tb_id,
-            center_id: center_id,
-            course_id: course_id,
-          },
-          attributes: ["attend_status", "attend_date"],
-          raw: true,
-        });
-
-        // Create a map of attendance records by date for quick lookup
-        const attendanceMap = new Map();
-        attendanceRecords.forEach((record) => {
-          const dateStr = normalizeDate(new Date(record.attend_date)).toISOString().split("T")[0];
-          attendanceMap.set(dateStr, record.attend_status.toUpperCase());
-        });
-
-        // Fetch holidays (include both global holidays and center-specific holidays)
-        const holidays = await Holiday.findAll({
-          where: { 
-            tb_id: tb_id,
-            [Op.or]: [
-              { center_id: null },           // Global holidays
-              { center_id: center_id }       // Center-specific holidays
-            ]
-          },
-          attributes: ["h_date", "center_id"],
-          raw: true,
-        });
-        
-        // Create a set of holiday dates for quick lookup
-        const holidayDates = new Set(
-          holidays.map(h => normalizeDate(new Date(h.h_date)).toISOString().split("T")[0])
-        );
-
-        // Determine the effective end date (today or batch end date, whichever is earlier)
-        const effectiveEndDate = currentDate < endDate ? currentDate : endDate;
-
-        let totalWorkingDays = 0;
-        let presentDays = 0;
-
-        // Iterate through each day in the date range
-        for (
-          let date = new Date(startDate);
-          date <= effectiveEndDate;
-          date.setDate(date.getDate() + 1)
-        ) {
-          const dayOfWeek = date.getDay();
-          const dateStr = date.toISOString().split("T")[0];
-          
-          // Skip weekends (Saturday = 6, Sunday = 0)
-          if (dayOfWeek === 0 || dayOfWeek === 6) {
-            continue;
-          }
-
-          // This is a working day (weekday)
-          totalWorkingDays++;
-
-          // Check if this date is a holiday
-          const isHoliday = holidayDates.has(dateStr);
-
-          // Get attendance status for this date
-          const attendStatus = attendanceMap.get(dateStr);
-
-          // Count as present if:
-          // 1. It's a holiday (automatically marked as present)
-          // 2. Attendance status is 'P' (Present)
-          // 3. Attendance status is 'L' (Leave - counted as present)
-          if (isHoliday || attendStatus === 'P' || attendStatus === 'L') {
-            presentDays++;
-          }
-          // If attendStatus is 'A' (Absent) or undefined (no record), it's not counted as present
-        }
-
-        // Calculate attendance percentage
-        attendanceProgress = Math.min(
-          totalWorkingDays > 0
-            ? Math.round((presentDays / totalWorkingDays) * 100)
-            : 0,
-          100
-        );
-      }
+      attendanceDetail = await getStudentAttendanceStats({
+        std_cnic: studentProfile.std_cnic,
+        tb_id,
+        center_id,
+        course_id,
+      });
+      attendanceProgress = attendanceDetail.percentage;
     } catch (attendanceError) {
       console.error("Error calculating attendance:", attendanceError);
       attendanceProgress = 0;
@@ -560,6 +455,18 @@ exports.getStudentDashoard = async (req, res) => {
         pendingQuizzes: pendingQuizCount,
         overallProgress: parseFloat(overallProgress.toFixed(1)),
         attendanceProgress: parseFloat(attendanceProgress.toFixed(1)),
+        // Breakdown behind the percentage, so the UI can show what it is based on
+        // instead of an unexplained number.
+        attendanceDetail: attendanceDetail
+          ? {
+              firstMarkedDate: attendanceDetail.firstMarkedDate,
+              daysCounted: attendanceDetail.daysCounted,
+              present: attendanceDetail.present,
+              absent: attendanceDetail.absent,
+              leave: attendanceDetail.leave,
+              unmarkedDays: attendanceDetail.unmarkedDays,
+            }
+          : null,
         submittedAssignments: submittedCount,
         notSubmittedAssignments: notSubmittedCount,
         totalAssignments: pendingAssignments.length,

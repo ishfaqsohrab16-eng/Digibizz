@@ -2,49 +2,72 @@ const express = require("express");
 const router = express.Router();
 const attendanceController = require("../controllers/attendanceController");
 const {
-  validateAttendanceCreation,
-  validateBulkAttendanceCreation,
-  validateAttendanceUpdate,
-  validateAttendanceQuery,
-} = require("../middleware/attendanceValidation");
-const { isAdminAuthenticated } = require("../middleware/authMiddleware");
+  isAdminAuthenticated,
+  requireRoles,
+  ROLES,
+  ATTENDANCE_MARKER_ROLES,
+  ATTENDANCE_VIEWER_ROLES,
+} = require("../middleware/authMiddleware");
 
-// Create Single Attendance Record
+// Every route below requires a valid token. isAdminAuthenticated only proves
+// *who* you are - requireRoles proves you are allowed to be here. Without the
+// role guard a student's token was accepted on every one of these endpoints.
+router.use(isAdminAuthenticated);
+
+// --- Recording attendance (staff only) -------------------------------------
 router.post(
   "/studentAttendance",
-  isAdminAuthenticated,
+  requireRoles(ATTENDANCE_MARKER_ROLES),
   attendanceController.createAttendance
 );
 
-// Create Bulk Attendance Records
 router.post(
   "/studentAttendance/bulk",
-  isAdminAuthenticated,
+  requireRoles(ATTENDANCE_MARKER_ROLES),
   attendanceController.bulkCreateAttendance
 );
 
-// Get Attendance Records
+// --- Reading attendance (staff only) ---------------------------------------
 router.get(
   "/studentAttendance",
-  isAdminAuthenticated,
+  requireRoles(ATTENDANCE_VIEWER_ROLES),
   attendanceController.getAttendance
 );
+
 router.get(
   "/studentAttendancehstory",
-  isAdminAuthenticated,
+  requireRoles(ATTENDANCE_VIEWER_ROLES),
   attendanceController.getAttendanceHistory
 );
-// Get Attendance Summary
+
 router.get(
   "/summary",
-  isAdminAuthenticated,
+  requireRoles(ATTENDANCE_VIEWER_ROLES),
   attendanceController.getAttendanceSummary
 );
 
-// Update Attendance Record
-router.put("/:id", attendanceController.updateAttendance);
+// --- Individual student calendar -------------------------------------------
+// Students are allowed here: the controller forces them to their own record and
+// ignores any std_cnic they send.
+router.get(
+  "/student-calendar",
+  requireRoles([...ATTENDANCE_VIEWER_ROLES, ROLES.STUDENT]),
+  attendanceController.getStudentAttendanceCalendar
+);
 
-// Delete Attendance Record
-router.delete("/:id", attendanceController.deleteAttendance);
+// --- Correcting attendance (staff only) ------------------------------------
+// These two previously had NO authentication at all: any unauthenticated
+// request could rewrite or delete any attendance record.
+router.put(
+  "/:id",
+  requireRoles(ATTENDANCE_MARKER_ROLES),
+  attendanceController.updateAttendance
+);
+
+router.delete(
+  "/:id",
+  requireRoles(ROLES.SUPER_ADMIN, ROLES.CONTENT_ADMIN),
+  attendanceController.deleteAttendance
+);
 
 module.exports = router;

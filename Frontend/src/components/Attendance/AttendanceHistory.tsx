@@ -1,4 +1,4 @@
-import React, { useEffect, useState } from "react";
+import React, { useEffect, useMemo, useState } from "react";
 import {
   format,
   startOfMonth,
@@ -102,6 +102,40 @@ const AttendanceHistory: React.FC = () => {
     };
     fetchData();
   }, []);
+
+  /**
+   * Totals for the month on screen, derived from the data already loaded.
+   *
+   * The endpoint returns the whole batch range in one response, so this needs
+   * no extra request - and it means the numbers always describe the month in
+   * the heading rather than the entire batch.
+   *
+   * Same rule as everywhere else: approved leave counts as present.
+   */
+  const monthTotals = useMemo(() => {
+    const prefix = format(currentMonth, "yyyy-MM");
+    let present = 0;
+    let absent = 0;
+    let leave = 0;
+    let classDays = 0;
+
+    Object.entries(attendanceData).forEach(([dateKey, counts]) => {
+      if (!dateKey.startsWith(prefix)) return;
+      classDays += 1;
+      present += counts.P || 0;
+      absent += counts.A || 0;
+      leave += counts.L || 0;
+    });
+
+    const marked = present + absent + leave;
+    return {
+      present,
+      absent,
+      leave,
+      classDays,
+      percentage: marked > 0 ? (((present + leave) / marked) * 100).toFixed(1) : "0.0",
+    };
+  }, [attendanceData, currentMonth]);
 
   const handlePreviousMonth = () => {
     if (
@@ -255,6 +289,39 @@ const AttendanceHistory: React.FC = () => {
           Next
         </button>
       </div>
+      {!loading && (
+        <div className="mb-4 grid grid-cols-2 gap-3 sm:grid-cols-5">
+          {[
+            {
+              label: "Attendance",
+              value: `${monthTotals.percentage}%`,
+              hint: "Present + leave",
+              tone:
+                Number(monthTotals.percentage) >= 90
+                  ? "border-emerald-200 bg-emerald-50 text-emerald-800"
+                  : Number(monthTotals.percentage) >= 75
+                  ? "border-amber-200 bg-amber-50 text-amber-800"
+                  : "border-rose-200 bg-rose-50 text-rose-800",
+            },
+            { label: "Class days", value: monthTotals.classDays, hint: "Days marked" },
+            { label: "Present", value: monthTotals.present },
+            { label: "Leave", value: monthTotals.leave },
+            { label: "Absent", value: monthTotals.absent },
+          ].map((tile) => (
+            <div
+              key={tile.label}
+              className={`rounded-lg border p-3 ${tile.tone || "border-gray-200 bg-white text-gray-800"}`}
+            >
+              <p className="text-[11px] font-semibold uppercase tracking-wide text-gray-500">
+                {tile.label}
+              </p>
+              <p className="mt-1 text-2xl font-bold leading-none">{tile.value}</p>
+              {tile.hint && <p className="mt-1 text-[11px] text-gray-500">{tile.hint}</p>}
+            </div>
+          ))}
+        </div>
+      )}
+
       {loading ? (
         <div className="text-center text-gray-500">Loading...</div>
       ) : (

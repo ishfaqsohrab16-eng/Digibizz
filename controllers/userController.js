@@ -105,16 +105,18 @@ exports.getProfile = async (req, res) => {
 };
 exports.getUserType = async (req, res) => {
   try {
-    // Assuming the user object is attached to req by the authentication middleware
-    const userType = req.user.type; // or however you store the user type in your user model
-    res.json({ userType });
+    if (!req.user) {
+      return res.status(401).json({ message: "Unauthorized" });
+    }
+    // `role` is the normalised (lower-cased) form; `userType` is the raw value
+    // stored on the user record.
+    res.json({ userType: req.user.type, role: req.user.role });
   } catch (error) {
     res
       .status(500)
       .json({ message: "Error fetching user type", error: error.message });
   }
 };
-exports.getUserType = async (req, res) => {};
 exports.changePassword = async (req, res) => {
   try {
     const errors = validationResult(req);

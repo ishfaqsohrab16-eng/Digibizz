@@ -44,6 +44,8 @@ import DailyLectureReportForm from "../DailyLectureReport/DailyLectureReportForm
 import QuizStudentTable from "../Quiz/QuizStudentTable";
 import AnnouncementList from "../Announcements/AnnouncementList";
 import AttendanceHistory from "../Attendance/AttendanceHistory";
+import MyAttendance from "../Attendance/MyAttendance";
+import StudentAttendanceCalendar from "../Attendance/StudentAttendanceCalendar";
 import StudentDashboard from "../dashboards/StudentDashboard";
 import TrainerDashboard from "../dashboards/TrainerDashboard";
 import AdminDashboard from "../dashboards/AdminDashboard";
@@ -339,6 +341,10 @@ const ResponsiveLayout: React.FC = () => {
         return <AnnouncementList />;
       case "AttendanceHistory":
         return <AttendanceHistory />;
+      case "MyAttendance":
+        return <MyAttendance />;
+      case "StudentAttendanceCalendar":
+        return <StudentAttendanceCalendar />;
       case "userSetting":
         return <SettingsForm />;
       case "Tickets":
