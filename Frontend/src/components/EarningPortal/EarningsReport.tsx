@@ -5,12 +5,12 @@ import TrainerReport from "./TrainerReport";
 import SuccessStoryReport from "./SuccessStoryReport";
 import { Button } from "../../components/ui/button";
 import { Printer } from "lucide-react";
-import { useToast } from "../../components/ui/use-toast";
 import html2canvas from "html2canvas";
 import jsPDF from "jspdf";
 import React from "react";
 import GenderDistributionChart from "./GenderDistributionChart";
 import { useBatch } from "../../context/BatchContext";
+import { CourseSeries } from "../../utils/courseSeries";
 
 interface EarningsReportProps {
   data: {
@@ -22,10 +22,8 @@ interface EarningsReportProps {
     centerWiseEarnings: {
       centers: any[];
       totalEarnings: number;
-      totalDigital: number;
-      totalAWE: number;
-      totalCreative: number;
-      totalTechnical: number;
+      /** Earnings per course keyed by lower-cased course name. */
+      byCourse?: Record<string, number>;
     };
     successStories: {
       total: number;
@@ -33,10 +31,11 @@ interface EarningsReportProps {
     };
     trainerStats: any[];
   };
+  /** Courses to chart and tabulate, derived from the data + courses table. */
+  courses: CourseSeries[];
 }
 
-const EarningsReport = ({ data }: EarningsReportProps) => {
-  const { toast } = useToast();
+const EarningsReport = ({ data, courses }: EarningsReportProps) => {
   const printRef = React.useRef(null);
   const { selectedBatchName } = useBatch();
 
@@ -85,10 +84,9 @@ const EarningsReport = ({ data }: EarningsReportProps) => {
           <StatisticsCards
             statistics={{
               totalEarnings: data.centerWiseEarnings.totalEarnings,
-              totalDigital: data.centerWiseEarnings.totalDigital,
-              totalAWE: data.centerWiseEarnings.totalAWE,
-              totalCreative: data.centerWiseEarnings.totalCreative,
+              byCourse: data.centerWiseEarnings.byCourse,
             }}
+            courses={courses}
           />
 
           <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
@@ -98,13 +96,8 @@ const EarningsReport = ({ data }: EarningsReportProps) => {
               </h2>
               <EarningsChart
                 type="bar"
-                data={data.centerWiseEarnings.centers.map((center) => ({
-                  name: center.name,
-                  digital: center.digital,
-                  awe: center.awe,
-                  creative: center.creative,
-                  technical: center.technical,
-                }))}
+                courses={courses}
+                data={data.centerWiseEarnings.centers}
               />
             </div>
 
@@ -112,7 +105,11 @@ const EarningsReport = ({ data }: EarningsReportProps) => {
               <h2 className="text-xl font-semibold mb-4">
                 Success Stories Distribution
               </h2>
-              <EarningsChart type="bar" data={data.successStories.centerWise} />
+              <EarningsChart
+                type="bar"
+                courses={courses}
+                data={data.successStories.centerWise}
+              />
             </div>
           </div>
           <div className="grid grid-cols-1 mt-2 lg:grid-cols-3 gap-6">
@@ -129,29 +126,15 @@ const EarningsReport = ({ data }: EarningsReportProps) => {
             </div>
           </div>
 
-          <EarningsTable centers={data.centerWiseEarnings.centers} />
+          <EarningsTable
+            centers={data.centerWiseEarnings.centers}
+            courses={courses}
+          />
 
           <SuccessStoryReport
             stories={data.successStories.centerWise}
-            total={{
-              digital: data.successStories.centerWise.reduce(
-                (acc, curr) => acc + curr.digital,
-                0
-              ),
-              awe: data.successStories.centerWise.reduce(
-                (acc, curr) => acc + curr.awe,
-                0
-              ),
-              creative: data.successStories.centerWise.reduce(
-                (acc, curr) => acc + curr.creative,
-                0
-              ),
-              technical: data.successStories.centerWise.reduce(
-                (acc, curr) => acc + curr.technical,
-                0
-              ),
-              total: data.successStories.total,
-            }}
+            courses={courses}
+            total={data.successStories.total}
           />
 
           <TrainerReport trainers={data.trainerStats} />

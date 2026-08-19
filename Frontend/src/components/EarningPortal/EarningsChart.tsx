@@ -7,20 +7,25 @@ import {
   Legend,
   ResponsiveContainer,
 } from "recharts";
+import { CourseSeries } from "../../utils/courseSeries";
 
 interface EarningsChartProps {
   type?: "bar" | "pie";
+  /** Rows shaped `{ name, [courseKey]: number }`. */
   data: any[];
+  /** One bar per entry; replaces the old fixed four-course bar set. */
+  courses: CourseSeries[];
 }
 
-const COLORS = {
-  digital: "#4F46E5",
-  awe: "#10B981",
-  creative: "#F59E0B",
-  technical: "#EF4444",
-};
+const EarningsChart = ({ type = "bar", data, courses }: EarningsChartProps) => {
+  if (courses.length === 0) {
+    return (
+      <div className="flex h-[300px] items-center justify-center text-sm text-muted-foreground">
+        No course data to chart yet.
+      </div>
+    );
+  }
 
-const EarningsChart = ({ type = "bar", data }: EarningsChartProps) => {
   return (
     <ResponsiveContainer width="100%" height={300}>
       <BarChart data={data}>
@@ -28,10 +33,14 @@ const EarningsChart = ({ type = "bar", data }: EarningsChartProps) => {
         <YAxis />
         <Tooltip />
         <Legend />
-        <Bar dataKey="digital" fill={COLORS.digital} name="Digital" />
-        <Bar dataKey="awe" fill={COLORS.awe} name="AWE" />
-        <Bar dataKey="creative" fill={COLORS.creative} name="Creative" />
-        <Bar dataKey="technical" fill={COLORS.technical} name="Technical" />
+        {courses.map((course) => (
+          <Bar
+            key={course.key}
+            dataKey={course.key}
+            fill={course.color}
+            name={course.label}
+          />
+        ))}
       </BarChart>
     </ResponsiveContainer>
   );

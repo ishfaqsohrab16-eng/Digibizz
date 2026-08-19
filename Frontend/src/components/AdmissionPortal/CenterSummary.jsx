@@ -1,74 +1,75 @@
 import React from "react";
 import { Building2, Users, ChevronRight } from "lucide-react";
+import { mergeCategories, useReferenceData } from "../../hooks/useReferenceData";
 
-// Define all centers and courses
-const allCenters = [
-  "Govt Girls College, Quetta Cantt",
-  "ITTI Pishin Stop QTA",
-  "BUITEMS",
-  "UoB",
-  "UoL",
-  "MCKRU",
-  "UoG",
-  "ITTI Zhob",
-  "Derabugti",
-  "Awaran"
-];
-const allCourses = ["AWE", "Creative", "Digital"];
+/**
+ * Applications per center, broken down by course and gender.
+ *
+ * Both the center list and the course list used to be hardcoded arrays here
+ * ("BUITEMS", "UoB", ... and "AWE"/"Creative"/"Digital"). A center or course
+ * added in the database never appeared, and renaming one made its card show
+ * zero while the real count was discarded during the name match. Both lists
+ * now come from the database, merged with whatever keys the statistics carry
+ * so historic rows under an old name still render.
+ */
 
-// Helper to normalize center names (replace all whitespace, trim, lowercase)
+// Center names arrive from two different queries and have historically carried
+// stray and non-breaking whitespace, so compare them loosely. The \s class
+// already matches U+00A0, so collapsing runs of it handles both cases.
 const normalize = (str) =>
-  str
-    .replace(/\s+/g, " ") // Replace all whitespace (including non-breaking) with a single space
-    .replace(/\u00A0/g, " ") // Replace non-breaking spaces with regular space
+  String(str ?? "")
+    .replace(/\s+/g, " ")
     .trim()
     .toLowerCase();
 
 export const CenterSummary = ({ centerStats }) => {
-  // Build a map of normalized center names to original names
-  const centerNameMap = allCenters.reduce((acc, center) => {
-    acc[normalize(center)] = center;
+  const { centers, courses, loading } = useReferenceData();
+  const stats = centerStats || {};
+
+  const emptyCourse = { total: 0, male: 0, female: 0 };
+
+  // Look up a center's stats by normalised name rather than exact string.
+  const statsByCenter = Object.entries(stats).reduce((acc, [name, data]) => {
+    acc[normalize(name)] = data;
     return acc;
   }, {});
 
-  // Create complete stats object with default values
-  const completeStats = allCenters.reduce((acc, center) => {
-    acc[center] = {
-      total: 0,
-      male: 0,
-      female: 0,
-      courses: allCourses.reduce((courseAcc, course) => {
-        courseAcc[course] = {
-          total: 0,
-          male: 0,
-          female: 0,
+  const courseLabels = mergeCategories(
+    courses.map((course) => course.course_name || course.course_full_name),
+    // Course keys inside the center breakdown come from courses.course_name.
+    Object.values(stats).flatMap((data) => Object.keys(data?.courses || {}))
+  );
+
+  const centerLabels = mergeCategories(
+    centers.map((center) => center.center_name),
+    Object.keys(stats)
+  );
+
+  const rows = centerLabels.map((centerName) => {
+    const data = statsByCenter[normalize(centerName)] || {};
+    const courseData = data.courses || {};
+
+    // Course counts are keyed by name; match them the same loose way.
+    const courseByKey = Object.entries(courseData).reduce((acc, [name, value]) => {
+      acc[normalize(name)] = value;
+      return acc;
+    }, {});
+
+    return {
+      name: centerName,
+      total: Number(data.total) || 0,
+      male: Number(data.male) || 0,
+      female: Number(data.female) || 0,
+      courses: courseLabels.map((courseName) => {
+        const value = courseByKey[normalize(courseName)] || emptyCourse;
+        return {
+          name: courseName,
+          total: Number(value.total) || 0,
+          male: Number(value.male) || 0,
+          female: Number(value.female) || 0,
         };
-        return courseAcc;
-      }, {}),
+      }),
     };
-    return acc;
-  }, {});
-  console.log(centerStats);
-  // Merge provided stats with default values, using normalized names
-  Object.entries(centerStats || {}).forEach(([center, data]) => {
-    const normalized = normalize(center);
-    const mappedCenter = centerNameMap[normalized];
-    if (mappedCenter && completeStats[mappedCenter]) {
-      completeStats[mappedCenter].total = data.total || 0;
-      completeStats[mappedCenter].male = data.male || 0;
-      completeStats[mappedCenter].female = data.female || 0;
-
-      // Handle courses data
-      Object.entries(data.courses || {}).forEach(([course, courseData]) => {
-        if (completeStats[mappedCenter].courses[course]) {
-          completeStats[mappedCenter].courses[course] = {
-            total: courseData.total || 0,
-            male: courseData.male || 0,
-            female: courseData.female || 0,
-          };
-        }
-      });
-    }
   });
 
   return (
@@ -82,82 +83,86 @@ export const CenterSummary = ({ centerStats }) => {
             <h2 className="text-xl font-bold text-[hsl(var(--foreground))] tracking-tight group-hover:text-[hsl(var(--primary))] transition-colors">
               Center Summary
             </h2>
-            <p className="text-sm text-[hsl(var(--muted-foreground))] mt-1 group-hover:text-[hsl(var(--muted-foreground))] transition-colors">
+            <p className="text-sm text-[hsl(var(--muted-foreground))] mt-1">
               Training center enrollment statistics
             </p>
           </div>
         </div>
-        <div className="flex items-center gap-2 text-[hsl(var(--primary))] text-sm font-medium cursor-pointer hover:gap-3 transition-all group">
-          <ChevronRight className="w-4 h-4 group-hover:translate-x-1 transition-transform" />
+        <div className="flex items-center gap-2 text-[hsl(var(--primary))] text-sm font-medium">
+          <ChevronRight className="w-4 h-4" />
         </div>
       </div>
 
-      <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
-        {Object.entries(completeStats).map(([center, data], index) => (
-          <div
-            key={center}
-            className="bg-[hsl(var(--card))] rounded-xl p-5 shadow-sm hover:shadow-md transition-all duration-500 border border-[hsl(var(--border))] hover:border-[hsl(var(--primary))/0.4] group animate-fade-in"
-            style={{ animationDelay: `${index * 100}ms` }}
-          >
-            <div className="flex justify-between items-center mb-5 pb-4 border-b border-[hsl(var(--border))] group-hover:border-[hsl(var(--primary))/0.2] transition-colors duration-300">
-              <div className="flex items-center gap-3">
-                <div className="p-2 bg-[hsl(var(--primary))/0.1] rounded-lg group-hover:bg-[hsl(var(--primary))/0.15] transition-colors duration-300">
-                  <Users className="w-5 h-5 text-[hsl(var(--primary))] group-hover:scale-110 transition-transform duration-300" />
+      {rows.length === 0 ? (
+        <p className="text-sm text-[hsl(var(--muted-foreground))] py-6 text-center">
+          {loading ? "Loading centers…" : "No centers found."}
+        </p>
+      ) : (
+        <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
+          {rows.map((center, index) => (
+            <div
+              key={center.name}
+              className="bg-[hsl(var(--card))] rounded-xl p-5 shadow-sm hover:shadow-md transition-all duration-500 border border-[hsl(var(--border))] hover:border-[hsl(var(--primary))/0.4] group animate-fade-in"
+              style={{ animationDelay: `${index * 100}ms` }}
+            >
+              <div className="flex justify-between items-center mb-5 pb-4 border-b border-[hsl(var(--border))] group-hover:border-[hsl(var(--primary))/0.2] transition-colors duration-300">
+                <div className="flex items-center gap-3">
+                  <div className="p-2 bg-[hsl(var(--primary))/0.1] rounded-lg group-hover:bg-[hsl(var(--primary))/0.15] transition-colors duration-300">
+                    <Users className="w-5 h-5 text-[hsl(var(--primary))] group-hover:scale-110 transition-transform duration-300" />
+                  </div>
+                  <h3 className="text-lg font-bold text-[hsl(var(--foreground))] group-hover:text-[hsl(var(--primary))] transition-colors">
+                    {center.name}
+                  </h3>
                 </div>
-                <h3 className="text-lg font-bold text-[hsl(var(--foreground))] group-hover:text-[hsl(var(--primary))] transition-colors">
-                  {center}
-                </h3>
+                <div className="flex flex-col items-end">
+                  <span className="text-2xl font-bold text-[hsl(var(--primary))] hover-lift group-hover:scale-110 transition-transform duration-300">
+                    {center.total}
+                  </span>
+                  <span className="text-sl text-[hsl(var(--muted-foreground))]">
+                    Total Students
+                  </span>
+                </div>
               </div>
-              <div className="flex flex-col items-end">
-                <span className="text-2xl font-bold text-[hsl(var(--primary))] hover-lift group-hover:scale-110 transition-transform duration-300">
-                  {data.total}
-                </span>
-                <span className="text-sl text-[hsl(var(--muted-foreground))] group-hover:text-[hsl(var(--primary))] transition-colors">
-                  Total Students
-                </span>
-              </div>
-            </div>
 
-            <div className="space-y-4">
-              {Object.entries(data.courses).map(
-                ([course, stats], courseIndex) => (
+              <div className="space-y-4">
+                {center.courses.map((course) => (
                   <div
-                    key={`${center}-${course}`}
+                    key={`${center.name}-${course.name}`}
                     className="flex justify-between items-center group/item hover:bg-[hsl(var(--primary))/0.05] p-2 rounded-lg transition-all duration-300 hover:shadow-sm"
                   >
                     <div className="flex items-center gap-2">
                       <div className="w-2 h-2 rounded-full bg-[hsl(var(--primary))/0.7] group-hover/item:scale-125 transition-transform duration-300"></div>
                       <span className="text-sl font-medium text-[hsl(var(--foreground))] group-hover/item:text-[hsl(var(--primary))] transition-colors">
-                        {course}
+                        {course.name}
                       </span>
                     </div>
                     <div className="flex items-center gap-4">
                       <div className="text-right">
-                        <span className="text-sl font-bold text-[hsl(var(--primary))] group-hover/item:text-[hsl(var(--primary))] transition-colors">
-                          {stats.total}
+                        <span className="text-sl font-bold text-[hsl(var(--primary))]">
+                          {course.total}
                         </span>
                         <span className="text-[hsl(var(--muted-foreground))] mx-1">
                           •
                         </span>
                         <span className="text-sl text-[hsl(var(--muted-foreground))]">
-                          <span className="text-[hsl(var(--teal))] font-medium group-hover/item:text-[hsl(var(--teal))] transition-colors">
-                            {stats.male}M
+                          <span className="text-[hsl(var(--teal))] font-medium">
+                            {course.male}M
                           </span>
                           <span className="mx-1">/</span>
-                          <span className="text-[hsl(var(--pink))] font-medium group-hover/item:text-[hsl(var(--pink))] transition-colors">
-                            {stats.female}F
+                          <span className="text-[hsl(var(--pink))] font-medium">
+                            {course.female}F
                           </span>
                         </span>
                       </div>
                       <ChevronRight className="w-4 h-4 text-[hsl(var(--border))] group-hover/item:text-[hsl(var(--primary))] group-hover/item:translate-x-1 transition-all" />
                     </div>
                   </div>
-                )
-              )}
+                ))}
+              </div>
             </div>
-          </div>
-        ))}
-      </div>
+          ))}
+        </div>
+      )}
     </div>
   );
 };

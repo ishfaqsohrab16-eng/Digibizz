@@ -1,5 +1,7 @@
-import { useState, useEffect } from "react";
+import { useMemo } from "react";
 import EarningsReport from "./EarningsReport";
+import { buildCourseSeries, courseKey } from "../../utils/courseSeries";
+import { useReferenceData } from "../../hooks/useReferenceData";
 
 interface CourseWiseEarning {
   course: string;
@@ -42,170 +44,124 @@ interface BatchReportProps {
   studentStatistics: StudentStatistics;
 }
 
-interface CenterWiseEarnings {
-  centers: Array<{
-    name: string;
-    digital: number;
-    awe: number;
-    creative: number;
-    technical: number;
-    total: number;
-    genderWise: {
-      digital: { male: number; female: number };
-      awe: { male: number; female: number };
-      creative: { male: number; female: number };
-      technical: { male: number; female: number };
-    };
-  }>;
-  totalEarnings: number;
-  totalDigital: number;
-  totalAWE: number;
-  totalCreative: number;
-  totalTechnical: number;
-}
-
+/**
+ * Reshapes the earnings API payload for the report components.
+ *
+ * The previous version flattened every center into fixed `digital` / `awe` /
+ * `creative` / `technical` fields, so a course renamed in the database landed
+ * in none of them and reported zero. Rows are now keyed by the lower-cased
+ * course name and the list of courses is derived from the data itself (topped
+ * up from the courses table), so renames and additions both flow through.
+ */
 const BatchReport: React.FC<BatchReportProps> = ({
-  courseWiseEarnings,
   centerWiseAnalytics,
   centerWiseSuccessStories,
   trainerPerformance,
   studentStatistics,
 }) => {
-  const [earningsData, setEarningsData] = useState({
-    studentStatistics: {
-      totalStudents: 0,
-      maleCount: 0,
-      femaleCount: 0,
-    },
-    centerWiseEarnings: {
-      centers: [],
-      totalEarnings: 0,
-      totalDigital: 0,
-      totalAWE: 0,
-      totalCreative: 0,
-      totalTechnical: 0,
-    } as CenterWiseEarnings,
-    successStories: {
-      total: 0,
-      centerWise: [] as any[],
-    },
-    trainerStats: [] as any[],
-  });
+  const { courses: dbCourses } = useReferenceData();
 
-  useEffect(() => {
-    // Transform centerWiseAnalytics to match the required format
+  const courses = useMemo(
+    () =>
+      buildCourseSeries(
+        [
+          ...centerWiseAnalytics.flatMap((center) =>
+            (center.courseEarnings || []).map((course) => course.course)
+          ),
+          ...centerWiseSuccessStories.flatMap((center: any) =>
+            (center.courseSuccesses || []).map((entry: any) => entry.course)
+          ),
+        ],
+        dbCourses.map((course) => course.course_name || course.course_full_name)
+      ),
+    [centerWiseAnalytics, centerWiseSuccessStories, dbCourses]
+  );
+
+  const earningsData = useMemo(() => {
     const centers = centerWiseAnalytics.map((center) => {
-      const courseData = center.courseEarnings.reduce(
-        (acc, course) => {
-          const courseName = course.course.toLowerCase();
-          return {
-            ...acc,
-            [courseName]: parseFloat(course.total) || 0,
-            genderWise: {
-              ...acc.genderWise,
-              [courseName]: {
-                male: parseFloat(course.male) || 0,
-                female: parseFloat(course.female) || 0,
-              },
-            },
-          };
-        },
-        {
-          digital: 0,
-          awe: 0,
-          creative: 0,
-          technical: 0,
-          genderWise: {
-            digital: { male: 0, female: 0 },
-            awe: { male: 0, female: 0 },
-            creative: { male: 0, female: 0 },
-            technical: { male: 0, female: 0 },
-          },
-        }
-      );
-
-      return {
+      const row: Record<string, any> = {
         name: center.center,
-        ...courseData,
-        total: parseFloat(center.totalEarnings.total) || 0,
+        genderWise: {} as Record<string, { male: number; female: number }>,
       };
+
+      // Seed every known course so a center with no earnings in one course
+      // still renders a 0 rather than an empty cell.
+      for (const course of courses) {
+        row[course.key] = 0;
+        row.genderWise[course.key] = { male: 0, female: 0 };
+      }
+
+      for (const entry of center.courseEarnings || []) {
+        const key = courseKey(entry.course);
+        row[key] = parseFloat(entry.total) || 0;
+        row.genderWise[key] = {
+          male: parseFloat(entry.male) || 0,
+          female: parseFloat(entry.female) || 0,
+        };
+      }
+
+      row.total = parseFloat(center.totalEarnings?.total) || 0;
+      return row;
     });
 
-    // Calculate course-wise totals
-    const totals = centers.reduce(
-      (acc, center) => ({
-        totalEarnings: acc.totalEarnings + center.total,
-        totalDigital: acc.totalDigital + center.digital,
-        totalAWE: acc.totalAWE + center.awe,
-        totalCreative: acc.totalCreative + center.creative,
-        totalTechnical: acc.totalTechnical + center.technical,
-      }),
-      {
-        totalEarnings: 0,
-        totalDigital: 0,
-        totalAWE: 0,
-        totalCreative: 0,
-        totalTechnical: 0,
-      }
-    );
+    const byCourse = courses.reduce<Record<string, number>>((acc, course) => {
+      acc[course.key] = centers.reduce(
+        (sum, center) => sum + (Number(center[course.key]) || 0),
+        0
+      );
+      return acc;
+    }, {});
 
     const centerWiseStories = centerWiseSuccessStories.map(
-      ({ center, courseSuccesses, totalSuccesses }: { center: string; courseSuccesses: Array<{ course: string; successCount: number }>; totalSuccesses: number }) => {
-        const successMap = {
-          Digital: 0,
-          AWE: 0,
-          Creative: 0,
-          Technical: 0,
-        };
-
-        // Populate successMap with actual success counts
-        courseSuccesses.forEach(({ course, successCount }: { course: string; successCount: number }) => {
-          successMap[course as keyof typeof successMap] = successCount;
-        });
-
-        return {
-          center,
-          digital: successMap.Digital || 0,
-          awe: successMap.AWE || 0,
-          creative: successMap.Creative || 0,
-          technical: successMap.Technical || 0,
-          total: totalSuccesses || 0,
-        };
+      ({
+        center,
+        courseSuccesses,
+        totalSuccesses,
+      }: {
+        center: string;
+        courseSuccesses: Array<{ course: string; successCount: number }>;
+        totalSuccesses: number;
+      }) => {
+        const row: Record<string, any> = { center, name: center };
+        for (const course of courses) row[course.key] = 0;
+        for (const entry of courseSuccesses || []) {
+          row[courseKey(entry.course)] = Number(entry.successCount) || 0;
+        }
+        row.total = Number(totalSuccesses) || 0;
+        return row;
       }
     );
 
-    // Transform trainerPerformance
-    const transformedTrainerStats = trainerPerformance.map((trainer) => ({
-      name: trainer.trainer,
-      earnings: parseFloat(trainer.earnings) || 0,
-      successStories: trainer.successStories,
-    }));
-
-    setEarningsData({
+    return {
       studentStatistics: {
-        totalStudents: studentStatistics.totalStudents || 0,
-        maleCount: studentStatistics.maleCount || 0,
-        femaleCount: studentStatistics.femaleCount || 0,
+        totalStudents: studentStatistics?.totalStudents || 0,
+        maleCount: studentStatistics?.maleCount || 0,
+        femaleCount: studentStatistics?.femaleCount || 0,
       },
       centerWiseEarnings: {
         centers,
-        ...totals,
+        byCourse,
+        totalEarnings: centers.reduce((sum, center) => sum + center.total, 0),
       },
       successStories: {
         total: centerWiseStories.reduce((sum, center) => sum + center.total, 0),
         centerWise: centerWiseStories,
       },
-      trainerStats: transformedTrainerStats,
-    });
+      trainerStats: trainerPerformance.map((trainer) => ({
+        name: trainer.trainer,
+        earnings: parseFloat(trainer.earnings) || 0,
+        successStories: trainer.successStories,
+      })),
+    };
   }, [
+    courses,
     studentStatistics,
-    courseWiseEarnings,
     centerWiseAnalytics,
     centerWiseSuccessStories,
     trainerPerformance,
   ]);
 
-  return <EarningsReport data={earningsData} />;
+  return <EarningsReport data={earningsData} courses={courses} />;
 };
 
 export default BatchReport;

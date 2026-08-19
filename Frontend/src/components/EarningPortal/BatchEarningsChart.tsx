@@ -13,36 +13,30 @@ import {
   Cell,
 } from "recharts";
 import { Info } from "lucide-react";
+import { CourseSeries } from "../../utils/courseSeries";
 
+/** One row per batch, with earnings stored under each lower-cased course name. */
 interface ChartData {
   batchName: string;
-  digital: number;
-  awe: number;
-  creative: number;
-  technical: number;
   total: number;
+  [courseKey: string]: any;
 }
 
 interface BatchEarningsChartProps {
   data: ChartData[];
+  /** Trend line per course; replaces the old fixed four-course set. */
+  courses: CourseSeries[];
 }
 
-const ProfessionalEarningsChart = ({ data }: BatchEarningsChartProps) => {
-  // Color palette designed for accessibility and professional presentation
+const ProfessionalEarningsChart = ({
+  data,
+  courses,
+}: BatchEarningsChartProps) => {
+  // Color palette designed for accessibility and professional presentation.
+  // Per-course colours now come from the series so they stay consistent with
+  // the other earning charts however many courses exist.
   const theme = {
-    primary: {
-      digital: "#6366F1",
-      awe: "#10B981",
-      creative: "#F59E0B",
-      technical: "#EF4444",
-      total: "#475569",
-    },
-    secondary: {
-      digital: "#C7D2FE",
-      awe: "#A7F3D0",
-      creative: "#FDE68A",
-      technical: "#FECACA",
-    },
+    total: "#475569",
     background: "#FFFFFF",
     text: {
       primary: "#1E293B",
@@ -69,7 +63,10 @@ const ProfessionalEarningsChart = ({ data }: BatchEarningsChartProps) => {
 
   const processedData = data.map((item) => ({
     ...item,
-    total: item.digital + item.awe + item.creative + item.technical,
+    total: courses.reduce(
+      (sum, course) => sum + (Number(item[course.key]) || 0),
+      0
+    ),
   }));
 
   // Calculate average for reference line
@@ -95,16 +92,8 @@ const ProfessionalEarningsChart = ({ data }: BatchEarningsChartProps) => {
         >
           <defs>
             <linearGradient id="totalBar" x1="0" y1="0" x2="0" y2="1">
-              <stop
-                offset="5%"
-                stopColor={theme.primary.total}
-                stopOpacity={0.8}
-              />
-              <stop
-                offset="95%"
-                stopColor={theme.primary.total}
-                stopOpacity={0.2}
-              />
+              <stop offset="5%" stopColor={theme.total} stopOpacity={0.8} />
+              <stop offset="95%" stopColor={theme.total} stopOpacity={0.2} />
             </linearGradient>
           </defs>
 
@@ -148,7 +137,7 @@ const ProfessionalEarningsChart = ({ data }: BatchEarningsChartProps) => {
           <ReferenceLine
             y={averageTotal}
             yAxisId="left"
-            stroke={theme.primary.total}
+            stroke={theme.total}
             strokeDasharray="5 5"
             strokeOpacity={0.5}
           >
@@ -214,30 +203,30 @@ const ProfessionalEarningsChart = ({ data }: BatchEarningsChartProps) => {
               <Cell
                 key={index}
                 fill="url(#totalBar)"
-                stroke={theme.primary.total}
+                stroke={theme.total}
                 strokeWidth={index === processedData.length - 1 ? 2 : 0}
               />
             ))}
           </Bar>
 
-          {/* Trend Lines */}
-          {["digital", "awe", "creative", "technical"].map((key, index) => (
+          {/* Trend Lines - one per course actually present in the data */}
+          {courses.map((course) => (
             <Line
-              key={key}
+              key={course.key}
               yAxisId="right"
               type="monotone"
-              dataKey={key}
-              stroke={theme.primary[key as keyof typeof theme.primary]}
+              dataKey={course.key}
+              stroke={course.color}
               strokeWidth={2}
               dot={false}
               activeDot={{
                 r: 6,
-                fill: theme.primary[key as keyof typeof theme.primary],
+                fill: course.color,
                 stroke: theme.background,
                 strokeWidth: 2,
               }}
               strokeOpacity={0.8}
-              name={key.charAt(0).toUpperCase() + key.slice(1)}
+              name={course.label}
             />
           ))}
         </ComposedChart>

@@ -11,6 +11,7 @@ import { useToast } from "../../components/ui/use-toast";
 import BatchEarningsChart from "./BatchEarningsChart";
 import EarningsChart from "./EarningsChart";
 import GenderDistributionChart from "./GenderDistributionChart";
+import { CourseSeries } from "../../utils/courseSeries";
 
 interface EarningsReportProps {
   data: {
@@ -22,10 +23,8 @@ interface EarningsReportProps {
     centerWiseEarnings: {
       centers: any[];
       totalEarnings: number;
-      totalDigital: number;
-      totalAWE: number;
-      totalCreative: number;
-      totalTechnical: number;
+      /** Earnings per course keyed by lower-cased course name. */
+      byCourse?: Record<string, number>;
     };
     batchTrainingStats: any[];
     successStories: {
@@ -34,9 +33,11 @@ interface EarningsReportProps {
     };
     trainerStats: any[];
   };
+  /** Courses to chart and tabulate, derived from the data + courses table. */
+  courses: CourseSeries[];
 }
 
-const MasterEarningReport = ({ data }: EarningsReportProps) => {
+const MasterEarningReport = ({ data, courses }: EarningsReportProps) => {
   const printRef = useRef<HTMLDivElement>(null);
   const [isGeneratingPdf, setIsGeneratingPdf] = useState(false);
 
@@ -113,10 +114,9 @@ const MasterEarningReport = ({ data }: EarningsReportProps) => {
           <StatisticsCards
             statistics={{
               totalEarnings: data.centerWiseEarnings.totalEarnings,
-              totalDigital: data.centerWiseEarnings.totalDigital,
-              totalAWE: data.centerWiseEarnings.totalAWE,
-              totalCreative: data.centerWiseEarnings.totalCreative,
+              byCourse: data.centerWiseEarnings.byCourse,
             }}
+            courses={courses}
           />
 
           {/* Rest of your report content */}
@@ -125,31 +125,10 @@ const MasterEarningReport = ({ data }: EarningsReportProps) => {
               <h2 className="text-xl font-semibold mb-4">
                 Earnings Distribution
               </h2>
+              {/* Rows are already summed per course upstream in MasterReport. */}
               <BatchEarningsChart
-                data={data.batchTrainingStats.map((batch) => {
-                  const getCourseEarnings = (courseName: string) => {
-                    return (batch.centers || []).reduce((total: number, center: { courseEarnings?: { course?: string; total?: string }[] }) => {
-                      const course = (center.courseEarnings || []).find(
-                        (c: any) =>
-                          c.course?.toLowerCase() === courseName.toLowerCase()
-                      );
-                      return total + (course?.total ? parseFloat(course.total) : 0);
-                    }, 0);
-                  };
-
-                  return {
-                    batchName: batch.batchName || "Unknown Batch",
-                    digital: getCourseEarnings("Digital"),
-                    awe: getCourseEarnings("AWE"),
-                    creative: getCourseEarnings("Creative"),
-                    technical: getCourseEarnings("Technical"),
-                    total:
-                      getCourseEarnings("Digital") +
-                      getCourseEarnings("AWE") +
-                      getCourseEarnings("Creative") +
-                      getCourseEarnings("Technical"),
-                  };
-                })}
+                data={data.batchTrainingStats}
+                courses={courses}
               />
             </div>
           </div>
@@ -160,13 +139,8 @@ const MasterEarningReport = ({ data }: EarningsReportProps) => {
               </h2>
               <EarningsChart
                 type="bar"
-                data={data.centerWiseEarnings.centers.map((center) => ({
-                  name: center.name,
-                  digital: center.digital,
-                  awe: center.awe,
-                  creative: center.creative,
-                  technical: center.technical,
-                }))}
+                courses={courses}
+                data={data.centerWiseEarnings.centers}
               />
             </div>
 
@@ -174,7 +148,11 @@ const MasterEarningReport = ({ data }: EarningsReportProps) => {
               <h2 className="text-xl font-semibold mb-4">
                 Success Stories Distribution
               </h2>
-              <EarningsChart type="bar" data={data.successStories.centerWise} />
+              <EarningsChart
+                type="bar"
+                courses={courses}
+                data={data.successStories.centerWise}
+              />
             </div>
           </div>
           <div className="grid grid-cols-1 mt-2 lg:grid-cols-3 gap-6">
@@ -190,28 +168,14 @@ const MasterEarningReport = ({ data }: EarningsReportProps) => {
               )}
             </div>
           </div>
-          <EarningsTable centers={data.centerWiseEarnings.centers} />
+          <EarningsTable
+            centers={data.centerWiseEarnings.centers}
+            courses={courses}
+          />
           <SuccessStoryReport
             stories={data.successStories.centerWise}
-            total={{
-              digital: data.successStories.centerWise.reduce(
-                (acc, curr) => acc + curr.digital,
-                0
-              ),
-              awe: data.successStories.centerWise.reduce(
-                (acc, curr) => acc + curr.awe,
-                0
-              ),
-              creative: data.successStories.centerWise.reduce(
-                (acc, curr) => acc + curr.creative,
-                0
-              ),
-              technical: data.successStories.centerWise.reduce(
-                (acc, curr) => acc + curr.technical,
-                0
-              ),
-              total: data.successStories.total,
-            }}
+            courses={courses}
+            total={data.successStories.total}
           />
           <TrainerReport trainers={data.trainerStats} />
         </div>

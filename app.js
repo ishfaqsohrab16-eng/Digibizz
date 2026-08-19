@@ -47,6 +47,7 @@ const certificateRoutes = require("./routes/certificate");
 const courseModuleRoutes = require("./routes/courseModuleRoutes");
 const trainerTopicReportRoutes = require("./routes/trainerTopicReportRoutes");
 const admissionControlRoutes = require("./routes/admissionControlRoutes");
+const emailCampaignRoutes = require("./routes/emailCampaignRoutes");
 
 require("./models/courseModuleAssociation");
 const app = express();
@@ -187,6 +188,7 @@ app.use("/api/certificate", certificateRoutes);
 app.use("/api/course-modules", courseModuleRoutes);
 app.use("/api/trainer-topic-reports", trainerTopicReportRoutes);
 app.use("/api/admission-control", admissionControlRoutes);
+app.use("/api/email-campaigns", emailCampaignRoutes);
 // Catch-all handler to return the React frontend's index.html file
 app.get("*", (req, res) => {
   res.sendFile(path.join(__dirname, "dist", "index.html"));
@@ -222,6 +224,11 @@ initializeDatabase();
 // Surface SMTP problems at boot instead of on the first failed registration.
 const { verifyTransport } = require("./servec/emailConfig");
 verifyTransport();
+
+// Resume any running email campaign. All progress lives in the database, so a
+// restart mid-campaign picks up exactly where it stopped without re-sending.
+const emailCampaignDispatcher = require("./utils/emailCampaignDispatcher");
+emailCampaignDispatcher.start();
 
 const PORT = process.env.PORT || 5000;
 

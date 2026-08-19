@@ -61,6 +61,7 @@ import LectureRecordingForm from "../LectureRecordings/LectureRecordingForm";
 import LearningResourceForm from "../LearningResources/LearningResourceForm";
 import InterviewPortal from "../AdmissionPortal/InterviewPortal";
 import AdmissionControlPanel from "../AdmissionPortal/AdmissionControlPanel";
+import EmailCampaigns from "../EmailCampaign/EmailCampaigns";
 import MasterTrainerDashboard from "../dashboards/MasterTrainerDashboard";
 import QuizResultTable from "../Quiz/QuizResultTable";
 import ExamAssessmentView from "../ExamAssessment/ExamAssessmentView";
@@ -373,6 +374,9 @@ const ResponsiveLayout: React.FC = () => {
         return <InterviewPortal />;
       case "AdmissionControl":
         return <AdmissionControlPanel />;
+      // SuperAdmin only; the component and every endpoint enforce that too.
+      case "EmailCampaigns":
+        return <EmailCampaigns />;
 
       case "ExamAssessmentView":
         return;

@@ -3543,3 +3543,171 @@ export const markTopicCompleted = async (data: {
   );
   return response.data;
 };
+
+// ---------------------------------------------------------------------------
+// Email campaigns (SuperAdmin only - the server enforces the same)
+// ---------------------------------------------------------------------------
+
+export interface EmailCampaign {
+  ec_id: number;
+  ec_name: string;
+  tb_id: number;
+  center_id: number;
+  ec_kind: "initial" | "reminder";
+  ec_source_campaign_id?: number | null;
+  ec_target_count: number;
+  ec_batch_size: number;
+  ec_interval_minutes: number;
+  ec_min_gap_seconds: number;
+  ec_max_gap_seconds: number;
+  ec_subject: string;
+  ec_interview_date?: string | null;
+  ec_interview_time?: string | null;
+  ec_reporting_time?: string | null;
+  ec_venue?: string | null;
+  ec_contact_person?: string | null;
+  ec_contact_phone?: string | null;
+  ec_message?: string | null;
+  ec_status: "draft" | "running" | "paused" | "completed" | "cancelled";
+  ec_last_run_at?: string | null;
+  ec_next_run_at?: string | null;
+  center?: { center_id: number; center_name: string };
+  batch?: { tb_id: number; tb_name: string };
+  stats?: CampaignStats;
+}
+
+export interface CampaignStats {
+  pending: number;
+  sent: number;
+  failed: number;
+  skipped: number;
+  total: number;
+}
+
+export interface CampaignEligibility {
+  success: boolean;
+  alreadyContacted: number;
+  totalAvailable: number;
+  courses: Array<{
+    course_id: number;
+    course_name: string;
+    course_full_name: string;
+    available: number;
+  }>;
+}
+
+const campaignHeaders = () => ({
+  Authorization: `Bearer ${getCurrentUserToken()}`,
+  "Content-Type": "application/json",
+});
+
+export const getCampaignEligibility = async (
+  tb_id: number,
+  center_id: number
+) => {
+  const response = await axios.get(`${API_URL}/email-campaigns/eligibility`, {
+    params: { tb_id, center_id },
+    headers: campaignHeaders(),
+  });
+  return response.data as CampaignEligibility;
+};
+
+export const getEmailCampaigns = async (params?: {
+  tb_id?: number;
+  center_id?: number;
+}) => {
+  const response = await axios.get(`${API_URL}/email-campaigns`, {
+    params,
+    headers: campaignHeaders(),
+  });
+  return response.data as { success: boolean; campaigns: EmailCampaign[] };
+};
+
+export const getEmailCampaign = async (id: number) => {
+  const response = await axios.get(`${API_URL}/email-campaigns/${id}`, {
+    headers: campaignHeaders(),
+  });
+  return response.data as {
+    success: boolean;
+    campaign: EmailCampaign;
+    stats: CampaignStats;
+    perCourse: Array<{
+      course_id: number;
+      course_name: string;
+      total: number;
+      sent: number;
+    }>;
+  };
+};
+
+export const getCampaignRecipients = async (
+  id: number,
+  params?: { page?: number; pageSize?: number; status?: string }
+) => {
+  const response = await axios.get(
+    `${API_URL}/email-campaigns/${id}/recipients`,
+    { params, headers: campaignHeaders() }
+  );
+  return response.data as {
+    success: boolean;
+    total: number;
+    page: number;
+    pageSize: number;
+    recipients: any[];
+  };
+};
+
+export const createEmailCampaign = async (payload: Record<string, unknown>) => {
+  const response = await axios.post(`${API_URL}/email-campaigns`, payload, {
+    headers: campaignHeaders(),
+  });
+  return response.data;
+};
+
+export const createCampaignReminder = async (
+  id: number,
+  payload: Record<string, unknown>
+) => {
+  const response = await axios.post(
+    `${API_URL}/email-campaigns/${id}/reminder`,
+    payload,
+    { headers: campaignHeaders() }
+  );
+  return response.data;
+};
+
+export const setCampaignStatus = async (
+  id: number,
+  action: "start" | "pause" | "cancel"
+) => {
+  const response = await axios.post(
+    `${API_URL}/email-campaigns/${id}/status/${action}`,
+    {},
+    { headers: campaignHeaders() }
+  );
+  return response.data;
+};
+
+export const sendCampaignChunkNow = async (id: number) => {
+  const response = await axios.post(
+    `${API_URL}/email-campaigns/${id}/send-now`,
+    {},
+    { headers: campaignHeaders() }
+  );
+  return response.data as { success: boolean; message: string; sent: number };
+};
+
+export const previewCampaignEmail = async (payload: Record<string, unknown>) => {
+  const response = await axios.post(
+    `${API_URL}/email-campaigns/preview`,
+    payload,
+    { headers: campaignHeaders() }
+  );
+  return response.data as {
+    success: boolean;
+    usedRealCandidate: boolean;
+    subject: string;
+    text: string;
+    html: string;
+  };
+};
