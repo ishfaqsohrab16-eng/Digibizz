@@ -34,11 +34,28 @@ export const CenterSummary = ({ centerStats }) => {
     return acc;
   }, {});
 
-  const courseLabels = mergeCategories(
+  const allCourseLabels = mergeCategories(
     courses.map((course) => course.course_name || course.course_full_name),
     // Course keys inside the center breakdown come from courses.course_name.
     Object.values(stats).flatMap((data) => Object.keys(data?.courses || {}))
   );
+
+  // Courses still being offered. Every card shows these, present or not, so
+  // the centers stay directly comparable.
+  const retiredCourses = new Set(
+    courses
+      .filter((course) => Number(course.course_status) === 0)
+      .map((course) => normalize(course.course_name || course.course_full_name))
+  );
+
+  const offeredLabels = allCourseLabels.filter(
+    (label) => !retiredCourses.has(normalize(label))
+  );
+
+  // If every course is retired, fall back to the full list rather than
+  // rendering cards with no rows at all.
+  const baseCourseLabels =
+    offeredLabels.length > 0 ? offeredLabels : allCourseLabels;
 
   const centerLabels = mergeCategories(
     centers.map((center) => center.center_name),
@@ -55,12 +72,21 @@ export const CenterSummary = ({ centerStats }) => {
       return acc;
     }, {});
 
+    // The offered courses, plus any retired course this particular center
+    // still has candidates in. That keeps a legacy count like MCKRU's
+    // "Technical 3" visible without adding a zero row to all twelve cards.
+    const extraLabels = allCourseLabels.filter(
+      (label) =>
+        !baseCourseLabels.includes(label) &&
+        Number(courseByKey[normalize(label)]?.total) > 0
+    );
+
     return {
       name: centerName,
       total: Number(data.total) || 0,
       male: Number(data.male) || 0,
       female: Number(data.female) || 0,
-      courses: courseLabels.map((courseName) => {
+      courses: [...baseCourseLabels, ...extraLabels].map((courseName) => {
         const value = courseByKey[normalize(courseName)] || emptyCourse;
         return {
           name: courseName,
@@ -71,6 +97,13 @@ export const CenterSummary = ({ centerStats }) => {
       }),
     };
   });
+
+  // Centers with no applications get one compact line rather than a full card
+  // of zeroes each. They are still listed - a center that is open but has had
+  // no applicants is worth knowing about - just not at the same weight as one
+  // with six hundred.
+  const activeRows = rows.filter((row) => row.total > 0);
+  const emptyRows = rows.filter((row) => row.total === 0);
 
   return (
     <div className="bg-[hsl(var(--card))] border border-[hsl(var(--border))] p-6 rounded-2xl animate-slide-in transform hover:scale-[1.01] transition-all duration-300 shadow-sm">
@@ -99,7 +132,7 @@ export const CenterSummary = ({ centerStats }) => {
         </p>
       ) : (
         <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
-          {rows.map((center, index) => (
+          {activeRows.map((center, index) => (
             <div
               key={center.name}
               className="bg-[hsl(var(--card))] rounded-xl p-5 shadow-sm hover:shadow-md transition-all duration-500 border border-[hsl(var(--border))] hover:border-[hsl(var(--primary))/0.4] group animate-fade-in"
@@ -161,6 +194,17 @@ export const CenterSummary = ({ centerStats }) => {
               </div>
             </div>
           ))}
+        </div>
+      )}
+
+      {emptyRows.length > 0 && (
+        <div className="mt-6 pt-4 border-t border-[hsl(var(--border))]">
+          <p className="text-xs uppercase tracking-wide text-[hsl(var(--muted-foreground))] font-medium">
+            No applications yet
+          </p>
+          <p className="mt-1.5 text-sm text-[hsl(var(--muted-foreground))]">
+            {emptyRows.map((center) => center.name).join(" · ")}
+          </p>
         </div>
       )}
     </div>

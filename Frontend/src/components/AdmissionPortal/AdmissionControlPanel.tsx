@@ -85,7 +85,9 @@ const LinkActions: React.FC<{
 const AdmissionControlPanel: React.FC = () => {
   const [batches, setBatches] = useState<Array<{ tb_id: number; tb_name: string }>>([]);
   const [centers, setCenters] = useState<Array<{ center_id: number; center_name: string }>>([]);
-  const [courses, setCourses] = useState<Array<{ course_id: number; course_full_name: string }>>([]);
+  const [courses, setCourses] = useState<
+    Array<{ course_id: number; course_full_name: string; course_status?: number }>
+  >([]);
   const [selectedBatchId, setSelectedBatchId] = useState<number>(0);
   const [rules, setRules] = useState<RuleMap>({});
   const [loading, setLoading] = useState(false);
@@ -111,7 +113,15 @@ const AdmissionControlPanel: React.FC = () => {
         const fetchedBatches = batchRes?.data || [];
         setBatches(fetchedBatches);
         setCenters(centerRes || []);
-        setCourses(courseRes || []);
+        // Retired courses (course_status 0) must not be offerable. Admissions
+        // cannot be opened for a course that is no longer running, and listing
+        // one here is how a candidate ends up applying to it.
+        setCourses(
+          (courseRes || []).filter(
+            (course: { course_status?: number }) =>
+              Number(course.course_status ?? 1) === 1
+          )
+        );
 
         if (fetchedBatches.length > 0) {
           const latest = [...fetchedBatches].sort((a, b) => b.tb_id - a.tb_id)[0];

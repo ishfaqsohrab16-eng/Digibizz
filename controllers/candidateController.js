@@ -13,6 +13,28 @@ const { validateAdmissionAvailability } = require("./admissionControlController"
 const AdmissionControl = require("../models/admissionControlModel");
 
 /**
+ * Read one figure out of the grouped gender statistics.
+ *
+ * cand_gender is free text and has been stored as "Male", "male", "FEMALE" and
+ * with stray whitespace over the years. The previous code compared male
+ * case-insensitively but female with an exact "Female" match, so every row
+ * stored in another casing vanished and the Female card read 0 while the
+ * center breakdown plainly showed hundreds of women. Normalise both sides, and
+ * sum rather than take the first match so two casings of the same gender are
+ * added together instead of one silently winning.
+ *
+ * @param {Array<{cand_gender: string, total: any, passed: any}>} rows
+ * @param {"male"|"female"} gender
+ * @param {"total"|"passed"} field
+ */
+const genderFigure = (rows, gender, field) =>
+  (rows || [])
+    .filter(
+      (row) => String(row.cand_gender ?? "").trim().toLowerCase() === gender
+    )
+    .reduce((sum, row) => sum + (Number(row[field]) || 0), 0);
+
+/**
  * Fields dropped from the registration form. Their columns are still NOT NULL
  * in the database and are read by existing screens (e.g. the Interview Portal
  * shows permanent_city), so new applications write a blank instead.
@@ -328,7 +350,17 @@ exports.getAllSelectedCandidates = async (req, res) => {
       }),
 
       Candidate.count({
-        where: { ...whereClause, cand_test_marks: "" },
+        where: {
+          ...whereClause,
+          // NULL is the normal state before a test is held; "" and "TBD" are
+          // the placeholders the portal writes. All three mean "not attempted",
+          // and matching only "" made this card read 0 for a whole batch.
+          [Op.or]: [
+            { cand_test_marks: null },
+            { cand_test_marks: "" },
+            { cand_test_marks: "TBD" },
+          ],
+        },
       }),
       Candidate.count({
         where: { ...whereClause, cand_admission_status: 2 },
@@ -394,7 +426,7 @@ exports.getAllSelectedCandidates = async (req, res) => {
           sequelize.fn(
             "SUM",
             sequelize.literal(
-              "CASE WHEN cand_admission_status = 'passed' THEN 1 ELSE 0 END"
+              "CASE WHEN cand_admission_status = 1 THEN 1 ELSE 0 END"
             )
           ),
           "passed",
@@ -538,28 +570,21 @@ exports.getAllSelectedCandidates = async (req, res) => {
         },
         genderSummary: {
           male: {
-            total: Number(
-              genderStats.find((s) => s.cand_gender.toLowerCase() === "male")?.total || 0
-            ),
-            passed: Number(
-              genderStats.find((s) => s.cand_gender === "Male")?.passed || 0
-            ),
+            total: genderFigure(genderStats, "male", "total"),
+            passed: genderFigure(genderStats, "male", "passed"),
           },
           female: {
-            total: Number(
-              genderStats.find((s) => s.cand_gender === "Female")?.total || 0
-            ),
-            passed: Number(
-              genderStats.find((s) => s.cand_gender === "Female")?.passed || 0
-            ),
+            total: genderFigure(genderStats, "female", "total"),
+            passed: genderFigure(genderStats, "female", "passed"),
           },
         },
         courseSummary: courseSummary.reduce(
           (acc, curr) => ({
             ...acc,
+            // Keyed by both names so either lookup resolves. The frontend
+            // treats them as aliases of one course, not two separate rows.
             [curr.course_name]: Number(curr.count) || 0,
             [curr.course_full_name]: Number(curr.count) || 0,
-            [curr.course_name]: Number(curr.count) || 0,
           }),
           {}
         ),
@@ -634,7 +659,17 @@ exports.getAllCandidates = async (req, res) => {
       }),
 
       Candidate.count({
-        where: { ...whereClause, cand_test_marks: "" },
+        where: {
+          ...whereClause,
+          // NULL is the normal state before a test is held; "" and "TBD" are
+          // the placeholders the portal writes. All three mean "not attempted",
+          // and matching only "" made this card read 0 for a whole batch.
+          [Op.or]: [
+            { cand_test_marks: null },
+            { cand_test_marks: "" },
+            { cand_test_marks: "TBD" },
+          ],
+        },
       }),
       Candidate.count({
         where: { ...whereClause, cand_admission_status: 2 },
@@ -661,7 +696,7 @@ exports.getAllCandidates = async (req, res) => {
           sequelize.fn(
             "SUM",
             sequelize.literal(
-              "CASE WHEN cand_admission_status = 'passed' THEN 1 ELSE 0 END"
+              "CASE WHEN cand_admission_status = 1 THEN 1 ELSE 0 END"
             )
           ),
           "passed",
@@ -789,28 +824,21 @@ exports.getAllCandidates = async (req, res) => {
         },
         genderSummary: {
           male: {
-            total: Number(
-              genderStats.find((s) => s.cand_gender.toLowerCase() === "male")?.total || 0
-            ),
-            passed: Number(
-              genderStats.find((s) => s.cand_gender === "Male")?.passed || 0
-            ),
+            total: genderFigure(genderStats, "male", "total"),
+            passed: genderFigure(genderStats, "male", "passed"),
           },
           female: {
-            total: Number(
-              genderStats.find((s) => s.cand_gender === "Female")?.total || 0
-            ),
-            passed: Number(
-              genderStats.find((s) => s.cand_gender === "Female")?.passed || 0
-            ),
+            total: genderFigure(genderStats, "female", "total"),
+            passed: genderFigure(genderStats, "female", "passed"),
           },
         },
         courseSummary: courseSummary.reduce(
           (acc, curr) => ({
             ...acc,
+            // Keyed by both names so either lookup resolves. The frontend
+            // treats them as aliases of one course, not two separate rows.
             [curr.course_name]: Number(curr.count) || 0,
             [curr.course_full_name]: Number(curr.count) || 0,
-            [curr.course_name]: Number(curr.count) || 0,
           }),
           {}
         ),

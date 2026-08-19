@@ -1,42 +1,58 @@
 import React from "react";
 import { BarChart3 } from "lucide-react";
-import { mergeCategories, useReferenceData } from "../../hooks/useReferenceData";
+import { useReferenceData } from "../../hooks/useReferenceData";
+
+const norm = (value) => String(value ?? "").trim().toLowerCase();
 
 /**
  * Applications per course.
  *
  * The course list used to be a hardcoded array of three full names, so
  * renaming a course in the database left the old label showing zero and any
- * fourth course never appeared. Rows now come from the courses table, plus
- * whatever keys the statistics themselves carry so historic counts under a
- * previous name are still visible rather than silently dropped.
+ * fourth course never appeared.
+ *
+ * The statistics arrive keyed by BOTH course_name and course_full_name -
+ * "AWE" and "Amazon Web and e-Commerce" are the same course carrying the same
+ * count. Treating the keys as a plain list therefore rendered every course
+ * twice. Rows are built one-per-course from the courses table instead, and a
+ * statistics key only becomes its own row when it matches no course at all,
+ * which is what keeps a renamed course's historic count visible.
  */
 export const CourseSummary = ({ courseStats }) => {
   const stats = courseStats || {};
   const { courses, loading } = useReferenceData();
 
-  // The API keys this map by both course_name and course_full_name, so prefer
-  // whichever of the two actually has a count for this course.
+  // Prefer whichever of the two aliases actually carries a count.
   const resolveCount = (course) => {
-    const candidates = [course.course_full_name, course.course_name];
-    for (const key of candidates) {
+    for (const key of [course.course_full_name, course.course_name]) {
       if (key && stats[key] !== undefined) return Number(stats[key]) || 0;
     }
     return 0;
   };
 
-  const knownLabels = courses.map((c) => c.course_full_name || c.course_name);
-  const rows = mergeCategories(knownLabels, Object.keys(stats)).map((label) => {
-    const course = courses.find(
-      (c) =>
-        (c.course_full_name || "").toLowerCase() === label.toLowerCase() ||
-        (c.course_name || "").toLowerCase() === label.toLowerCase()
-    );
-    return {
-      label,
-      value: course ? resolveCount(course) : Number(stats[label]) || 0,
-    };
-  });
+  // One row per course in the database. A retired course (course_status 0)
+  // only appears if it still has applications behind it - "Technical" is
+  // retired but carries historic candidates, and hiding it would lose them.
+  const rows = courses
+    .map((course) => ({
+      label: course.course_full_name || course.course_name,
+      value: resolveCount(course),
+      retired: Number(course.course_status) === 0,
+    }))
+    .filter((row) => !row.retired || row.value > 0);
+
+  // Every name a known course answers to, so its aliases are not re-added below.
+  const claimed = new Set(
+    courses.flatMap((course) =>
+      [course.course_name, course.course_full_name].filter(Boolean).map(norm)
+    )
+  );
+
+  for (const [key, value] of Object.entries(stats)) {
+    if (!key || claimed.has(norm(key))) continue;
+    claimed.add(norm(key));
+    rows.push({ label: key, value: Number(value) || 0 });
+  }
 
   return (
     <div className="bg-[hsl(var(--card))] border border-[hsl(var(--border))] p-4 sm:p-8 rounded-xl animate-slide-in shadow-sm hover-lift">

@@ -31,13 +31,6 @@ export const AdminNav = ({ openForm }: AdminNavProps) => {
             isParentOpen={isAdminOpen}
             onClick={() => openForm("EnrolledAdmin")}
           />
-          {/* Sends mail to real applicants, so it lives in the SuperAdmin-only
-              menu. Sidebar.tsx renders AdminNav for SuperAdmin alone. */}
-          <SubNavItem
-            label="Email Campaigns"
-            isParentOpen={isAdminOpen}
-            onClick={() => openForm("EmailCampaigns")}
-          />
         </div>
       )}
     </div>

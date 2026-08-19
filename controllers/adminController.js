@@ -14,6 +14,7 @@ const crypto = require("crypto");
 const TrainersCenterAllocationModel = require("../models/trainersCenterAllocationModel");
 const TrainingBatchModel = require("../models/trainingBatcheModel");
 const ActivityLogModel = require("../models/activityLogModel");
+const { recordLogin } = require("../utils/recordLogin");
 const sendEmail = require("../servec/emailConfig"); // Import email utility
 const {
   getAppSettings,
@@ -320,6 +321,12 @@ exports.loginAdmin = async (req, res) => {
       }
     }
 
+    // Staff access trail: who signed in, from which IP, with what client.
+    // Students are excluded inside the helper - they already have their
+    // logins in activity_logs below, and including them would bury the staff
+    // trail this table exists to provide. Awaited but never throws.
+    await recordLogin(req, user, { center_id, course_id, tb_id });
+
     // Log activity for trainers and students
     if (["trainer", "student"].includes(normalizedUserType)) {
       await ActivityLogModel.create({
@@ -511,6 +518,17 @@ exports.loginAsSubUser = async (req, res) => {
         break;
       }
     }
+
+    // An admin signing in as another user is a real access event, so it is
+    // recorded too - tagged as impersonation and carrying the admin's id, so
+    // the trail never suggests the staff member signed in themselves.
+    await recordLogin(req, user, {
+      center_id,
+      course_id,
+      tb_id: batch_id,
+      method: "impersonation",
+      impersonatedBy: req.user?.id || req.admin?.id || null,
+    });
 
     // Log activity for trainers and students
     if (["trainer", "student"].includes(user.user_type)) {

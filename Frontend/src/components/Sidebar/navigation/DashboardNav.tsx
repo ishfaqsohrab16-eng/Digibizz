@@ -14,11 +14,13 @@ import {
   ShieldQuestion,
   TicketIcon,
   BookOpen,
+  Mail,
 } from "lucide-react";
 import { NavItem } from "../NavItem";
 import { useEffect, useState } from "react";
 import { SubNavItem } from "../SubNavItem";
 import { useBatch } from "../../../context/BatchContext";
+import { isRole, ROLE } from "../../../utils/roles";
 
 interface DashboardNavProps {
   openForm: (formName: string) => void;
@@ -150,6 +152,18 @@ export const DashboardNav = ({
             isPermanentBorder
           />
         </>
+      )}
+      {/* Sits with the other admissions screens because that is where it is
+          used, but stays SuperAdmin-only - the block above also admits
+          ContentAdmin, who must not be able to mail applicants. */}
+      {isRole(userType, ROLE.SUPER_ADMIN) && (
+        <NavItem
+          icon={<Mail size={20} />}
+          label="Email Campaigns"
+          onClick={() => openForm("EmailCampaigns")}
+          href={createNavUrl("/dashboard/EmailCampaigns")}
+          isPermanentBorder
+        />
       )}
       {userType !== "Center Manager" && (
         <NavItem
