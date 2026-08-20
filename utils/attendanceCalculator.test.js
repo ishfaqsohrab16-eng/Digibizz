@@ -6,11 +6,13 @@
  *
  * The rules under test (agreed with the program team):
  *   1. Counting starts at the student's FIRST marked attendance for the class.
- *   2. Approved leave ("L") counts as present.
- *   3. A day the class ran but this student was never marked is skipped, not
- *      counted as absent, and reported as `unmarkedDays`.
- *   4. Future-dated and invalid rows are ignored.
- *   5. Duplicate rows for one student/date resolve to the highest attend_id.
+ *   2. Nothing before that first mark is ever held against the student.
+ *   3. Approved leave ("L") counts as present.
+ *   4. A day the class ran but this student was never marked is SKIPPED, not
+ *      counted as absent, and reported as `unmarkedDays` so the trainer data
+ *      gap stays findable.
+ *   5. Future-dated and invalid rows are ignored.
+ *   6. Duplicate rows for one student/date resolve to the highest attend_id.
  */
 const path = require("path");
 const fs = require("fs");
@@ -68,13 +70,24 @@ check(
 );
 
 check(
-  "class ran 4 days, student marked on 3 -> denominator 3, 1 flagged",
+  "class ran 4 days, student marked on 3 -> denominator 3, 1 flagged unmarked",
   [
     row("A", D1, "P"), row("A", D2, "P"), row("A", D4, "P"),
     row("B", D1, "P"), row("B", D2, "P"), row("B", D3, "P"), row("B", D4, "P"),
   ],
   "A",
   `100% denom=3 unmarked=1 first=${D1}`
+);
+
+check(
+  "sparse records score 100% but surface 3 unmarked days - a records problem",
+  [
+    row("A", D1, "P"), row("A", D5, "P"),
+    row("B", D1, "P"), row("B", D2, "P"), row("B", D3, "P"),
+    row("B", D4, "P"), row("B", D5, "P"),
+  ],
+  "A",
+  `100% denom=2 unmarked=3 first=${D1}`
 );
 
 check(
@@ -85,6 +98,19 @@ check(
   ],
   "A",
   `50% denom=2 unmarked=0 first=${D4}`
+);
+
+check(
+  "a late joiner's window starts at their own first mark, not the class's",
+  [
+    row("B", D1, "P"), row("B", D2, "P"), row("B", D3, "P"),
+    row("B", D4, "P"), row("B", D5, "P"),
+    row("A", D3, "P"),
+  ],
+  "A",
+  // Class ran D1..D5. A joined at D3, so D1 and D2 are outside their window
+  // entirely and are NOT reported as unmarked; D4 and D5 are gaps inside it.
+  `100% denom=1 unmarked=2 first=${D3}`
 );
 
 check(

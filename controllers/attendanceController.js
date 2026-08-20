@@ -672,7 +672,11 @@ exports.getAttendanceSummary = async (req, res) => {
         center_id: student.center_id,
         course_id: student.course_id,
         first_marked_date: stats.firstMarkedDate || null,
+        // Days this student was actually marked - the percentage's
+        // denominator. class_days_since_joining is the window it sits inside,
+        // and the difference between the two is unmarked_days.
         total_classes: stats.daysCounted || 0,
+        class_days_since_joining: stats.classDaysSinceFirstMark || 0,
         present_count: stats.present || 0,
         absent_count: stats.absent || 0,
         leave_count: stats.leave || 0,

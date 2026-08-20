@@ -17,7 +17,11 @@ const sendEmail = require("../servec/emailConfig"); // Make sure you have a send
 const { sendEmailSafe, escapeHtml } = require("../servec/emailConfig");
 const Earning = require("../models/earningsModel");
 const CenterManager = require("../models/centerUsersModel");
-const HolidayDates = require("../models/holidaysModel");
+const {
+  dedupeByStudentAndDate,
+  buildStats,
+  toDateKey,
+} = require("../utils/attendanceCalculator");
 exports.registerStudent = async (req, res) => {
   const transaction = await sequelize.transaction(); // Initialize transaction
   try {
@@ -171,8 +175,6 @@ const fetchBulkStudentStatistics = async (students, tb_id, batchEndDate) => {
       documents,
       professionalProfiles,
       attendanceRecords,
-      holidays,
-      centerDates
     ] = await Promise.all([
       // Bulk ticket counts
       sequelize.query(
@@ -214,26 +216,22 @@ const fetchBulkStudentStatistics = async (students, tb_id, batchEndDate) => {
           std_cnic: { [Op.in]: studentCNICs },
           tb_id: tb_id,
         },
-        attributes: ["std_cnic", "attend_status", "attend_date"],
+        // attend_id resolves duplicate rows for one student/date (highest
+        // wins); center_id and course_id group the class days per class.
+        attributes: [
+          "attend_id",
+          "std_cnic",
+          "attend_status",
+          "attend_date",
+          "center_id",
+          "course_id",
+        ],
         raw: true,
       }),
-      // Bulk holidays
-      HolidayDates.findAll({
-        where: { 
-          tb_id: tb_id,
-        },
-        attributes: ["h_date", "center_id"],
-        raw: true,
-      }),
-      // Bulk center dates
-      sequelize.query(
-        `SELECT center_id, tb_start, tb_end FROM centers_dates 
-         WHERE tb_id = :tb_id`,
-        {
-          replacements: { tb_id },
-          type: sequelize.QueryTypes.SELECT,
-        }
-      )
+      // Holidays and center start/end dates used to be fetched here for the
+      // old bespoke attendance formula. The shared calculator derives class
+      // days from the attendance rows themselves, so both queries were pure
+      // overhead on a screen that loads hundreds of students at once.
     ]);
 
     // Create lookup maps for O(1) access
@@ -241,8 +239,6 @@ const fetchBulkStudentStatistics = async (students, tb_id, batchEndDate) => {
     const feedbackMap = new Map(feedbackCounts.map(f => [f.std_rollno, f.count]));
     const documentsMap = new Map();
     const profilesMap = new Map();
-    const attendanceMap = new Map();
-    const centerDatesMap = new Map(centerDates.map(cd => [cd.center_id, cd]));
     
     // Group documents by CNIC
     documents.forEach(doc => {
@@ -260,119 +256,68 @@ const fetchBulkStudentStatistics = async (students, tb_id, batchEndDate) => {
       profilesMap.get(profile.std_cnic).push(profile);
     });
     
-    // Group attendance by CNIC
-    attendanceRecords.forEach(record => {
-      if (!attendanceMap.has(record.std_cnic)) {
-        attendanceMap.set(record.std_cnic, new Map());
-      }
-      const normalizeDate = (date) => {
-        const d = new Date(date);
-        d.setHours(0, 0, 0, 0);
-        return d;
-      };
-      const dateStr = normalizeDate(new Date(record.attend_date)).toISOString().split("T")[0];
-      attendanceMap.get(record.std_cnic).set(dateStr, record.attend_status.toUpperCase());
-    });
-    
-    // Create holiday sets by center
-    const holidaysByCenter = new Map();
-    const globalHolidays = new Set();
-    
-    holidays.forEach(h => {
-      const normalizeDate = (date) => {
-        const d = new Date(date);
-        d.setHours(0, 0, 0, 0);
-        return d;
-      };
-      const dateStr = normalizeDate(new Date(h.h_date)).toISOString().split("T")[0];
-      
-      if (h.center_id === null) {
-        globalHolidays.add(dateStr);
-      } else {
-        if (!holidaysByCenter.has(h.center_id)) {
-          holidaysByCenter.set(h.center_id, new Set());
-        }
-        holidaysByCenter.get(h.center_id).add(dateStr);
-      }
+    // Attendance percentages come from the shared calculator so this table
+    // agrees with the dashboard, the attendance history and the student's own
+    // calendar. This function used to run its own formula - counting every
+    // Mon-Fri from the student's LMS signup date and treating holidays as
+    // present - which produced a different number from every other screen and,
+    // more importantly, ignored the agreed rule that the clock starts at the
+    // student's FIRST marked attendance.
+    //
+    // A "class day" is any date attendance was recorded for that class, so
+    // holidays, weekends and non-teaching days are excluded for free and the
+    // holiday/center-date lookups are no longer needed here.
+    const attendanceByStudent = dedupeByStudentAndDate(attendanceRecords);
+
+    // Class days are per class (center + course), not per batch: two centers
+    // teach on different days, and mixing them would judge a student against
+    // days their own class never ran.
+    const classDatesByClass = new Map();
+    attendanceRecords.forEach((record) => {
+      const dateKey = toDateKey(record.attend_date);
+      if (!dateKey) return;
+      const key = `${record.center_id}|${record.course_id}`;
+      if (!classDatesByClass.has(key)) classDatesByClass.set(key, new Set());
+      classDatesByClass.get(key).add(dateKey);
     });
 
-    // Calculate attendance for each student
+    const classDatesFor = (student) => {
+      const set = classDatesByClass.get(`${student.center_id}|${student.course_id}`);
+      return set ? [...set].sort() : [];
+    };
+
     const statsMap = {};
-    
+
     students.forEach(student => {
       let attendanceProgress = 0;
-      
+      let attendanceDetail = null;
+
       try {
-        const centerDatesResult = centerDatesMap.get(student.center_id);
-        
-        let startDate = null;
-        if (student.std_added_on) {
-          startDate = new Date(student.std_added_on);
-        } else if (centerDatesResult && centerDatesResult.tb_start) {
-          startDate = new Date(centerDatesResult.tb_start);
-        }
-
-        let endDate = null;
-        if (centerDatesResult && centerDatesResult.tb_end) {
-          endDate = new Date(centerDatesResult.tb_end);
-        }
-
-        if (startDate && endDate) {
-          const normalizeDate = (date) => {
-            const d = new Date(date);
-            d.setHours(0, 0, 0, 0);
-            return d;
-          };
-
-          startDate = normalizeDate(startDate);
-          endDate = normalizeDate(endDate);
-          const currentDate = normalizeDate(new Date());
-
-          const studentAttendanceMap = attendanceMap.get(student.std_cnic) || new Map();
-          const centerHolidays = holidaysByCenter.get(student.center_id) || new Set();
-          const allHolidays = new Set([...globalHolidays, ...centerHolidays]);
-
-          const effectiveEndDate = currentDate < endDate ? currentDate : endDate;
-
-          let totalWorkingDays = 0;
-          let presentDays = 0;
-
-          for (
-            let date = new Date(startDate);
-            date <= effectiveEndDate;
-            date.setDate(date.getDate() + 1)
-          ) {
-            const dayOfWeek = date.getDay();
-            const dateStr = date.toISOString().split("T")[0];
-            
-            if (dayOfWeek === 0 || dayOfWeek === 6) {
-              continue;
-            }
-
-            totalWorkingDays++;
-
-            const isHoliday = allHolidays.has(dateStr);
-            const attendStatus = studentAttendanceMap.get(dateStr);
-
-            if (isHoliday || attendStatus === 'P' || attendStatus === 'L') {
-              presentDays++;
-            }
-          }
-
-          attendanceProgress = Math.min(
-            totalWorkingDays > 0
-              ? Math.round((presentDays / totalWorkingDays) * 100)
-              : 0,
-            100
-          );
-        }
+        const stats = buildStats(
+          attendanceByStudent.get(String(student.std_cnic)),
+          classDatesFor(student)
+        );
+        attendanceProgress = stats.percentage;
+        attendanceDetail = {
+          firstMarkedDate: stats.firstMarkedDate,
+          daysCounted: stats.daysCounted,
+          classDaysSinceFirstMark: stats.classDaysSinceFirstMark,
+          present: stats.present,
+          absent: stats.absent,
+          leave: stats.leave,
+          unmarkedDays: stats.unmarkedDays,
+        };
       } catch (attendanceError) {
         console.error(`Error calculating attendance for ${student.std_cnic}:`, attendanceError);
         attendanceProgress = 0;
       }
-      
+
       statsMap[student.std_cnic] = {
         attendanceProgress,
+        // The numbers behind the percentage. Unmarked class days are excluded
+        // from it, so unmarkedDays is what reveals a 100% that is really just
+        // three records out of twelve class days.
+        attendanceDetail,
         tickets: {
           count: ticketMap.get(student.std_rollno) || 0,
         },

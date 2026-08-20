@@ -460,7 +460,11 @@ exports.getStudentDashoard = async (req, res) => {
         attendanceDetail: attendanceDetail
           ? {
               firstMarkedDate: attendanceDetail.firstMarkedDate,
+              // daysCounted is the denominator (days actually marked);
+              // classDaysSinceFirstMark is the window it sits inside, so the
+              // difference is unmarkedDays.
               daysCounted: attendanceDetail.daysCounted,
+              classDaysSinceFirstMark: attendanceDetail.classDaysSinceFirstMark,
               present: attendanceDetail.present,
               absent: attendanceDetail.absent,
               leave: attendanceDetail.leave,

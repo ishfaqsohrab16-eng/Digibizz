@@ -13,11 +13,19 @@ const Attendance = require("../models/attendanceModel");
  *     class (center + course + batch) - not the batch start and not their LMS
  *     signup date. An enrolled student is marked P, A or L every class day, so
  *     their first mark is the day they effectively joined the class.
- *  2. "L" (approved leave) counts as present - it must not hurt the student.
- *  3. A day where the class ran but this student has no record at all is a
+ *  2. The window runs from that first mark through to the most recent day
+ *     attendance was taken for the class. Nothing before the student's first
+ *     mark is ever held against them.
+ *  3. "L" (approved leave) counts as present - it must not hurt the student.
+ *  4. A day where the class ran but this student has no record at all is a
  *     trainer data gap: it is skipped, not counted as absent, and reported
  *     separately as `unmarkedDays` so it can be found and fixed.
- *  4. Future-dated records are ignored.
+ *  5. Future-dated records are ignored.
+ *
+ * Rule 4 is a deliberate trade-off. It means a student marked on 3 of 12 class
+ * days, all present, scores 100% rather than 25% - so `unmarkedDays` and
+ * `classDaysSinceFirstMark` are reported alongside the percentage, and a high
+ * `unmarkedDays` should be read as "records missing", not "good attendance".
  *
  * No schema changes are required. Because the attendance table has no unique
  * constraint and no timestamps, duplicate rows for the same student/date are
@@ -129,17 +137,27 @@ const buildStats = (ownRecords, classDates) => {
     }
   });
 
-  // Denominator: the days this student was actually marked. Days the class ran
-  // without a record for them are skipped (rule 3) and reported instead.
-  const daysCounted = ownDates.length;
+  const markedDays = ownDates.length;
   const credited = present + (LEAVE_COUNTS_AS_PRESENT ? leave : 0);
 
+  // Denominator: the days this student was actually marked (rule 4). A class
+  // day with no record for them is a trainer data gap, not an absence, so it
+  // is excluded from the percentage rather than held against the student.
+  //
+  // `classDates` only contains days attendance was actually recorded for this
+  // class, so holidays and non-teaching days never enter the window either.
+  const daysCounted = markedDays;
+
+  // The window itself is still measured, so the gaps stay visible: a student
+  // with 100% over 3 marked days out of 12 class days is a records problem,
+  // and unmarkedDays is what makes that findable.
   const classDaysSinceFirstMark = classDates.filter((d) => d >= firstMarkedDate).length;
-  const unmarkedDays = Math.max(classDaysSinceFirstMark - daysCounted, 0);
+  const unmarkedDays = Math.max(classDaysSinceFirstMark - markedDays, 0);
 
   return {
     firstMarkedDate,
     daysCounted,
+    markedDays,
     present,
     absent,
     leave,
