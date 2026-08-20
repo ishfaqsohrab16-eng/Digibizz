@@ -3568,6 +3568,8 @@ export interface EmailCampaign {
   ec_contact_person?: string | null;
   ec_contact_phone?: string | null;
   ec_message?: string | null;
+  /** Author-written HTML replacing the built-in letter; null = built-in. */
+  ec_custom_html?: string | null;
   ec_status: "draft" | "running" | "paused" | "completed" | "cancelled";
   ec_last_run_at?: string | null;
   ec_next_run_at?: string | null;
@@ -3709,5 +3711,97 @@ export const previewCampaignEmail = async (payload: Record<string, unknown>) => 
     subject: string;
     text: string;
     html: string;
+  };
+};
+
+export interface CampaignRecipientRow {
+  cand_id: number;
+  name: string;
+  father_name: string;
+  cnic: string;
+  email: string;
+  phone: string;
+  gender: string;
+  course: string;
+}
+
+/** The exact people a campaign would contact, before it is created. */
+export const previewCampaignRecipients = async (
+  tb_id: number,
+  center_id: number,
+  count: number
+) => {
+  const response = await axios.get(
+    `${API_URL}/email-campaigns/recipients/preview`,
+    { params: { tb_id, center_id, count }, headers: campaignHeaders() }
+  );
+  return response.data as {
+    success: boolean;
+    requested: number;
+    selected: number;
+    available: number;
+    alreadyContacted: number;
+    recipients: CampaignRecipientRow[];
+  };
+};
+
+/**
+ * Trigger a browser download of a CSV the server generates.
+ *
+ * Fetched as a blob with the auth header rather than pointed at with a plain
+ * link: these endpoints require a bearer token, which a normal navigation
+ * cannot send.
+ */
+const downloadBlob = async (url: string, params: Record<string, unknown>) => {
+  const response = await axios.get(url, {
+    params,
+    headers: { Authorization: `Bearer ${getCurrentUserToken()}` },
+    responseType: "blob",
+  });
+
+  const disposition = String(response.headers?.["content-disposition"] || "");
+  const match = disposition.match(/filename="?([^"]+)"?/i);
+  const filename = match?.[1] || "recipients.csv";
+
+  const href = window.URL.createObjectURL(new Blob([response.data]));
+  const link = document.createElement("a");
+  link.href = href;
+  link.download = filename;
+  document.body.appendChild(link);
+  link.click();
+  link.remove();
+  // Revoking immediately can cancel the download in some browsers.
+  window.setTimeout(() => window.URL.revokeObjectURL(href), 1000);
+};
+
+/** Download the list a campaign WOULD contact, before creating it. */
+export const downloadCampaignRecipientPreview = (
+  tb_id: number,
+  center_id: number,
+  count: number
+) =>
+  downloadBlob(`${API_URL}/email-campaigns/recipients/preview`, {
+    tb_id,
+    center_id,
+    count,
+    format: "csv",
+  });
+
+/** Download the frozen recipient list of an existing campaign. */
+export const downloadCampaignRecipients = (id: number) =>
+  downloadBlob(`${API_URL}/email-campaigns/${id}/recipients/export`, {});
+
+/** Send the dummy proof copy to the configured test addresses. */
+export const sendCampaignTest = async (id: number) => {
+  const response = await axios.post(
+    `${API_URL}/email-campaigns/${id}/test`,
+    {},
+    { headers: campaignHeaders() }
+  );
+  return response.data as {
+    success: boolean;
+    message: string;
+    sent: string[];
+    failed: Array<{ to: string; error: string }>;
   };
 };

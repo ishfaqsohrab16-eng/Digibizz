@@ -1,9 +1,18 @@
 import React, { useEffect, useMemo, useState } from "react";
-import { Loader2, Mail, Eye, Info } from "lucide-react";
+import {
+  Loader2,
+  Mail,
+  Eye,
+  Info,
+  Download,
+  Monitor,
+  Smartphone,
+} from "lucide-react";
 import { toast } from "sonner";
 import {
   CampaignEligibility,
   createEmailCampaign,
+  downloadCampaignRecipientPreview,
   getCampaignEligibility,
   previewCampaignEmail,
 } from "../../services/api";
@@ -27,6 +36,23 @@ const Field: React.FC<{
   </div>
 );
 
+const MERGE_TOKENS = [
+  "name",
+  "father_name",
+  "cnic",
+  "phone",
+  "course",
+  "center",
+  "batch",
+  "interview_date",
+  "interview_time",
+  "reporting_time",
+  "venue",
+  "contact_person",
+  "contact_phone",
+  "message",
+];
+
 const inputClass =
   "mt-1.5 w-full rounded-md border border-slate-300 px-3 py-2 text-sm outline-none focus:border-emerald-500";
 
@@ -49,6 +75,10 @@ const CampaignForm: React.FC<Props> = ({ onCreated, onCancel }) => {
   const [saving, setSaving] = useState(false);
   const [previewHtml, setPreviewHtml] = useState<string | null>(null);
   const [previewing, setPreviewing] = useState(false);
+  const [downloading, setDownloading] = useState(false);
+  // "template" = the built-in interview letter, "custom" = the admin's own HTML.
+  const [bodyMode, setBodyMode] = useState<"template" | "custom">("template");
+  const [device, setDevice] = useState<"desktop" | "mobile">("desktop");
 
   const [form, setForm] = useState({
     ec_name: "",
@@ -65,6 +95,7 @@ const CampaignForm: React.FC<Props> = ({ onCreated, onCancel }) => {
     ec_contact_person: "",
     ec_contact_phone: "",
     ec_message: "",
+    ec_custom_html: "",
     startNow: false,
   });
 
@@ -165,13 +196,28 @@ const CampaignForm: React.FC<Props> = ({ onCreated, onCancel }) => {
     form.ec_max_gap_seconds,
   ]);
 
+  /**
+   * What the server will actually render.
+   *
+   * Custom HTML is only sent when that mode is selected, so switching back to
+   * the built-in letter really does fall back to it rather than leaving
+   * orphaned markup in the box still driving the email.
+   */
+  const emailPayload = useMemo(
+    () => ({
+      ...form,
+      ec_custom_html: bodyMode === "custom" ? form.ec_custom_html : "",
+    }),
+    [form, bodyMode]
+  );
+
   const handlePreview = async () => {
     setPreviewing(true);
     try {
       const result = await previewCampaignEmail({
         tb_id: selectedBatchId,
         center_id: centerId || undefined,
-        ...form,
+        ...emailPayload,
       });
       setPreviewHtml(result.html);
     } catch (error) {
@@ -180,6 +226,54 @@ const CampaignForm: React.FC<Props> = ({ onCreated, onCancel }) => {
       );
     } finally {
       setPreviewing(false);
+    }
+  };
+
+  // Live preview. Debounced so typing HTML does not fire a request per
+  // keystroke, and rendered server-side so what is shown is the same output
+  // the recipient gets - a local approximation could drift from it.
+  useEffect(() => {
+    const timer = window.setTimeout(() => {
+      previewCampaignEmail({
+        tb_id: selectedBatchId,
+        center_id: centerId || undefined,
+        ...emailPayload,
+      })
+        .then((result) => setPreviewHtml(result.html))
+        .catch(() => {
+          /* keep the last good preview rather than blanking the pane */
+        });
+    }, 600);
+
+    return () => window.clearTimeout(timer);
+  }, [emailPayload, selectedBatchId, centerId]);
+
+  /** Download exactly who this campaign would contact, before creating it. */
+  const handleDownloadList = async () => {
+    if (!centerId) {
+      toast.error("Choose a center first");
+      return;
+    }
+    if (willSend === 0) {
+      toast.error("Nobody is available to contact with these settings");
+      return;
+    }
+
+    setDownloading(true);
+    try {
+      await downloadCampaignRecipientPreview(
+        selectedBatchId,
+        centerId,
+        Number(form.ec_target_count) || 0
+      );
+      toast.success("Recipient list downloaded");
+    } catch (error: any) {
+      toast.error(
+        error?.response?.data?.message ||
+          (error instanceof Error ? error.message : "Could not build the list")
+      );
+    } finally {
+      setDownloading(false);
     }
   };
 
@@ -202,12 +296,18 @@ const CampaignForm: React.FC<Props> = ({ onCreated, onCancel }) => {
     setSaving(true);
     try {
       const response = await createEmailCampaign({
-        ...form,
+        ...emailPayload,
         tb_id: selectedBatchId,
         center_id: centerId,
       });
       if (response?.success) {
-        toast.success(response.message || "Campaign created");
+        const test = response.test;
+        const testNote = test?.sent?.length
+          ? ` A test copy went to ${test.sent.join(" and ")}.`
+          : test?.failed?.length
+          ? " The test copy could not be sent - check SMTP."
+          : "";
+        toast.success((response.message || "Campaign created") + testNote);
         onCreated();
       } else {
         toast.error(response?.message || "Could not create the campaign");
@@ -328,6 +428,22 @@ const CampaignForm: React.FC<Props> = ({ onCreated, onCancel }) => {
                 will be queued.
               </p>
             )}
+
+            {/* Check the actual list before anything is sent. Built by the same
+                selection the create path uses, so it is not an approximation. */}
+            <button
+              type="button"
+              onClick={handleDownloadList}
+              disabled={downloading || willSend === 0}
+              className="mt-4 inline-flex items-center gap-2 rounded-md border border-slate-300 bg-white px-3 py-2 text-sm font-medium text-slate-700 hover:bg-slate-50 disabled:cursor-not-allowed disabled:opacity-40"
+            >
+              {downloading ? (
+                <Loader2 className="h-4 w-4 animate-spin" />
+              ) : (
+                <Download className="h-4 w-4" />
+              )}
+              Download these {willSend} recipients (CSV)
+            </button>
           </div>
         )}
       </div>
@@ -484,19 +600,168 @@ const CampaignForm: React.FC<Props> = ({ onCreated, onCancel }) => {
         </label>
       </div>
 
-      {previewHtml && (
-        <div className="rounded-lg border border-slate-200 bg-white p-5">
-          <h3 className="mb-3 text-base font-semibold text-slate-900">
-            Email preview
-          </h3>
-          <iframe
-            title="Email preview"
-            srcDoc={previewHtml}
-            sandbox=""
-            className="h-[520px] w-full rounded-md border border-slate-200"
-          />
+      {/* Compose: preview on the left, editor on the right. The preview is the
+          bigger half because it is what gets checked; the editor only needs to
+          be wide enough to read a line of HTML. */}
+      <div className="rounded-lg border border-slate-200 bg-white p-5">
+        <div className="flex flex-wrap items-start justify-between gap-4">
+          <div>
+            <h3 className="text-base font-semibold text-slate-900">
+              Email body
+            </h3>
+            <p className="mt-1 text-xs text-slate-500">
+              Use the built-in interview letter, or write your own HTML.
+            </p>
+          </div>
+
+          <div className="inline-flex rounded-md border border-slate-300 p-0.5">
+            <button
+              type="button"
+              onClick={() => setBodyMode("template")}
+              className={`rounded px-3 py-1.5 text-sm font-medium transition-colors ${
+                bodyMode === "template"
+                  ? "bg-emerald-600 text-white"
+                  : "text-slate-600 hover:bg-slate-50"
+              }`}
+            >
+              Built-in letter
+            </button>
+            <button
+              type="button"
+              onClick={() => setBodyMode("custom")}
+              className={`rounded px-3 py-1.5 text-sm font-medium transition-colors ${
+                bodyMode === "custom"
+                  ? "bg-emerald-600 text-white"
+                  : "text-slate-600 hover:bg-slate-50"
+              }`}
+            >
+              Custom HTML
+            </button>
+          </div>
         </div>
-      )}
+
+        <div className="mt-5 grid grid-cols-1 gap-5 lg:grid-cols-[minmax(0,1fr)_minmax(0,1fr)]">
+          {/* Preview - left */}
+          <div className="order-1">
+            <div className="mb-2 flex items-center justify-between">
+              <span className="text-xs font-semibold uppercase tracking-wide text-slate-500">
+                Live preview
+              </span>
+              <div className="inline-flex rounded-md border border-slate-300 p-0.5">
+                <button
+                  type="button"
+                  onClick={() => setDevice("desktop")}
+                  aria-pressed={device === "desktop"}
+                  title="Desktop width"
+                  className={`inline-flex items-center gap-1.5 rounded px-2.5 py-1 text-xs font-medium transition-colors ${
+                    device === "desktop"
+                      ? "bg-slate-800 text-white"
+                      : "text-slate-600 hover:bg-slate-50"
+                  }`}
+                >
+                  <Monitor className="h-3.5 w-3.5" /> Desktop
+                </button>
+                <button
+                  type="button"
+                  onClick={() => setDevice("mobile")}
+                  aria-pressed={device === "mobile"}
+                  title="Mobile width"
+                  className={`inline-flex items-center gap-1.5 rounded px-2.5 py-1 text-xs font-medium transition-colors ${
+                    device === "mobile"
+                      ? "bg-slate-800 text-white"
+                      : "text-slate-600 hover:bg-slate-50"
+                  }`}
+                >
+                  <Smartphone className="h-3.5 w-3.5" /> Mobile
+                </button>
+              </div>
+            </div>
+
+            <div className="flex justify-center rounded-md border border-slate-200 bg-slate-100 p-3">
+              {previewHtml ? (
+                <iframe
+                  title="Email preview"
+                  srcDoc={previewHtml}
+                  // Sandboxed with no allow-* flags: nothing in an author's
+                  // pasted markup should be able to run inside the console.
+                  sandbox=""
+                  style={{ width: device === "mobile" ? 390 : "100%" }}
+                  className="h-[560px] max-w-full rounded border border-slate-300 bg-white transition-[width] duration-200"
+                />
+              ) : (
+                <div className="flex h-[560px] w-full items-center justify-center text-sm text-slate-500">
+                  <Loader2 className="mr-2 h-4 w-4 animate-spin" /> Rendering
+                  preview…
+                </div>
+              )}
+            </div>
+            <p className="mt-2 text-xs text-slate-500">
+              Rendered by the server using a real candidate from this center, so
+              this is what a recipient actually receives.
+            </p>
+          </div>
+
+          {/* Editor - right */}
+          <div className="order-2">
+            {bodyMode === "custom" ? (
+              <>
+                <label className="block text-xs font-semibold uppercase tracking-wide text-slate-500">
+                  Your HTML
+                </label>
+                <textarea
+                  value={form.ec_custom_html}
+                  onChange={(e) => set("ec_custom_html", e.target.value)}
+                  spellCheck={false}
+                  placeholder={
+                    "<div style=\"font-family:Arial,sans-serif\">\n  <h2>Dear {{name}},</h2>\n  <p>Your interview for {{course}} at {{center}} is on {{interview_date}}.</p>\n  <p>Venue: {{venue}}</p>\n</div>"
+                  }
+                  className="mt-1.5 h-[420px] w-full rounded-md border border-slate-300 p-3 font-mono text-xs leading-relaxed outline-none focus:border-emerald-500"
+                />
+                <div className="mt-3 rounded-md border border-slate-200 bg-slate-50 p-3">
+                  <p className="text-xs font-semibold text-slate-700">
+                    Merge tokens
+                  </p>
+                  <p className="mt-1 text-xs text-slate-500">
+                    Replaced per recipient. Unknown tokens become blank.
+                  </p>
+                  <div className="mt-2 flex flex-wrap gap-1.5">
+                    {MERGE_TOKENS.map((token) => (
+                      <button
+                        key={token}
+                        type="button"
+                        onClick={() =>
+                          set("ec_custom_html", `${form.ec_custom_html}{{${token}}}`)
+                        }
+                        title="Click to append"
+                        className="rounded border border-slate-300 bg-white px-1.5 py-0.5 font-mono text-[11px] text-slate-700 hover:border-emerald-500 hover:text-emerald-700"
+                      >
+                        {`{{${token}}}`}
+                      </button>
+                    ))}
+                  </div>
+                </div>
+              </>
+            ) : (
+              <div className="rounded-md border border-slate-200 bg-slate-50 p-4">
+                <p className="text-sm font-medium text-slate-800">
+                  Built-in interview letter
+                </p>
+                <p className="mt-1.5 text-xs text-slate-600">
+                  Personalised per recipient from their own application — name,
+                  father's name, masked CNIC, phone, course and center — plus the
+                  interview details you entered above. Nothing to write.
+                </p>
+                <ul className="mt-3 space-y-1 text-xs text-slate-600">
+                  <li>• Includes the "please bring with you" checklist</li>
+                  <li>• Reminder campaigns get their own wording automatically</li>
+                  <li>• Switch to Custom HTML to replace it entirely</li>
+                </ul>
+              </div>
+            )}
+          </div>
+        </div>
+      </div>
+
 
       <div className="flex flex-wrap justify-end gap-3">
         <button

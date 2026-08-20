@@ -21,6 +21,13 @@ const { sequelize } = require("../config/db");
  */
 const REQUIRED_COLUMNS = [
   {
+    table: "email_campaigns",
+    column: "ec_custom_html",
+    definition:
+      "LONGTEXT NULL DEFAULT NULL COMMENT 'Admin-authored HTML replacing the built-in letter; NULL = use the built-in template'",
+    migration: "migration/012_add_custom_html_to_email_campaigns.sql",
+  },
+  {
     table: "candidates",
     column: "is_uob_student",
     definition:

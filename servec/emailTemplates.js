@@ -1,7 +1,6 @@
 const { escapeHtml } = require("./emailConfig");
 
 const BRAND = "#4CAF50";
-const PORTAL_URL = process.env.LMS_PORTAL_URL || "https://lms.digibizz.gob.pk";
 const SUPPORT_EMAIL = process.env.SUPPORT_EMAIL || "info@digibizz.gob.pk";
 
 /** Format a date-ish value as `12 Aug 2026`; returns "" for empty/invalid. */
@@ -86,7 +85,6 @@ const documentShell = (title, contentHtml) => `<!doctype html>
  * @param {string} data.courseName            Course applied for
  * @param {string} data.centerName            Center applied for
  * @param {string} [data.batchName]
- * @param {string|Date} [data.batchStart]
  * @param {string|Date} [data.appliedOn]
  * @returns {{subject: string, text: string, html: string}}
  */
@@ -101,7 +99,6 @@ const applicationReceived = (data) => {
     courseName,
     centerName,
     batchName,
-    batchStart,
     appliedOn,
   } = data;
 
@@ -118,7 +115,6 @@ const applicationReceived = (data) => {
     ["Course Applied For", courseName],
     ["Center Applied For", centerName],
     ["Training Batch", batchName],
-    ["Batch Starts", formatDate(batchStart)],
     ["Applied On", formatDate(appliedOn) || formatDate(new Date())],
   ]);
 
@@ -151,14 +147,6 @@ const applicationReceived = (data) => {
         Quote your application number <strong>DGB-${escapeHtml(applicationId || "")}</strong> in any correspondence.
       </p>
 
-      <table role="presentation" cellpadding="0" cellspacing="0" style="margin:0 auto 8px;">
-        <tr>
-          <td style="background-color:${BRAND};border-radius:6px;">
-            <a href="${escapeHtml(PORTAL_URL)}" style="display:inline-block;padding:12px 26px;color:#ffffff;font-size:14px;font-weight:700;text-decoration:none;">Visit the Digibizz Portal</a>
-          </td>
-        </tr>
-      </table>
-
       <p style="margin:22px 0 0;color:#546e7a;font-size:14px;line-height:1.7;">
         Best regards,<br /><strong>Admissions Team</strong><br />Digibizz Program
       </p>
@@ -181,7 +169,6 @@ const applicationReceived = (data) => {
     courseName ? `Course Applied For: ${courseName}` : null,
     centerName ? `Center Applied For: ${centerName}` : null,
     batchName ? `Training Batch: ${batchName}` : null,
-    formatDate(batchStart) ? `Batch Starts: ${formatDate(batchStart)}` : null,
     `Applied On: ${formatDate(appliedOn) || formatDate(new Date())}`,
     "",
     "WHAT HAPPENS NEXT?",
@@ -192,7 +179,6 @@ const applicationReceived = (data) => {
     "Please bring your original CNIC and educational documents on the day of the test.",
     `Quote your application number DGB-${applicationId || ""} in any correspondence.`,
     "",
-    `Portal: ${PORTAL_URL}`,
     `Support: ${SUPPORT_EMAIL}`,
     "",
     "Best regards,",

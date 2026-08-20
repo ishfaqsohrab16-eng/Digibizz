@@ -7,15 +7,19 @@ import {
   Send,
   BellRing,
   XCircle,
+  Download,
+  FlaskConical,
 } from "lucide-react";
 import { toast } from "sonner";
 import {
   CampaignStats,
   EmailCampaign,
   createCampaignReminder,
+  downloadCampaignRecipients,
   getCampaignRecipients,
   getEmailCampaign,
   sendCampaignChunkNow,
+  sendCampaignTest,
   setCampaignStatus,
 } from "../../services/api";
 
@@ -181,6 +185,27 @@ const CampaignDetail: React.FC<Props> = ({ campaignId, onBack }) => {
         </div>
 
         <div className="flex flex-wrap gap-2">
+          {/* Available in every state: the list is worth keeping as a record
+              long after the campaign has finished. */}
+          <button
+            onClick={async () => {
+              try {
+                await downloadCampaignRecipients(campaign.ec_id);
+              } catch {
+                toast.error("Could not download the list");
+              }
+            }}
+            className="inline-flex items-center gap-1.5 rounded-md border border-slate-300 px-3 py-2 text-sm font-medium text-slate-700 hover:bg-slate-50"
+          >
+            <Download className="h-4 w-4" /> Download list
+          </button>
+          <button
+            onClick={() => act(() => sendCampaignTest(campaign.ec_id))}
+            disabled={busy}
+            className="inline-flex items-center gap-1.5 rounded-md border border-slate-300 px-3 py-2 text-sm font-medium text-slate-700 hover:bg-slate-50 disabled:opacity-50"
+          >
+            <FlaskConical className="h-4 w-4" /> Send test copy
+          </button>
           {canResume && (
             <button
               onClick={() =>

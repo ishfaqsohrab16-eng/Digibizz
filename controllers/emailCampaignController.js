@@ -95,6 +95,85 @@ const alreadyContactedIds = async (tb_id, center_id, { excludeCampaignId } = {})
 };
 
 /**
+ * Work out exactly who a new campaign would contact.
+ *
+ * Shared by createCampaign and the "download the list before sending"
+ * preview, deliberately: if the two computed the list separately they could
+ * drift, and the whole point of the download is that it shows the people who
+ * will actually be emailed.
+ *
+ * @returns {Promise<{chosen: object[], pool: object[], allocation: Map<number, number>, contacted: number}>}
+ */
+const selectRecipients = async (tb_id, center_id, target) => {
+  const contacted = await alreadyContactedIds(Number(tb_id), Number(center_id));
+
+  const where = {
+    tb_id: Number(tb_id),
+    center_id: Number(center_id),
+    cand_email: { [Op.and]: [{ [Op.ne]: null }, { [Op.ne]: "" }] },
+  };
+  if (contacted.length > 0) where.cand_id = { [Op.notIn]: contacted };
+
+  const pool = await Candidate.findAll({
+    where,
+    attributes: [
+      "cand_id",
+      "cand_name",
+      "cand_fathername",
+      "cand_email",
+      "cand_phone",
+      "cand_cnic",
+      "cand_gender",
+      "course_id",
+    ],
+    include: [
+      {
+        model: Course,
+        as: "courses",
+        attributes: ["course_name", "course_full_name"],
+      },
+    ],
+    order: [["cand_id", "ASC"]],
+  });
+
+  // Group by course, then split the requested total evenly across them.
+  const byCourse = new Map();
+  for (const candidate of pool) {
+    const key = Number(candidate.course_id);
+    if (!byCourse.has(key)) byCourse.set(key, []);
+    byCourse.get(key).push(candidate);
+  }
+
+  const allocation = allocateEvenly(
+    Math.max(0, Math.floor(Number(target) || 0)),
+    [...byCourse.entries()].map(([key, list]) => ({
+      key,
+      available: list.length,
+    }))
+  );
+
+  const chosen = [];
+  for (const [courseId, list] of byCourse.entries()) {
+    chosen.push(...list.slice(0, allocation.get(courseId) || 0));
+  }
+
+  return { chosen, pool, allocation, contacted: contacted.length };
+};
+
+/** Shape one candidate for the CSV / preview list. */
+const toListRow = (candidate) => ({
+  cand_id: candidate.cand_id,
+  name: candidate.cand_name || "",
+  father_name: candidate.cand_fathername || "",
+  cnic: candidate.cand_cnic || "",
+  email: candidate.cand_email || "",
+  phone: candidate.cand_phone || "",
+  gender: candidate.cand_gender || "",
+  course:
+    candidate.courses?.course_full_name || candidate.courses?.course_name || "",
+});
+
+/**
  * How many candidates a new campaign could reach right now, per course.
  * Drives the "available" figures on the create screen.
  */
@@ -176,6 +255,7 @@ exports.createCampaign = async (req, res) => {
       ec_contact_person,
       ec_contact_phone,
       ec_message,
+      ec_custom_html,
       startNow,
     } = req.body;
 
@@ -198,50 +278,19 @@ exports.createCampaign = async (req, res) => {
     const minGap = Math.max(0, Number(ec_min_gap_seconds) || 0);
     const maxGap = Math.max(minGap, Number(ec_max_gap_seconds) || minGap);
 
-    const contacted = await alreadyContactedIds(Number(tb_id), Number(center_id));
+    const { chosen, pool, allocation } = await selectRecipients(
+      tb_id,
+      center_id,
+      target
+    );
 
-    const where = {
-      tb_id: Number(tb_id),
-      center_id: Number(center_id),
-      cand_email: { [Op.and]: [{ [Op.ne]: null }, { [Op.ne]: "" }] },
-    };
-    if (contacted.length > 0) where.cand_id = { [Op.notIn]: contacted };
-
-    const candidates = await Candidate.findAll({
-      where,
-      attributes: ["cand_id", "cand_name", "cand_email", "course_id"],
-      order: [["cand_id", "ASC"]],
-      raw: true,
-    });
-
-    if (candidates.length === 0) {
+    if (pool.length === 0) {
       await transaction.rollback();
       return res.status(400).json({
         success: false,
         message:
           "Every candidate at this center has already been contacted for this batch.",
       });
-    }
-
-    // Group by course, then split the requested total evenly across them.
-    const byCourse = new Map();
-    for (const candidate of candidates) {
-      const key = Number(candidate.course_id);
-      if (!byCourse.has(key)) byCourse.set(key, []);
-      byCourse.get(key).push(candidate);
-    }
-
-    const allocation = allocateEvenly(
-      target,
-      [...byCourse.entries()].map(([key, list]) => ({
-        key,
-        available: list.length,
-      }))
-    );
-
-    const chosen = [];
-    for (const [courseId, list] of byCourse.entries()) {
-      chosen.push(...list.slice(0, allocation.get(courseId) || 0));
     }
 
     if (chosen.length === 0) {
@@ -270,6 +319,9 @@ exports.createCampaign = async (req, res) => {
         ec_contact_person: ec_contact_person || null,
         ec_contact_phone: ec_contact_phone || null,
         ec_message: ec_message || null,
+        // Empty means "use the built-in letter", so normalise blank to NULL
+        // rather than storing whitespace that would count as custom HTML.
+        ec_custom_html: String(ec_custom_html || "").trim() || null,
         ec_status: startNow ? "running" : "draft",
         // Due immediately when started; the dispatcher jitters every gap after
         // the first chunk.
@@ -293,6 +345,15 @@ exports.createCampaign = async (req, res) => {
 
     await transaction.commit();
 
+    // Proof copy to the test addresses, using the same render and transport a
+    // real recipient gets. Sent after the commit and never awaited into the
+    // failure path: a mail problem must not roll back a campaign that is
+    // already correctly stored.
+    const withCenter = await EmailCampaign.findByPk(campaign.ec_id, {
+      include: [{ model: Center, as: "center", attributes: ["center_name"] }],
+    });
+    const test = await dispatcher.sendTestCopies(withCenter || campaign);
+
     return res.status(201).json({
       success: true,
       message: `Campaign created for ${chosen.length} candidate(s)`,
@@ -301,6 +362,7 @@ exports.createCampaign = async (req, res) => {
         course_id,
         count,
       })),
+      test,
     });
   } catch (error) {
     await transaction.rollback();
@@ -713,6 +775,7 @@ exports.previewTemplate = async (req, res) => {
       ec_contact_person,
       ec_contact_phone,
       ec_message,
+      ec_custom_html,
       isReminder,
     } = req.body || {};
 
@@ -746,6 +809,7 @@ exports.previewTemplate = async (req, res) => {
       contactPerson: ec_contact_person,
       contactPhone: ec_contact_phone,
       message: ec_message,
+      customHtml: ec_custom_html,
       isReminder: Boolean(isReminder),
       subject: ec_subject,
     });
@@ -761,4 +825,202 @@ exports.previewTemplate = async (req, res) => {
   }
 };
 
+/** RFC 4180 escaping: quote the field and double any quote inside it. */
+const csvCell = (value) => {
+  const text = String(value ?? "");
+  return /[",\n\r]/.test(text) ? `"${text.replace(/"/g, '""')}"` : text;
+};
 
+const CSV_COLUMNS = [
+  ["cand_id", "Application ID"],
+  ["name", "Name"],
+  ["father_name", "Father Name"],
+  ["cnic", "CNIC"],
+  ["email", "Email"],
+  ["phone", "Phone"],
+  ["gender", "Gender"],
+  ["course", "Course"],
+];
+
+/**
+ * Render rows as CSV.
+ *
+ * Prefixed with a BOM so Excel reads it as UTF-8. Without it Excel assumes the
+ * system codepage and mangles any non-ASCII name, which is most of this list.
+ */
+const toCsv = (rows, columns = CSV_COLUMNS) => {
+  const header = columns.map(([, label]) => csvCell(label)).join(",");
+  const body = rows.map((row) =>
+    columns.map(([key]) => csvCell(row[key])).join(",")
+  );
+  return "﻿" + [header, ...body].join("\r\n") + "\r\n";
+};
+
+/** Filename-safe slug, so a center name cannot break the download header. */
+const slug = (value) =>
+  String(value || "list")
+    .replace(/[^a-z0-9]+/gi, "-")
+    .replace(/^-+|-+$/g, "")
+    .toLowerCase()
+    .slice(0, 60) || "list";
+
+const sendCsv = (res, filename, rows, columns) => {
+  res.setHeader("Content-Type", "text/csv; charset=utf-8");
+  res.setHeader("Content-Disposition", `attachment; filename="${filename}"`);
+  return res.send(toCsv(rows, columns));
+};
+
+/**
+ * The exact people a campaign WOULD contact, before it is created.
+ *
+ * Runs the same selection the real create path runs - the shared
+ * selectRecipients - so what the operator downloads and checks is precisely
+ * who would be emailed. A separate query here could drift from the real one,
+ * which would make the review worthless.
+ *
+ * Returns JSON by default, or a CSV attachment with ?format=csv.
+ */
+exports.previewRecipients = async (req, res) => {
+  try {
+    const tb_id = Number(req.query.tb_id);
+    const center_id = Number(req.query.center_id);
+    const target = Number(req.query.count);
+
+    if (!tb_id || !center_id) {
+      return res
+        .status(400)
+        .json({ success: false, message: "tb_id and center_id are required" });
+    }
+    if (!target || target < 1) {
+      return res.status(400).json({
+        success: false,
+        message: "Enter how many emails to send first",
+      });
+    }
+
+    const { chosen, pool, contacted } = await selectRecipients(
+      tb_id,
+      center_id,
+      target
+    );
+    const rows = chosen.map(toListRow);
+
+    if (String(req.query.format).toLowerCase() === "csv") {
+      const center = await Center.findByPk(center_id, {
+        attributes: ["center_name"],
+      });
+      return sendCsv(
+        res,
+        `campaign-recipients-${slug(center?.center_name)}-${rows.length}.csv`,
+        rows
+      );
+    }
+
+    return res.json({
+      success: true,
+      requested: target,
+      selected: rows.length,
+      available: pool.length,
+      alreadyContacted: contacted,
+      recipients: rows,
+    });
+  } catch (error) {
+    console.error("Error previewing campaign recipients:", error);
+    return res.status(500).json({ success: false, message: "Server error" });
+  }
+};
+
+/** Download the frozen recipient list of a campaign that already exists. */
+exports.exportRecipients = async (req, res) => {
+  try {
+    const campaign = await EmailCampaign.findByPk(req.params.id, {
+      include: [{ model: Center, as: "center", attributes: ["center_name"] }],
+    });
+
+    if (!campaign) {
+      return res
+        .status(404)
+        .json({ success: false, message: "Campaign not found" });
+    }
+
+    const recipients = await EmailCampaignRecipient.findAll({
+      where: { ec_id: campaign.ec_id },
+      include: [
+        {
+          model: Candidate,
+          as: "candidate",
+          attributes: [
+            "cand_id",
+            "cand_fathername",
+            "cand_cnic",
+            "cand_gender",
+            "cand_phone",
+          ],
+        },
+        {
+          model: Course,
+          as: "course",
+          attributes: ["course_name", "course_full_name"],
+        },
+      ],
+      order: [["ecr_id", "ASC"]],
+    });
+
+    // Name and address come from the frozen recipient row, not a live lookup:
+    // the export must show the address this campaign will actually use, even
+    // if the candidate record has been edited since.
+    const rows = recipients.map((row) => ({
+      cand_id: row.cand_id,
+      name: row.ecr_name || "",
+      father_name: row.candidate?.cand_fathername || "",
+      cnic: row.candidate?.cand_cnic || "",
+      email: row.ecr_email || "",
+      phone: row.candidate?.cand_phone || "",
+      gender: row.candidate?.cand_gender || "",
+      course: row.course?.course_full_name || row.course?.course_name || "",
+      status: row.ecr_status,
+      sent_at: row.ecr_sent_at ? new Date(row.ecr_sent_at).toISOString() : "",
+    }));
+
+    return sendCsv(
+      res,
+      `campaign-${campaign.ec_id}-${slug(campaign.ec_name)}.csv`,
+      rows,
+      [...CSV_COLUMNS, ["status", "Status"], ["sent_at", "Sent At"]]
+    );
+  } catch (error) {
+    console.error("Error exporting campaign recipients:", error);
+    return res.status(500).json({ success: false, message: "Server error" });
+  }
+};
+
+/** Re-send the dummy proof copy for an existing campaign. */
+exports.sendTest = async (req, res) => {
+  try {
+    const campaign = await EmailCampaign.findByPk(req.params.id, {
+      include: [{ model: Center, as: "center", attributes: ["center_name"] }],
+    });
+
+    if (!campaign) {
+      return res
+        .status(404)
+        .json({ success: false, message: "Campaign not found" });
+    }
+
+    const test = await dispatcher.sendTestCopies(campaign);
+
+    return res.json({
+      success: test.failed.length === 0,
+      message:
+        test.failed.length === 0
+          ? `Test copy sent to ${test.sent.join(", ")}`
+          : `Sent ${test.sent.length}, failed for ${test.failed
+              .map((entry) => entry.to)
+              .join(", ")}`,
+      ...test,
+    });
+  } catch (error) {
+    console.error("Error sending campaign test copy:", error);
+    return res.status(500).json({ success: false, message: "Server error" });
+  }
+};

@@ -7,7 +7,6 @@ const {
 } = require("./emailTemplates");
 
 const BRAND = "#4CAF50";
-const PORTAL_URL = process.env.LMS_PORTAL_URL || "https://lms.digibizz.gob.pk";
 const SUPPORT_EMAIL = process.env.SUPPORT_EMAIL || "info@digibizz.gob.pk";
 
 /** Turn a plain-text paragraph into HTML without letting markup through. */
@@ -31,7 +30,6 @@ const paragraphHtml = (value) =>
  * @param {string} [data.fatherName]
  * @param {string} [data.cnic]              Masked before display
  * @param {string} [data.phone]
- * @param {number|string} [data.applicationId]
  * @param {string} [data.courseName]        Course applied for
  * @param {string} [data.centerName]        Center applied for
  * @param {string} [data.batchName]
@@ -46,13 +44,83 @@ const paragraphHtml = (value) =>
  * @param {string} [data.subject]           Overrides the default subject line
  * @returns {{subject: string, text: string, html: string}}
  */
+/** Matches {{token}}, tolerating inner whitespace such as {{ name }}. */
+const TOKEN_PATTERN = /\{\{\s*([a-z0-9_]+)\s*\}\}/gi;
+
+/**
+ * Merge tokens usable inside a campaign's custom HTML.
+ *
+ * Keyed by the token name written as {{name}}; the value is pulled from the
+ * same data object the built-in letter uses, so a custom email has access to
+ * exactly the same fields and nothing more.
+ */
+const MERGE_FIELDS = {
+  name: (d) => d.name,
+  father_name: (d) => d.fatherName,
+  cnic: (d) => maskCnic(d.cnic),
+  phone: (d) => d.phone,
+  course: (d) => d.courseName,
+  center: (d) => d.centerName,
+  batch: (d) => d.batchName,
+  interview_date: (d) => formatDate(d.interviewDate) || d.interviewDate,
+  interview_time: (d) => d.interviewTime,
+  reporting_time: (d) => d.reportingTime,
+  venue: (d) => d.venue,
+  contact_person: (d) => d.contactPerson,
+  contact_phone: (d) => d.contactPhone,
+  message: (d) => d.message,
+};
+
+/** The token names, surfaced as help text on the compose screen. */
+const MERGE_TOKENS = Object.keys(MERGE_FIELDS);
+
+/**
+ * Substitute {{tokens}} in author-written HTML.
+ *
+ * Values are HTML-escaped on the way in. The markup itself is trusted - only a
+ * SuperAdmin can author it - but the candidate data merged into it is not: a
+ * name containing an angle bracket would otherwise break the layout, and a
+ * pasted value could inject markup the author never wrote.
+ *
+ * An unknown token becomes an empty string rather than staying visible, so a
+ * typo degrades to a blank instead of mailing "{{nmae}}" to two hundred people.
+ */
+const applyMergeTokens = (html, data) =>
+  String(html ?? "").replace(TOKEN_PATTERN, (_, token) => {
+    const key = String(token).toLowerCase();
+    const resolve = MERGE_FIELDS[key];
+    return resolve ? escapeHtml(resolve(data) ?? "") : "";
+  });
+
+/**
+ * Plain-text alternative for a custom HTML email.
+ *
+ * Every message needs one: a text-only client shown raw markup is unreadable,
+ * and a missing text part is itself a spam signal.
+ */
+const customHtmlToText = (html) =>
+  String(html || "")
+    .replace(/<style[\s\S]*?<\/style>/gi, "")
+    .replace(/<script[\s\S]*?<\/script>/gi, "")
+    .replace(/<br\s*\/?>/gi, "\n")
+    .replace(/<\/(p|div|h[1-6]|tr|li)>/gi, "\n")
+    .replace(/<[^>]*>/g, "")
+    .replace(/&nbsp;/g, " ")
+    .replace(/&amp;/g, "&")
+    .replace(/&lt;/g, "<")
+    .replace(/&gt;/g, ">")
+    .replace(/&quot;/g, '"')
+    .replace(/&#39;/g, "'")
+    .replace(/[ \t]+\n/g, "\n")
+    .replace(/\n{3,}/g, "\n\n")
+    .trim();
+
 const interviewCall = (data) => {
   const {
     name,
     fatherName,
     cnic,
     phone,
-    applicationId,
     courseName,
     centerName,
     batchName,
@@ -63,6 +131,7 @@ const interviewCall = (data) => {
     contactPerson,
     contactPhone,
     message,
+    customHtml,
     isReminder = false,
     subject: subjectOverride,
   } = data;
@@ -73,8 +142,16 @@ const interviewCall = (data) => {
       courseName ? ` - ${courseName}` : ""
     } | Digibizz Program`;
 
+  // The admin picks one or the other: the built-in letter, or their own HTML.
+  // Custom HTML replaces the message outright rather than being wrapped in the
+  // branded shell - half-applying someone's markup produces a worse result
+  // than either choice made cleanly.
+  if (String(customHtml || "").trim()) {
+    const html = applyMergeTokens(customHtml, data);
+    return { subject, html, text: customHtmlToText(html) };
+  }
+
   const rows = detailRows([
-    ["Application No.", applicationId ? `DGB-${applicationId}` : ""],
     ["Applicant Name", name],
     ["Father's Name", fatherName],
     ["CNIC", maskCnic(cnic)],
@@ -140,16 +217,6 @@ const interviewCall = (data) => {
         }.
       </p>
 
-      <table role="presentation" cellpadding="0" cellspacing="0" style="margin:0 auto 8px;">
-        <tr>
-          <td style="background-color:${BRAND};border-radius:6px;">
-            <a href="${escapeHtml(
-              PORTAL_URL
-            )}" style="display:inline-block;padding:12px 26px;color:#ffffff;font-size:14px;font-weight:700;text-decoration:none;">Visit the Digibizz Portal</a>
-          </td>
-        </tr>
-      </table>
-
       <p style="margin:22px 0 0;color:#546e7a;font-size:14px;line-height:1.7;">
         Best regards,<br /><strong>Admissions Team</strong><br />Digibizz Program
       </p>
@@ -165,7 +232,6 @@ const interviewCall = (data) => {
     message ? message : null,
     message ? "" : null,
     "INTERVIEW DETAILS",
-    applicationId ? `Application No.: DGB-${applicationId}` : null,
     name ? `Applicant Name: ${name}` : null,
     fatherName ? `Father's Name: ${fatherName}` : null,
     maskCnic(cnic) ? `CNIC: ${maskCnic(cnic)}` : null,
@@ -190,7 +256,6 @@ const interviewCall = (data) => {
     "",
     "Candidates who do not appear on the scheduled date may not be considered further.",
     "",
-    `Portal: ${PORTAL_URL}`,
     `Support: ${SUPPORT_EMAIL}`,
     "",
     "Best regards,",
@@ -202,4 +267,4 @@ const interviewCall = (data) => {
   return { subject, text, html };
 };
 
-module.exports = { interviewCall };
+module.exports = { interviewCall, applyMergeTokens, customHtmlToText, MERGE_TOKENS };

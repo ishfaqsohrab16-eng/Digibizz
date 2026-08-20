@@ -19,6 +19,9 @@ router.use(isAdminAuthenticated, requireRoles(ROLES.SUPER_ADMIN));
 
 // How many candidates a new campaign could reach, broken down by course.
 router.get("/eligibility", controller.getEligibility);
+// Exactly who a campaign WOULD contact, before it is created.
+// ?format=csv returns it as a download instead of JSON.
+router.get("/recipients/preview", controller.previewRecipients);
 
 router.get("/", controller.listCampaigns);
 router.post("/", controller.createCampaign);
@@ -26,6 +29,8 @@ router.post("/preview", controller.previewTemplate);
 
 router.get("/:id", controller.getCampaign);
 router.get("/:id/recipients", controller.listRecipients);
+router.get("/:id/recipients/export", controller.exportRecipients);
+router.post("/:id/test", controller.sendTest);
 router.post("/:id/reminder", controller.createReminder);
 router.post("/:id/send-now", controller.sendNow);
 // action: start | pause | cancel

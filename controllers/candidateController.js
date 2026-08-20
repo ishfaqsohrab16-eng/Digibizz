@@ -9,6 +9,7 @@ const sequelize = db.sequelize;
 const Student = require("../models/studentModel");
 const { sendEmailSafe } = require("../servec/emailConfig");
 const { applicationReceived } = require("../servec/emailTemplates");
+const { ADMISSION_BATCH_LABEL } = require("../servec/admissionBatch");
 const { validateAdmissionAvailability } = require("./admissionControlController");
 const AdmissionControl = require("../models/admissionControlModel");
 
@@ -71,7 +72,7 @@ const sendApplicationReceivedEmail = async (candidate) => {
         : null,
       candidate.tb_id
         ? TrainingBatch.findByPk(candidate.tb_id, {
-            attributes: ["tb_name", "tb_start"],
+            attributes: ["tb_name"],
           })
         : null,
     ]);
@@ -85,8 +86,9 @@ const sendApplicationReceivedEmail = async (candidate) => {
       gender: candidate.cand_gender,
       courseName: course?.course_full_name || course?.course_name || "",
       centerName: center?.center_name || "",
-      batchName: batch?.tb_name || "",
-      batchStart: batch?.tb_start || "",
+      // Label, not tb_name - see servec/admissionBatch.js. The form says
+      // "Batch 10", so the confirmation must not say "Batch-9".
+      batchName: ADMISSION_BATCH_LABEL,
       appliedOn: candidate.cand_apply_date,
     });
 

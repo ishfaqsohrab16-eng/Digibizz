@@ -130,6 +130,20 @@ const EmailCampaign = sequelize.define(
       type: DataTypes.TEXT,
       allowNull: true,
     },
+    /**
+     * Author your own email instead of using the built-in letter.
+     *
+     * When set, this HTML IS the message - the built-in template is bypassed
+     * entirely. Merge tokens ({{name}}, {{venue}}, ...) are substituted per
+     * recipient and HTML-escaped on the way in, so a candidate whose name
+     * contains an angle bracket cannot break the markup.
+     *
+     * NULL means "use the built-in interview letter".
+     */
+    ec_custom_html: {
+      type: DataTypes.TEXT("long"),
+      allowNull: true,
+    },
     ec_status: {
       type: DataTypes.ENUM(
         "draft",

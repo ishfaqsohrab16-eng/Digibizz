@@ -7,6 +7,7 @@ const Center = require("../models/center");
 const TrainingBatch = require("../models/trainingBatcheModel");
 const { sendEmail, isConfigured } = require("../servec/emailConfig");
 const { interviewCall } = require("../servec/campaignTemplates");
+const { ADMISSION_BATCH_LABEL } = require("../servec/admissionBatch");
 
 /**
  * Paces campaign email out over time.
@@ -51,6 +52,31 @@ const MAX_ATTEMPTS = 3;
  * unbounded number of concurrent send loops.
  */
 const MAX_CONCURRENT_CAMPAIGNS = 5;
+
+/**
+ * Addresses that receive a dummy copy of every campaign before it goes out.
+ *
+ * A rendered proof in a real inbox catches what a preview pane cannot: a
+ * broken layout in Outlook, a subject line truncated on mobile, or the whole
+ * message landing in spam. Comma-separate CAMPAIGN_TEST_RECIPIENTS in the
+ * environment to change the list without a deploy.
+ */
+const TEST_RECIPIENTS = (
+  process.env.CAMPAIGN_TEST_RECIPIENTS ||
+  "ishfaque.bcs18@iba-suk.edu.pk,ishfaqsohrab.16@gmail.com"
+)
+  .split(",")
+  .map((address) => address.trim())
+  .filter(Boolean);
+
+/** Stand-in applicant used for the test copy. Obviously fake on sight. */
+const TEST_CANDIDATE = {
+  name: "TEST — Sample Applicant",
+  fatherName: "TEST — Sample Father Name",
+  cnic: "00000-0000000-0",
+  phone: "0300-0000000",
+  courseName: "TEST — Sample Course",
+};
 
 let timer = null;
 
@@ -114,7 +140,9 @@ const renderForRecipient = (campaign, recipient) => {
     courseName:
       candidate.courses?.course_full_name || candidate.courses?.course_name,
     centerName: campaign.center?.center_name || candidate.centers?.center_name,
-    batchName: campaign.batch?.tb_name,
+    // Label, not tb_name - see servec/admissionBatch.js. Intake is for
+    // Batch 10 while the database batch still reads "Batch-9".
+    batchName: ADMISSION_BATCH_LABEL,
     interviewDate: campaign.ec_interview_date,
     interviewTime: campaign.ec_interview_time,
     reportingTime: campaign.ec_reporting_time,
@@ -122,9 +150,70 @@ const renderForRecipient = (campaign, recipient) => {
     contactPerson: campaign.ec_contact_person,
     contactPhone: campaign.ec_contact_phone,
     message: campaign.ec_message,
+    customHtml: campaign.ec_custom_html,
     isReminder: campaign.ec_kind === "reminder",
     subject: campaign.ec_subject,
   });
+};
+
+/**
+ * Send a dummy copy of a campaign to the test addresses.
+ *
+ * Uses exactly the same render and the same transport as a real send, so what
+ * lands in the test inbox is byte-for-byte what an applicant would receive -
+ * only the candidate details are stand-ins. Anything less would let a template
+ * fault through precisely because the test took a different path.
+ *
+ * Test copies are NOT written to email_campaign_recipients: they are not
+ * applicants, and counting them would corrupt the campaign's progress figures
+ * and the already-contacted ledger.
+ *
+ * Never throws. A failed proof must not stop the campaign being created.
+ *
+ * @returns {Promise<{sent: string[], failed: Array<{to: string, error: string}>}>}
+ */
+const sendTestCopies = async (campaign) => {
+  const result = { sent: [], failed: [] };
+
+  if (!isConfigured) {
+    for (const to of TEST_RECIPIENTS) {
+      result.failed.push({ to, error: "SMTP is not configured" });
+    }
+    return result;
+  }
+
+  const rendered = interviewCall({
+    ...TEST_CANDIDATE,
+    centerName: campaign.center?.center_name || "TEST — Sample Center",
+    batchName: ADMISSION_BATCH_LABEL,
+    interviewDate: campaign.ec_interview_date,
+    interviewTime: campaign.ec_interview_time,
+    reportingTime: campaign.ec_reporting_time,
+    venue: campaign.ec_venue,
+    contactPerson: campaign.ec_contact_person,
+    contactPhone: campaign.ec_contact_phone,
+    message: campaign.ec_message,
+    // The proof must exercise the same branch a real send takes, custom HTML
+    // included - otherwise the test passes on a template nobody will receive.
+    customHtml: campaign.ec_custom_html,
+    isReminder: campaign.ec_kind === "reminder",
+    // Prefixed so a test copy can never be mistaken for the real thing in an
+    // inbox that also receives genuine campaign mail.
+    subject: `[TEST] ${campaign.ec_subject}`,
+  });
+
+  for (const to of TEST_RECIPIENTS) {
+    try {
+      await sendEmail({ to, ...rendered });
+      result.sent.push(to);
+    } catch (error) {
+      const message = String(error?.message || error).slice(0, 300);
+      result.failed.push({ to, error: message });
+      console.error(`[campaign ${campaign.ec_id}] test copy to ${to} failed:`, message);
+    }
+  }
+
+  return result;
 };
 
 /**
@@ -336,6 +425,8 @@ module.exports = {
   claim,
   release,
   sendChunk,
+  sendTestCopies,
+  TEST_RECIPIENTS,
   computeNextRunAt,
   perMessageDelayMs,
   MAX_ATTEMPTS,
