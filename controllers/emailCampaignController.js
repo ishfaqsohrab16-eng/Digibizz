@@ -1,3 +1,5 @@
+const fs = require("fs");
+const path = require("path");
 const { Op, fn, col, literal } = require("sequelize");
 const db = require("../config/db");
 const sequelize = db.sequelize;
@@ -8,6 +10,7 @@ const Course = require("../models/course");
 const Center = require("../models/center");
 const TrainingBatch = require("../models/trainingBatcheModel");
 const { interviewCall } = require("../servec/campaignTemplates");
+const { ADMISSION_BATCH_LABEL } = require("../servec/admissionBatch");
 const dispatcher = require("../utils/emailCampaignDispatcher");
 const { allocateEvenly } = require("../utils/allocateEvenly");
 
@@ -767,6 +770,7 @@ exports.previewTemplate = async (req, res) => {
     const {
       tb_id,
       center_id,
+      ec_target_count,
       ec_subject,
       ec_interview_date,
       ec_interview_time,
@@ -779,29 +783,55 @@ exports.previewTemplate = async (req, res) => {
       isReminder,
     } = req.body || {};
 
-    const sample = await Candidate.findOne({
-      where: {
-        ...(tb_id ? { tb_id: Number(tb_id) } : {}),
-        ...(center_id ? { center_id: Number(center_id) } : {}),
-      },
-      include: [
-        { model: Course, as: "courses", attributes: ["course_name", "course_full_name"] },
-        { model: Center, as: "centers", attributes: ["center_name"] },
-        { model: TrainingBatch, as: "training_batches", attributes: ["tb_name"] },
-      ],
-      order: [["cand_id", "DESC"]],
-    });
+    // Preview the FIRST person who would actually receive this campaign, not
+    // an arbitrary candidate from the center. Running the same selection the
+    // send path runs means the preview shows a real recipient's data, so a
+    // merge token that comes out blank here will come out blank for them too.
+    let sample = null;
+    if (tb_id && center_id) {
+      const { chosen, pool } = await selectRecipients(
+        tb_id,
+        center_id,
+        Number(ec_target_count) || 1
+      );
+      sample = chosen[0] || pool[0] || null;
+    }
+
+    // Fall back to any candidate at all, so the editor still previews before a
+    // center has been picked.
+    if (!sample) {
+      sample = await Candidate.findOne({
+        where: {
+          ...(tb_id ? { tb_id: Number(tb_id) } : {}),
+          ...(center_id ? { center_id: Number(center_id) } : {}),
+        },
+        include: [
+          {
+            model: Course,
+            as: "courses",
+            attributes: ["course_name", "course_full_name"],
+          },
+        ],
+        order: [["cand_id", "ASC"]],
+      });
+    }
+
+    const center = center_id
+      ? await Center.findByPk(Number(center_id), { attributes: ["center_name"] })
+      : null;
 
     const rendered = interviewCall({
       name: sample?.cand_name || "Applicant Name",
       fatherName: sample?.cand_fathername || "Father Name",
       cnic: sample?.cand_cnic || "00000-0000000-0",
       phone: sample?.cand_phone || "03000000000",
-      applicationId: sample?.cand_id || 0,
       courseName:
         sample?.courses?.course_full_name || sample?.courses?.course_name || "Course",
-      centerName: sample?.centers?.center_name || "Center",
-      batchName: sample?.training_batches?.tb_name || "",
+      centerName: center?.center_name || sample?.centers?.center_name || "Center",
+      // Must match what the dispatcher actually sends, not the database
+      // tb_name. A preview showing a different batch than the real email is
+      // worse than no preview - see servec/admissionBatch.js.
+      batchName: ADMISSION_BATCH_LABEL,
       interviewDate: ec_interview_date,
       interviewTime: ec_interview_time,
       reportingTime: ec_reporting_time,
@@ -817,6 +847,12 @@ exports.previewTemplate = async (req, res) => {
     return res.json({
       success: true,
       usedRealCandidate: Boolean(sample),
+      // Which template actually produced this, so the editor can say so rather
+      // than leaving the reader to guess why it looks unfamiliar.
+      usedCustomHtml: Boolean(String(ec_custom_html || "").trim()),
+      previewOf: sample
+        ? { cand_id: sample.cand_id, name: sample.cand_name }
+        : null,
       ...rendered,
     });
   } catch (error) {
@@ -1022,5 +1058,29 @@ exports.sendTest = async (req, res) => {
   } catch (error) {
     console.error("Error sending campaign test copy:", error);
     return res.status(500).json({ success: false, message: "Server error" });
+  }
+};
+
+/**
+ * Starter HTML for the "Custom HTML" editor.
+ *
+ * Served from the file rather than duplicated as a string in the frontend, so
+ * there is one copy to keep correct. Read once and cached - it is a static
+ * asset that only changes on deploy.
+ */
+let starterTemplateCache = null;
+
+exports.getStarterTemplate = async (req, res) => {
+  try {
+    if (starterTemplateCache === null) {
+      const file = path.join(__dirname, "..", "servec", "templates", "interview-call.html");
+      starterTemplateCache = fs.readFileSync(file, "utf8");
+    }
+    return res.json({ success: true, html: starterTemplateCache });
+  } catch (error) {
+    console.error("Error reading the starter email template:", error);
+    return res
+      .status(500)
+      .json({ success: false, message: "Starter template is unavailable" });
   }
 };

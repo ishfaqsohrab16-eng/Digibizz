@@ -7,6 +7,7 @@ import {
   Download,
   Monitor,
   Smartphone,
+  FileCode,
 } from "lucide-react";
 import { toast } from "sonner";
 import {
@@ -14,6 +15,7 @@ import {
   createEmailCampaign,
   downloadCampaignRecipientPreview,
   getCampaignEligibility,
+  getCampaignStarterTemplate,
   previewCampaignEmail,
 } from "../../services/api";
 import { useBatch } from "../../context/BatchContext";
@@ -79,6 +81,7 @@ const CampaignForm: React.FC<Props> = ({ onCreated, onCancel }) => {
   // "template" = the built-in interview letter, "custom" = the admin's own HTML.
   const [bodyMode, setBodyMode] = useState<"template" | "custom">("template");
   const [device, setDevice] = useState<"desktop" | "mobile">("desktop");
+  const [previewOf, setPreviewOf] = useState<{ name: string } | null>(null);
 
   const [form, setForm] = useState({
     ec_name: "",
@@ -220,6 +223,7 @@ const CampaignForm: React.FC<Props> = ({ onCreated, onCancel }) => {
         ...emailPayload,
       });
       setPreviewHtml(result.html);
+      setPreviewOf(result.previewOf || null);
     } catch (error) {
       toast.error(
         error instanceof Error ? error.message : "Could not render the preview"
@@ -239,7 +243,10 @@ const CampaignForm: React.FC<Props> = ({ onCreated, onCancel }) => {
         center_id: centerId || undefined,
         ...emailPayload,
       })
-        .then((result) => setPreviewHtml(result.html))
+        .then((result) => {
+          setPreviewHtml(result.html);
+          setPreviewOf(result.previewOf || null);
+        })
         .catch(() => {
           /* keep the last good preview rather than blanking the pane */
         });
@@ -247,6 +254,24 @@ const CampaignForm: React.FC<Props> = ({ onCreated, onCancel }) => {
 
     return () => window.clearTimeout(timer);
   }, [emailPayload, selectedBatchId, centerId]);
+
+  /**
+   * Switching to Custom HTML with an empty box used to preview the BUILT-IN
+   * letter, because an empty template falls back to it server-side - so the
+   * toggle said "Custom HTML" while the pane showed the pre-built email.
+   * Loading the starter on the first switch means the box is never empty.
+   */
+  const chooseBodyMode = async (mode: "template" | "custom") => {
+    setBodyMode(mode);
+    if (mode !== "custom" || form.ec_custom_html.trim()) return;
+
+    try {
+      const result = await getCampaignStarterTemplate();
+      set("ec_custom_html", result.html);
+    } catch {
+      toast.error("Could not load the starter template - write your own HTML");
+    }
+  };
 
   /** Download exactly who this campaign would contact, before creating it. */
   const handleDownloadList = async () => {
@@ -617,7 +642,7 @@ const CampaignForm: React.FC<Props> = ({ onCreated, onCancel }) => {
           <div className="inline-flex rounded-md border border-slate-300 p-0.5">
             <button
               type="button"
-              onClick={() => setBodyMode("template")}
+              onClick={() => chooseBodyMode("template")}
               className={`rounded px-3 py-1.5 text-sm font-medium transition-colors ${
                 bodyMode === "template"
                   ? "bg-emerald-600 text-white"
@@ -628,7 +653,7 @@ const CampaignForm: React.FC<Props> = ({ onCreated, onCancel }) => {
             </button>
             <button
               type="button"
-              onClick={() => setBodyMode("custom")}
+              onClick={() => chooseBodyMode("custom")}
               className={`rounded px-3 py-1.5 text-sm font-medium transition-colors ${
                 bodyMode === "custom"
                   ? "bg-emerald-600 text-white"
@@ -678,7 +703,12 @@ const CampaignForm: React.FC<Props> = ({ onCreated, onCancel }) => {
             </div>
 
             <div className="flex justify-center rounded-md border border-slate-200 bg-slate-100 p-3">
-              {previewHtml ? (
+              {bodyMode === "custom" && !form.ec_custom_html.trim() ? (
+                <div className="flex h-[560px] w-full items-center justify-center px-6 text-center text-sm text-slate-500">
+                  Your HTML box is empty. Write some HTML or load the starter
+                  template — until then there is nothing to preview.
+                </div>
+              ) : previewHtml ? (
                 <iframe
                   title="Email preview"
                   srcDoc={previewHtml}
@@ -696,8 +726,12 @@ const CampaignForm: React.FC<Props> = ({ onCreated, onCancel }) => {
               )}
             </div>
             <p className="mt-2 text-xs text-slate-500">
-              Rendered by the server using a real candidate from this center, so
-              this is what a recipient actually receives.
+              {bodyMode === "custom"
+                ? "Your HTML, rendered by the server"
+                : "The built-in letter, rendered by the server"}
+              {previewOf
+                ? ` for ${previewOf.name} — the first person on this campaign's list.`
+                : " using sample data."}
             </p>
           </div>
 
@@ -705,9 +739,32 @@ const CampaignForm: React.FC<Props> = ({ onCreated, onCancel }) => {
           <div className="order-2">
             {bodyMode === "custom" ? (
               <>
-                <label className="block text-xs font-semibold uppercase tracking-wide text-slate-500">
-                  Your HTML
-                </label>
+                <div className="flex items-center justify-between">
+                  <label className="block text-xs font-semibold uppercase tracking-wide text-slate-500">
+                    Your HTML
+                  </label>
+                  <button
+                    type="button"
+                    onClick={async () => {
+                      if (
+                        form.ec_custom_html.trim() &&
+                        !window.confirm("Replace what you have written?")
+                      ) {
+                        return;
+                      }
+                      try {
+                        const result = await getCampaignStarterTemplate();
+                        set("ec_custom_html", result.html);
+                        toast.success("Starter template loaded");
+                      } catch {
+                        toast.error("Could not load the starter template");
+                      }
+                    }}
+                    className="inline-flex items-center gap-1.5 rounded-md border border-slate-300 px-2.5 py-1 text-xs font-medium text-slate-700 hover:bg-slate-50"
+                  >
+                    <FileCode className="h-3.5 w-3.5" /> Load starter template
+                  </button>
+                </div>
                 <textarea
                   value={form.ec_custom_html}
                   onChange={(e) => set("ec_custom_html", e.target.value)}

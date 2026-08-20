@@ -100,10 +100,19 @@ const applyMergeTokens = (html, data) =>
  */
 const customHtmlToText = (html) =>
   String(html || "")
+    // Comments first: an author's notes to themselves are invisible in the
+    // HTML part but would otherwise be stripped to bare text and shown to the
+    // recipient as the opening lines of the message.
+    .replace(/<!--[\s\S]*?-->/g, "")
     .replace(/<style[\s\S]*?<\/style>/gi, "")
     .replace(/<script[\s\S]*?<\/script>/gi, "")
     .replace(/<br\s*\/?>/gi, "\n")
+    // A cell break is a space, not a newline: email layouts put a label and
+    // its value in two cells of one row, and breaking between them would turn
+    // "Venue  Main Campus" into two disconnected lines in the text version.
+    .replace(/<\/(td|th)>/gi, " ")
     .replace(/<\/(p|div|h[1-6]|tr|li)>/gi, "\n")
+    .replace(/<li[^>]*>/gi, "- ")
     .replace(/<[^>]*>/g, "")
     .replace(/&nbsp;/g, " ")
     .replace(/&amp;/g, "&")
@@ -111,6 +120,11 @@ const customHtmlToText = (html) =>
     .replace(/&gt;/g, ">")
     .replace(/&quot;/g, '"')
     .replace(/&#39;/g, "'")
+    .replace(/&mdash;/g, "-")
+    .replace(/[ \t]{2,}/g, " ")
+    // Source indentation becomes a leading space on nearly every line once the
+    // tags are gone, which reads as ragged in a plain-text client.
+    .replace(/^[ \t]+/gm, "")
     .replace(/[ \t]+\n/g, "\n")
     .replace(/\n{3,}/g, "\n\n")
     .trim();

@@ -26,6 +26,8 @@ router.get("/recipients/preview", controller.previewRecipients);
 router.get("/", controller.listCampaigns);
 router.post("/", controller.createCampaign);
 router.post("/preview", controller.previewTemplate);
+// Starter HTML for the custom-email editor.
+router.get("/starter-template", controller.getStarterTemplate);
 
 router.get("/:id", controller.getCampaign);
 router.get("/:id/recipients", controller.listRecipients);

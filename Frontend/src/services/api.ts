@@ -3708,6 +3708,10 @@ export const previewCampaignEmail = async (payload: Record<string, unknown>) => 
   return response.data as {
     success: boolean;
     usedRealCandidate: boolean;
+    /** True when the campaign's own HTML produced this, not the built-in letter. */
+    usedCustomHtml: boolean;
+    /** The recipient this was rendered for - first on the campaign list. */
+    previewOf: { cand_id: number; name: string } | null;
     subject: string;
     text: string;
     html: string;
@@ -3804,4 +3808,13 @@ export const sendCampaignTest = async (id: number) => {
     sent: string[];
     failed: Array<{ to: string; error: string }>;
   };
+};
+
+/** Starter HTML for the custom-email editor, served from the backend file. */
+export const getCampaignStarterTemplate = async () => {
+  const response = await axios.get(
+    `${API_URL}/email-campaigns/starter-template`,
+    { headers: campaignHeaders() }
+  );
+  return response.data as { success: boolean; html: string };
 };

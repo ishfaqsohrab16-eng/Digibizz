@@ -1,0 +1,159 @@
+<!--
+  Starter template for the campaign "Custom HTML" box.
+
+  Merge tokens are replaced per recipient and HTML-escaped; an unknown token
+  becomes blank. There are no conditionals, so a row whose value is empty
+  still shows its label - delete any row you are not filling in.
+
+  Built to reach the inbox: tables and inline styles only (Outlook drops
+  embedded stylesheets), no images or tracking pixel, no hidden text, no
+  script or form, and a single link. Keep it that way if you edit it.
+-->
+<div style="margin:0;padding:0;background-color:#eef2f5;">
+  <table role="presentation" width="100%" cellpadding="0" cellspacing="0" border="0" style="background-color:#eef2f5;padding:24px 12px;">
+    <tr>
+      <td align="center">
+        <table role="presentation" width="600" cellpadding="0" cellspacing="0" border="0" style="max-width:600px;width:100%;background-color:#ffffff;border-radius:8px;overflow:hidden;border:1px solid #dfe6ea;font-family:Arial,Helvetica,sans-serif;">
+
+          <!-- Header: styled text, not an image -->
+          <tr>
+            <td style="background-color:#2f7d4f;padding:22px 24px;text-align:center;">
+              <div style="color:#ffffff;font-size:21px;font-weight:bold;letter-spacing:0.3px;">Digibizz Program</div>
+              <div style="color:#d8ecdf;font-size:13px;padding-top:5px;">Government of Balochistan &mdash; Digital Skills Training</div>
+            </td>
+          </tr>
+
+          <tr>
+            <td style="padding:26px 24px 8px 24px;">
+              <p style="margin:0 0 14px 0;color:#1f2d28;font-size:16px;">Dear <strong>{{name}}</strong>,</p>
+
+              <p style="margin:0 0 16px 0;color:#4a5a53;font-size:14px;line-height:1.7;">
+                Your application to the Digibizz Program for <strong>{{course}}</strong> at
+                <strong>{{center}}</strong> has been shortlisted for <strong>{{batch}}</strong>.
+                You are invited to appear for an interview at the time and place shown below.
+              </p>
+
+              <p style="margin:0 0 18px 0;color:#4a5a53;font-size:14px;line-height:1.7;">{{message}}</p>
+            </td>
+          </tr>
+
+          <!-- Interview details -->
+          <tr>
+            <td style="padding:0 24px 8px 24px;">
+              <table role="presentation" width="100%" cellpadding="0" cellspacing="0" border="0" style="border:1px solid #e4eae7;border-radius:6px;">
+                <tr>
+                  <td colspan="2" style="background-color:#f4f7f5;padding:11px 14px;color:#2f3f38;font-size:12px;font-weight:bold;letter-spacing:0.6px;text-transform:uppercase;">
+                    Interview details
+                  </td>
+                </tr>
+                <tr>
+                  <td style="padding:10px 14px;border-top:1px solid #eef2f0;color:#6b7a73;font-size:13px;width:42%;">Date</td>
+                  <td style="padding:10px 14px;border-top:1px solid #eef2f0;color:#1f2d28;font-size:14px;font-weight:bold;">{{interview_date}}</td>
+                </tr>
+                <tr>
+                  <td style="padding:10px 14px;border-top:1px solid #eef2f0;color:#6b7a73;font-size:13px;">Interview time</td>
+                  <td style="padding:10px 14px;border-top:1px solid #eef2f0;color:#1f2d28;font-size:14px;font-weight:bold;">{{interview_time}}</td>
+                </tr>
+                <tr>
+                  <td style="padding:10px 14px;border-top:1px solid #eef2f0;color:#6b7a73;font-size:13px;">Reporting time</td>
+                  <td style="padding:10px 14px;border-top:1px solid #eef2f0;color:#1f2d28;font-size:14px;font-weight:bold;">{{reporting_time}}</td>
+                </tr>
+                <tr>
+                  <td style="padding:10px 14px;border-top:1px solid #eef2f0;color:#6b7a73;font-size:13px;">Venue</td>
+                  <td style="padding:10px 14px;border-top:1px solid #eef2f0;color:#1f2d28;font-size:14px;font-weight:bold;">{{venue}}</td>
+                </tr>
+                <tr>
+                  <td style="padding:10px 14px;border-top:1px solid #eef2f0;color:#6b7a73;font-size:13px;">Contact person</td>
+                  <td style="padding:10px 14px;border-top:1px solid #eef2f0;color:#1f2d28;font-size:14px;">{{contact_person}}</td>
+                </tr>
+                <tr>
+                  <td style="padding:10px 14px;border-top:1px solid #eef2f0;color:#6b7a73;font-size:13px;">Contact number</td>
+                  <td style="padding:10px 14px;border-top:1px solid #eef2f0;color:#1f2d28;font-size:14px;">{{contact_phone}}</td>
+                </tr>
+              </table>
+            </td>
+          </tr>
+
+          <!-- Applicant details, so they can confirm this is their record -->
+          <tr>
+            <td style="padding:16px 24px 8px 24px;">
+              <table role="presentation" width="100%" cellpadding="0" cellspacing="0" border="0" style="border:1px solid #e4eae7;border-radius:6px;">
+                <tr>
+                  <td colspan="2" style="background-color:#f4f7f5;padding:11px 14px;color:#2f3f38;font-size:12px;font-weight:bold;letter-spacing:0.6px;text-transform:uppercase;">
+                    Your application
+                  </td>
+                </tr>
+                <tr>
+                  <td style="padding:10px 14px;border-top:1px solid #eef2f0;color:#6b7a73;font-size:13px;width:42%;">Name</td>
+                  <td style="padding:10px 14px;border-top:1px solid #eef2f0;color:#1f2d28;font-size:14px;">{{name}}</td>
+                </tr>
+                <tr>
+                  <td style="padding:10px 14px;border-top:1px solid #eef2f0;color:#6b7a73;font-size:13px;">Father's name</td>
+                  <td style="padding:10px 14px;border-top:1px solid #eef2f0;color:#1f2d28;font-size:14px;">{{father_name}}</td>
+                </tr>
+                <tr>
+                  <td style="padding:10px 14px;border-top:1px solid #eef2f0;color:#6b7a73;font-size:13px;">CNIC</td>
+                  <td style="padding:10px 14px;border-top:1px solid #eef2f0;color:#1f2d28;font-size:14px;">{{cnic}}</td>
+                </tr>
+                <tr>
+                  <td style="padding:10px 14px;border-top:1px solid #eef2f0;color:#6b7a73;font-size:13px;">Contact number</td>
+                  <td style="padding:10px 14px;border-top:1px solid #eef2f0;color:#1f2d28;font-size:14px;">{{phone}}</td>
+                </tr>
+                <tr>
+                  <td style="padding:10px 14px;border-top:1px solid #eef2f0;color:#6b7a73;font-size:13px;">Course</td>
+                  <td style="padding:10px 14px;border-top:1px solid #eef2f0;color:#1f2d28;font-size:14px;">{{course}}</td>
+                </tr>
+                <tr>
+                  <td style="padding:10px 14px;border-top:1px solid #eef2f0;color:#6b7a73;font-size:13px;">Center</td>
+                  <td style="padding:10px 14px;border-top:1px solid #eef2f0;color:#1f2d28;font-size:14px;">{{center}}</td>
+                </tr>
+                <tr>
+                  <td style="padding:10px 14px;border-top:1px solid #eef2f0;color:#6b7a73;font-size:13px;">Training batch</td>
+                  <td style="padding:10px 14px;border-top:1px solid #eef2f0;color:#1f2d28;font-size:14px;">{{batch}}</td>
+                </tr>
+              </table>
+            </td>
+          </tr>
+
+          <tr>
+            <td style="padding:20px 24px 4px 24px;">
+              <p style="margin:0 0 8px 0;color:#2f3f38;font-size:14px;font-weight:bold;">Please bring with you</p>
+              <ul style="margin:0 0 18px 0;padding-left:20px;color:#4a5a53;font-size:14px;line-height:1.8;">
+                <li>Your original CNIC and one photocopy</li>
+                <li>Original educational documents and photocopies</li>
+                <li>Two recent passport-size photographs</li>
+                <li>A printout of this email, if possible</li>
+              </ul>
+
+              <p style="margin:0 0 20px 0;color:#4a5a53;font-size:14px;line-height:1.7;">
+                Candidates who do not appear on the scheduled date may not be considered
+                further. If you are unable to attend, please inform us in advance on
+                {{contact_phone}}.
+              </p>
+
+              <p style="margin:0 0 4px 0;color:#4a5a53;font-size:14px;line-height:1.7;">
+                Best regards,<br />
+                <strong>Admissions Team</strong><br />
+                Digibizz Program
+              </p>
+            </td>
+          </tr>
+
+          <tr>
+            <td style="background-color:#f4f7f5;padding:16px 24px;text-align:center;color:#7d8b84;font-size:12px;line-height:1.6;">
+              <p style="margin:0;">
+                Need help? Write to
+                <a href="mailto:info@digibizz.gob.pk" style="color:#2f7d4f;text-decoration:none;">info@digibizz.gob.pk</a>
+              </p>
+              <p style="margin:6px 0 0 0;">
+                You are receiving this because you applied to the Digibizz Program.
+                This is an automated message &mdash; please do not reply directly.
+              </p>
+            </td>
+          </tr>
+
+        </table>
+      </td>
+    </tr>
+  </table>
+</div>
