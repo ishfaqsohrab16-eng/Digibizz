@@ -231,13 +231,21 @@ export const DEFAULT_HOLIDAYS_COLUMNS: Column[] = [
   { id: "center_name", label: "Center ", visible: true },
 ];
 export const DEFAULT_ACTIVITY_LOG_COLUMNS: Column[] = [
-  { id: "user_type", label: "User Type", visible: true },
+  // Who did it, then what changed. act_summary is the paragraph - who changed
+  // which record, from which value to which - so it leads rather than sitting
+  // behind the scope columns, most of which are empty for a generic change.
   { id: "act_on", label: "On", visible: true },
-  { id: "course_name", label: "Course ", visible: true },
-  { id: "center_name", label: "Center ", visible: true },
-  { id: "tb_name", label: "Training Batch ", visible: true },
-  { id: "act_type", label: "Activity Type", visible: true },
-  { id: "act_descrip", label: "Description", visible: true },
+  { id: "act_actor_name", label: "Changed By", visible: true },
+  { id: "user_type", label: "Role", visible: true },
+  { id: "act_summary", label: "What Changed", visible: true },
+  { id: "act_entity", label: "Record Type", visible: true },
+  { id: "act_entity_id", label: "Record ID", visible: true },
+  { id: "act_ip", label: "IP", visible: true },
+  { id: "act_type", label: "Activity Type", visible: false },
+  { id: "act_descrip", label: "Description", visible: false },
+  { id: "course_name", label: "Course ", visible: false },
+  { id: "center_name", label: "Center ", visible: false },
+  { id: "tb_name", label: "Training Batch ", visible: false },
 ];
 export const DEFAULT_ANNOUNCEMENT_COLUMNS: Column[] = [
   { id: "ca_title", label: "Title", visible: true },

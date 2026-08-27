@@ -83,7 +83,14 @@ exports.getAllActivityLogs = async (req, res) => {
       ActivityLog.findAll({
         where: { tb_id: tb_id },
         order: [["act_on", "DESC"]],
-        attributes: ['act_id', 'user_type', 'user_id', 'course_id', 'center_id', 'tb_id', 'act_type', 'act_descrip', 'act_content', 'act_on'], // Only select needed fields
+        // The audit columns are what the screen actually shows now, so they
+        // have to be selected - without act_summary the table renders blanks.
+        attributes: [
+          'act_id', 'user_type', 'user_id', 'course_id', 'center_id', 'tb_id',
+          'act_type', 'act_descrip', 'act_content', 'act_on',
+          'act_actor_name', 'act_entity', 'act_entity_id', 'act_summary',
+          'act_changes', 'act_ip',
+        ],
         raw: true, // Get plain objects for faster processing
       }),
       Student.findAll({

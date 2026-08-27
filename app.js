@@ -212,6 +212,11 @@ const initializeDatabase = async () => {
     // query against that table - not just the new feature.
     await ensureSchema();
     await sequelize.sync({ alter: false });
+
+    // Record every database change to activity_log. Installed after sync so
+    // the hooks never fire during schema creation, which has no actor anyway.
+    require("./utils/auditHooks").install();
+
     console.log("Database connected and models synced successfully");
   } catch (error) {
     console.error("Database initialization error:", error);

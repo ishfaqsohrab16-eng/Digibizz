@@ -21,6 +21,42 @@ const { sequelize } = require("../config/db");
  */
 const REQUIRED_COLUMNS = [
   {
+    table: "activity_log",
+    column: "act_actor_name",
+    definition: "VARCHAR(150) NULL DEFAULT NULL COMMENT 'Name of whoever made the change'",
+    migration: "migration/015_activity_log_change_tracking.sql",
+  },
+  {
+    table: "activity_log",
+    column: "act_entity",
+    definition: "VARCHAR(100) NULL DEFAULT NULL COMMENT 'Model/table that changed'",
+    migration: "migration/015_activity_log_change_tracking.sql",
+  },
+  {
+    table: "activity_log",
+    column: "act_entity_id",
+    definition: "VARCHAR(100) NULL DEFAULT NULL COMMENT 'Primary key of the changed row'",
+    migration: "migration/015_activity_log_change_tracking.sql",
+  },
+  {
+    table: "activity_log",
+    column: "act_summary",
+    definition: "TEXT NULL DEFAULT NULL COMMENT 'Readable paragraph describing the change'",
+    migration: "migration/015_activity_log_change_tracking.sql",
+  },
+  {
+    table: "activity_log",
+    column: "act_changes",
+    definition: "LONGTEXT NULL DEFAULT NULL COMMENT 'JSON of field-level before/after values'",
+    migration: "migration/015_activity_log_change_tracking.sql",
+  },
+  {
+    table: "activity_log",
+    column: "act_ip",
+    definition: "VARCHAR(45) NULL DEFAULT NULL COMMENT 'IP the change came from'",
+    migration: "migration/015_activity_log_change_tracking.sql",
+  },
+  {
     table: "students_feedback",
     column: "sf_week",
     definition:

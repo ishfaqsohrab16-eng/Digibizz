@@ -1,4 +1,6 @@
 const jwt = require("jsonwebtoken");
+const { runWithActor } = require("../utils/auditContext");
+const { resolveIp } = require("../utils/recordLogin");
 const User = require("../models/userModel");
 
 /**
@@ -111,7 +113,24 @@ const isAdminAuthenticated = async (req, res, next) => {
       role: normaliseRole(user.user_type),
     };
 
-    next();
+    // Carry the actor through the rest of the request so the database hooks in
+    // utils/auditHooks.js can attribute every change to a person. Done here,
+    // inside authentication, rather than as separate middleware: req.user does
+    // not exist before this point, and doing it here means a route added later
+    // is audited by default instead of silently unlogged.
+    //
+    // next() is invoked INSIDE the context, so everything the handler awaits
+    // - controllers, and Sequelize hooks several layers below them - can still
+    // read the actor.
+    return runWithActor(
+      {
+        id: user.user_id,
+        name: user.user_name || user.user_username,
+        type: user.user_type,
+        ip: resolveIp(req).ip,
+      },
+      () => next()
+    );
   } catch (error) {
     if (error.name === "JsonWebTokenError") {
       return res.status(401).json({ message: "Invalid token" });

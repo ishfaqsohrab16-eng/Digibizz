@@ -29,7 +29,7 @@ const ActivityLogModel = sequelize.define(
     },
     course_id: {
       type: DataTypes.INTEGER,
-      allowNull: false,
+      allowNull: true,
       references: {
         model: Course,
         key: "course_id",
@@ -37,7 +37,7 @@ const ActivityLogModel = sequelize.define(
     },
     center_id: {
       type: DataTypes.INTEGER,
-      allowNull: false,
+      allowNull: true,
       references: {
         model: Center,
         key: "center_id",
@@ -45,7 +45,7 @@ const ActivityLogModel = sequelize.define(
     },
     tb_id: {
       type: DataTypes.INTEGER,
-      allowNull: false,
+      allowNull: true,
       references: {
         model: TrainingBatch,
         key: "tb_id",
@@ -74,6 +74,38 @@ const ActivityLogModel = sequelize.define(
         notEmpty: true,
         len: [1, 255],
       },
+    },
+    /**
+     * Audit detail, written by utils/auditHooks.js.
+     *
+     * act_summary is the paragraph a reader actually sees - who changed what,
+     * on which record, from which value to which. act_changes keeps the same
+     * information field by field as JSON, so the history can be queried and
+     * diffed rather than only read.
+     */
+    act_actor_name: {
+      type: DataTypes.STRING(150),
+      allowNull: true,
+    },
+    act_entity: {
+      type: DataTypes.STRING(100),
+      allowNull: true,
+    },
+    act_entity_id: {
+      type: DataTypes.STRING(100),
+      allowNull: true,
+    },
+    act_summary: {
+      type: DataTypes.TEXT,
+      allowNull: true,
+    },
+    act_changes: {
+      type: DataTypes.TEXT("long"),
+      allowNull: true,
+    },
+    act_ip: {
+      type: DataTypes.STRING(45),
+      allowNull: true,
     },
   },
   {

@@ -13,7 +13,6 @@ const { Op } = require("sequelize");
 const crypto = require("crypto");
 const TrainersCenterAllocationModel = require("../models/trainersCenterAllocationModel");
 const TrainingBatchModel = require("../models/trainingBatcheModel");
-const ActivityLogModel = require("../models/activityLogModel");
 const { recordLogin } = require("../utils/recordLogin");
 const sendEmail = require("../servec/emailConfig"); // Import email utility
 const {
@@ -327,20 +326,10 @@ exports.loginAdmin = async (req, res) => {
     // trail this table exists to provide. Awaited but never throws.
     await recordLogin(req, user, { center_id, course_id, tb_id });
 
-    // Log activity for trainers and students
-    if (["trainer", "student"].includes(normalizedUserType)) {
-      await ActivityLogModel.create({
-        user_id: user.user_id,
-        user_type: normalizedUserType,
-        tb_id,
-        center_id,
-        course_id,
-        act_type: "Login",
-        act_descrip: "User Logged In",
-        act_content: "test",
-        act_on: new Date().toLocaleDateString(),
-      });
-    }
+    // Login events are NOT written to activity_log any more. That table is
+    // now the record of database CHANGES (see utils/auditHooks.js), and a
+    // login row per session buried the edits people actually need to find.
+    // Sign-ins are kept in login_logs by recordLogin() above.
 
     // Generate token
     const token = jwt.sign(
@@ -521,7 +510,8 @@ exports.loginAsSubUser = async (req, res) => {
 
     // An admin signing in as another user is a real access event, so it is
     // recorded too - tagged as impersonation and carrying the admin's id, so
-    // the trail never suggests the staff member signed in themselves.
+    // the trail never suggests the staff member signed in themselves. It goes
+    // to login_logs; activity_log is for database changes only.
     await recordLogin(req, user, {
       center_id,
       course_id,
@@ -529,21 +519,6 @@ exports.loginAsSubUser = async (req, res) => {
       method: "impersonation",
       impersonatedBy: req.user?.id || req.admin?.id || null,
     });
-
-    // Log activity for trainers and students
-    if (["trainer", "student"].includes(user.user_type)) {
-      await ActivityLogModel.create({
-        user_id: user.user_id,
-        user_type: user.user_type,
-        tb_id: batch_id,
-        center_id,
-        course_id,
-        act_type: "Login",
-        act_descrip: "User Logged In",
-        act_content: "test",
-        act_on: new Date().toLocaleDateString(),
-      });
-    }
 
     // Generate token
     const token = jwt.sign(
