@@ -270,7 +270,7 @@ const CampaignDetail: React.FC<Props> = ({ campaignId, onBack }) => {
                 </button>
               </>
             )}
-          {campaign.ec_kind === "initial" && (stats?.sent || 0) > 0 && (
+          {campaign.ec_kind !== "reminder" && (stats?.sent || 0) > 0 && (
             <button
               onClick={() => setRemindOpen(true)}
               disabled={busy}
@@ -327,15 +327,9 @@ const CampaignDetail: React.FC<Props> = ({ campaignId, onBack }) => {
             </dd>
           </div>
           <div className="flex justify-between">
-            <dt className="text-slate-500">Interview</dt>
-            <dd className="font-medium text-slate-800">
-              {campaign.ec_interview_date || "—"} {campaign.ec_interview_time || ""}
-            </dd>
-          </div>
-          <div className="flex justify-between">
-            <dt className="text-slate-500">Venue</dt>
+            <dt className="text-slate-500">Subject</dt>
             <dd className="max-w-[60%] truncate text-right font-medium text-slate-800">
-              {campaign.ec_venue || "—"}
+              {campaign.ec_subject}
             </dd>
           </div>
         </dl>

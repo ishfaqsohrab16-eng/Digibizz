@@ -168,12 +168,15 @@ const interviewCall = (data) => {
       courseName ? ` - ${courseName}` : ""
     } | Digibizz Program`;
 
-  // The admin picks one or the other: the built-in letter, or their own HTML.
-  // Custom HTML replaces the message outright rather than being wrapped in the
-  // branded shell - half-applying someone's markup produces a worse result
-  // than either choice made cleanly.
+  // Custom HTML is the message, sent exactly as written.
+  //
+  // It used to be run through merge-token substitution first. That was removed
+  // deliberately: one template now goes to every recipient unchanged, so what
+  // is typed into the editor is byte-for-byte what arrives - including any
+  // literal {{...}} the author happens to want in their text, which
+  // substitution would silently have blanked.
   if (String(customHtml || "").trim()) {
-    const html = applyMergeTokens(customHtml, data);
+    const html = String(customHtml);
     return { subject, html, text: customHtmlToText(html) };
   }
 

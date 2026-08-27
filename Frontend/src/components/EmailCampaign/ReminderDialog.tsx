@@ -9,54 +9,31 @@ interface Props {
   onConfirm: (payload: Record<string, unknown>) => Promise<void> | void;
 }
 
-const inputClass =
-  "mt-1.5 w-full rounded-md border border-slate-300 px-3 py-2 text-sm outline-none focus:border-violet-500";
-
 /**
- * Asks for the new date, time and venue before a reminder goes out.
+ * Confirm before re-sending a campaign to the people who have not responded.
  *
- * A reminder is usually sent BECAUSE the sitting was rescheduled, so silently
- * repeating the original date would send several hundred people to a room on a
- * day nothing is happening. Left blank the fields fall back to the original
- * campaign's, which is the right behaviour for a plain "you did not attend"
- * chase - so the choice is explicit either way.
+ * This used to collect a rescheduled date, time and venue, because the message
+ * was built from a template that rendered them. Bodies are now the admin's own
+ * HTML, sent exactly as written, so those fields could not change a single
+ * character of what arrives - collecting them would have been theatre. The
+ * reminder re-sends this campaign's own message to the narrower list; to say
+ * something different, write a new campaign.
  */
 const ReminderDialog: React.FC<Props> = ({ campaign, onCancel, onConfirm }) => {
-  const [form, setForm] = useState({
-    ec_interview_date: "",
-    ec_interview_time: "",
-    ec_reporting_time: "",
-    ec_venue: "",
-    ec_message: "",
-    startNow: false,
-  });
+  const [startNow, setStartNow] = useState(false);
   const [saving, setSaving] = useState(false);
 
   useEffect(() => {
-    setForm({
-      ec_interview_date: "",
-      ec_interview_time: "",
-      ec_reporting_time: "",
-      ec_venue: "",
-      ec_message: "",
-      startNow: false,
-    });
+    setStartNow(false);
     setSaving(false);
   }, [campaign?.ec_id]);
 
   if (!campaign) return null;
 
-  const set = (key: string, value: unknown) =>
-    setForm((prev) => ({ ...prev, [key]: value }));
-
-  const rescheduled = Boolean(
-    form.ec_interview_date || form.ec_interview_time || form.ec_venue
-  );
-
   const handleConfirm = async () => {
     setSaving(true);
     try {
-      await onConfirm(form);
+      await onConfirm({ startNow });
     } finally {
       setSaving(false);
     }
@@ -64,14 +41,14 @@ const ReminderDialog: React.FC<Props> = ({ campaign, onCancel, onConfirm }) => {
 
   return (
     <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/50 p-4">
-      <div className="max-h-[90vh] w-full max-w-xl overflow-y-auto rounded-lg bg-white shadow-xl">
+      <div className="w-full max-w-lg rounded-lg bg-white shadow-xl">
         <div className="flex items-start gap-3 border-b border-slate-200 p-5">
           <div className="rounded-full bg-violet-100 p-2">
             <BellRing className="h-5 w-5 text-violet-600" />
           </div>
           <div>
             <h3 className="text-lg font-semibold text-slate-900">
-              Remind those not interviewed
+              Send a reminder
             </h3>
             <p className="mt-1 text-sm text-slate-600">
               Goes only to people this campaign actually delivered to who still
@@ -81,84 +58,22 @@ const ReminderDialog: React.FC<Props> = ({ campaign, onCancel, onConfirm }) => {
         </div>
 
         <div className="space-y-4 p-5">
-          <div className="rounded-md border border-amber-200 bg-amber-50 p-3 text-xs text-amber-800">
-            If the sitting has been rescheduled, enter the new details below.
-            Anything left blank keeps what the original campaign said
-            {campaign.ec_interview_date
-              ? ` (currently ${campaign.ec_interview_date}${
-                  campaign.ec_interview_time ? `, ${campaign.ec_interview_time}` : ""
-                })`
-              : ""}
-            .
+          <div className="rounded-md border border-slate-200 bg-slate-50 p-3 text-sm">
+            <p className="font-medium text-slate-800">{campaign.ec_name}</p>
+            <p className="mt-0.5 text-slate-600">{campaign.ec_subject}</p>
           </div>
 
-          <div className="grid grid-cols-1 gap-4 md:grid-cols-2">
-            <div>
-              <label className="block text-sm font-medium text-slate-700">
-                New date
-              </label>
-              <input
-                type="date"
-                value={form.ec_interview_date}
-                onChange={(e) => set("ec_interview_date", e.target.value)}
-                className={inputClass}
-              />
-            </div>
-            <div>
-              <label className="block text-sm font-medium text-slate-700">
-                New time
-              </label>
-              <input
-                type="text"
-                value={form.ec_interview_time}
-                onChange={(e) => set("ec_interview_time", e.target.value)}
-                placeholder={campaign.ec_interview_time || "10:00 AM to 02:00 PM"}
-                className={inputClass}
-              />
-            </div>
-            <div>
-              <label className="block text-sm font-medium text-slate-700">
-                New reporting time
-              </label>
-              <input
-                type="text"
-                value={form.ec_reporting_time}
-                onChange={(e) => set("ec_reporting_time", e.target.value)}
-                placeholder={campaign.ec_reporting_time || "09:30 AM"}
-                className={inputClass}
-              />
-            </div>
-            <div>
-              <label className="block text-sm font-medium text-slate-700">
-                New venue
-              </label>
-              <input
-                type="text"
-                value={form.ec_venue}
-                onChange={(e) => set("ec_venue", e.target.value)}
-                placeholder={campaign.ec_venue || "Same as before"}
-                className={inputClass}
-              />
-            </div>
-            <div className="md:col-span-2">
-              <label className="block text-sm font-medium text-slate-700">
-                Note (optional)
-              </label>
-              <textarea
-                rows={2}
-                value={form.ec_message}
-                onChange={(e) => set("ec_message", e.target.value)}
-                placeholder="For example: the interview has been moved to a new date."
-                className={inputClass}
-              />
-            </div>
-          </div>
+          <p className="text-xs text-slate-600">
+            The same message is sent again, unchanged. If you need to say
+            something different — a new date, a new venue — create a new
+            campaign instead.
+          </p>
 
           <label className="flex items-center gap-2 text-sm text-slate-700">
             <input
               type="checkbox"
-              checked={form.startNow}
-              onChange={(e) => set("startNow", e.target.checked)}
+              checked={startNow}
+              onChange={(e) => setStartNow(e.target.checked)}
               className="h-4 w-4 rounded border-slate-300"
             />
             Start sending as soon as the reminder is created
@@ -181,7 +96,7 @@ const ReminderDialog: React.FC<Props> = ({ campaign, onCancel, onConfirm }) => {
             className="inline-flex items-center gap-2 rounded-md bg-violet-600 px-4 py-2 text-sm font-semibold text-white hover:bg-violet-700 disabled:opacity-50"
           >
             {saving && <Loader2 className="h-4 w-4 animate-spin" />}
-            {rescheduled ? "Create rescheduled reminder" : "Create reminder"}
+            Create reminder
           </button>
         </div>
       </div>

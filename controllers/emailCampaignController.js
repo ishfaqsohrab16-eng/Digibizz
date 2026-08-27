@@ -383,6 +383,17 @@ exports.createCampaign = async (req, res) => {
     const minGap = Math.max(0, Number(ec_min_gap_seconds) || 0);
     const maxGap = Math.max(minGap, Number(ec_max_gap_seconds) || minGap);
 
+    // Every campaign carries its own HTML now. Without this guard an empty
+    // body would fall through to the built-in interview letter, which is no
+    // longer offered in the UI and would be a surprise to whoever sent it.
+    if (!String(ec_custom_html || "").trim()) {
+      await transaction.rollback();
+      return res.status(400).json({
+        success: false,
+        message: "Write the email body before creating the campaign",
+      });
+    }
+
     const kind = ["initial", "reminder", "recommendation", "general"].includes(
       String(ec_kind || "").toLowerCase()
     )

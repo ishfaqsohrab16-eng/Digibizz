@@ -98,7 +98,7 @@ const EmailCampaigns: React.FC = () => {
     <div className="container mx-auto px-4 py-8 sm:px-6 lg:px-8">
       <SettingsHeader
         SettingsHeader="Email Campaigns"
-        SettingDescription="Interview call-ups and reminders, sent in paced batches"
+        SettingDescription="Your own HTML, sent to a center's candidates, its students, or an uploaded list"
       />
 
       {view === "create" ? (
@@ -134,9 +134,10 @@ const EmailCampaigns: React.FC = () => {
                 No campaigns yet
               </h3>
               <p className="mx-auto mt-1 max-w-md text-sm text-slate-500">
-                Create one to email interview call-ups to a center's candidates.
-                The quota is split evenly across that center's courses, and
-                anyone already contacted is skipped automatically.
+                Create one to send your own HTML to a center's candidates, its
+                enrolled students, or a list of addresses you upload. Everyone
+                receives the same message, paced so the sending domain stays
+                off blocklists.
               </p>
             </div>
           ) : (
