@@ -21,6 +21,13 @@ const { sequelize } = require("../config/db");
  */
 const REQUIRED_COLUMNS = [
   {
+    table: "email_campaign_recipients",
+    column: "ecr_merge_data",
+    definition:
+      "TEXT NULL DEFAULT NULL COMMENT 'JSON of extra columns from an uploaded list, offered as merge tokens'",
+    migration: "migration/018_campaign_uploaded_lists.sql",
+  },
+  {
     table: "email_campaigns",
     column: "ec_audience",
     definition:

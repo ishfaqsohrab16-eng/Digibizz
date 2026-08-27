@@ -18,6 +18,10 @@ const {
 const { ADMISSION_BATCH_LABEL } = require("../servec/admissionBatch");
 const dispatcher = require("../utils/emailCampaignDispatcher");
 const { allocateEvenly } = require("../utils/allocateEvenly");
+const {
+  parseRecipientList,
+  buildTemplateCsv,
+} = require("../utils/recipientListParser");
 
 /**
  * Email campaigns for candidate outreach.
@@ -355,6 +359,8 @@ exports.createCampaign = async (req, res) => {
       ec_custom_html,
       ec_kind,
       ec_audience,
+      // Rows parsed from an uploaded spreadsheet, for a "list" campaign.
+      recipientList,
       startNow,
     } = req.body;
 
@@ -382,10 +388,103 @@ exports.createCampaign = async (req, res) => {
     )
       ? String(ec_kind).toLowerCase()
       : "initial";
-    const audience = audienceForKind(
-      kind,
-      String(ec_audience || "").toLowerCase()
-    );
+    const requestedAudience = String(ec_audience || "").toLowerCase();
+    const audience =
+      requestedAudience === "list"
+        ? "list"
+        : audienceForKind(kind, requestedAudience);
+
+    // An uploaded list is its own recipient source: the addresses belong to
+    // nobody in the database, so there is no pool to select from and no
+    // per-course quota to divide. It is re-validated here rather than trusted
+    // from the browser, because the parse happened in a separate request and
+    // the payload could have been edited in between.
+    if (audience === "list") {
+      const rows = Array.isArray(recipientList) ? recipientList : [];
+      const seen = new Set();
+      const cleaned = [];
+
+      for (const row of rows) {
+        const email = String(row?.email || "").trim().toLowerCase();
+        if (!email || !/^[^s@]+@[^s@]+.[^s@]{2,}$/.test(email)) continue;
+        if (seen.has(email)) continue;
+        seen.add(email);
+        cleaned.push({
+          email,
+          name: String(row?.name || "").trim().slice(0, 150),
+          merge:
+            row?.merge && typeof row.merge === "object" ? row.merge : null,
+        });
+      }
+
+      if (cleaned.length === 0) {
+        await transaction.rollback();
+        return res.status(400).json({
+          success: false,
+          message: "That list has no usable email addresses.",
+        });
+      }
+
+      const listCampaign = await EmailCampaign.create(
+        {
+          ec_name,
+          tb_id: Number(tb_id),
+          center_id: Number(center_id),
+          ec_kind: kind,
+          ec_audience: "list",
+          ec_target_count: cleaned.length,
+          ec_batch_size: Math.max(1, Number(ec_batch_size) || 25),
+          ec_interval_minutes: Math.max(1, Number(ec_interval_minutes) || 15),
+          ec_min_gap_seconds: minGap,
+          ec_max_gap_seconds: maxGap,
+          ec_subject: ec_subject || "A message from the Digibizz Program",
+          ec_interview_date: ec_interview_date || null,
+          ec_interview_time: ec_interview_time || null,
+          ec_reporting_time: ec_reporting_time || null,
+          ec_venue: ec_venue || null,
+          ec_contact_person: ec_contact_person || null,
+          ec_contact_phone: ec_contact_phone || null,
+          ec_message: ec_message || null,
+          ec_custom_html: String(ec_custom_html || "").trim() || null,
+          ec_status: startNow ? "running" : "draft",
+          ec_next_run_at: startNow ? new Date() : null,
+          ec_created_by: req.user?.id || req.admin?.id || null,
+        },
+        { transaction }
+      );
+
+      await EmailCampaignRecipient.bulkCreate(
+        cleaned.map((row) => ({
+          ec_id: listCampaign.ec_id,
+          // Neither: these addresses have no record in the database.
+          cand_id: null,
+          std_id: null,
+          ecr_email: row.email,
+          ecr_name: row.name || null,
+          course_id: null,
+          ecr_merge_data: row.merge ? JSON.stringify(row.merge) : null,
+          ecr_status: "pending",
+        })),
+        { transaction }
+      );
+
+      await transaction.commit();
+
+      const withCenterForList = await EmailCampaign.findByPk(listCampaign.ec_id, {
+        include: [{ model: Center, as: "center", attributes: ["center_name"] }],
+      });
+      const listTest = await dispatcher.sendTestCopies(
+        withCenterForList || listCampaign
+      );
+
+      return res.status(201).json({
+        success: true,
+        message: `Campaign created for ${cleaned.length} address(es) from your list`,
+        campaign: listCampaign,
+        skipped: rows.length - cleaned.length,
+        test: listTest,
+      });
+    }
 
     const { chosen, pool, allocation } = await selectRecipients(
       tb_id,
@@ -1225,5 +1324,80 @@ exports.getStarterTemplate = async (req, res) => {
     return res
       .status(500)
       .json({ success: false, message: "Starter template is unavailable" });
+  }
+};
+
+/**
+ * The CSV template operators fill in before uploading.
+ *
+ * Handed out from the same module that parses it, so the file we ask for and
+ * the file we accept cannot drift apart.
+ */
+exports.downloadListTemplate = async (req, res) => {
+  try {
+    res.setHeader("Content-Type", "text/csv; charset=utf-8");
+    res.setHeader(
+      "Content-Disposition",
+      'attachment; filename="digibizz-email-list-template.csv"'
+    );
+    return res.send(buildTemplateCsv());
+  } catch (error) {
+    console.error("Error building the list template:", error);
+    return res
+      .status(500)
+      .json({ success: false, message: "Could not build the template" });
+  }
+};
+
+/**
+ * Parse an uploaded list and report what it contains.
+ *
+ * Nothing is stored here. The parsed rows go back to the browser and are
+ * posted again with the campaign, so an upload that is never turned into a
+ * campaign leaves nothing behind to clean up, and the operator gets to see
+ * exactly what was read before committing to send to it.
+ */
+exports.uploadRecipientList = async (req, res) => {
+  try {
+    if (!req.file?.buffer) {
+      return res
+        .status(400)
+        .json({ success: false, message: "Please choose a .xlsx or .csv file" });
+    }
+
+    const { recipients, skipped, headers, total } = parseRecipientList(
+      req.file.buffer,
+      req.file.originalname
+    );
+
+    if (recipients.length === 0) {
+      return res.status(400).json({
+        success: false,
+        message: "No usable email addresses were found in that file.",
+        skipped,
+        headers,
+      });
+    }
+
+    return res.json({
+      success: true,
+      message: `${recipients.length} address(es) read${
+        skipped.length ? `, ${skipped.length} row(s) skipped` : ""
+      }`,
+      recipients,
+      // Capped: enough for the operator to fix the file without returning a
+      // ten-thousand-row error report they will never scroll through.
+      skipped: skipped.slice(0, 100),
+      skippedTotal: skipped.length,
+      headers,
+      total,
+    });
+  } catch (error) {
+    // parseRecipientList throws only with messages written to be shown.
+    console.error("Error parsing the uploaded list:", error?.message || error);
+    return res.status(400).json({
+      success: false,
+      message: error?.message || "Could not read that file",
+    });
   }
 };

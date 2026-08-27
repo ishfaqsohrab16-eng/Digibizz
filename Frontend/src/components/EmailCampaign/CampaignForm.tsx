@@ -12,6 +12,7 @@ import {
 import { toast } from "sonner";
 import {
   CampaignEligibility,
+  UploadedRecipient,
   createEmailCampaign,
   downloadCampaignRecipientPreview,
   getCampaignEligibility,
@@ -19,6 +20,7 @@ import {
   previewCampaignEmail,
 } from "../../services/api";
 import { useBatch } from "../../context/BatchContext";
+import RecipientListUpload from "./RecipientListUpload";
 import { useReferenceData } from "../../hooks/useReferenceData";
 
 interface Props {
@@ -91,10 +93,21 @@ const CampaignForm: React.FC<Props> = ({ onCreated, onCancel }) => {
    * "you have been selected" reaching someone who was not selected is the one
    * mistake worth designing out. The server pins this too.
    */
-  const [kind, setKind] = useState<"initial" | "recommendation" | "general">(
-    "initial"
-  );
-  const audience = kind === "recommendation" ? "students" : "candidates";
+  const [kind, setKind] = useState<
+    "initial" | "recommendation" | "general" | "list"
+  >("initial");
+
+  // "list" is a kind in the UI but an AUDIENCE on the server: the message type
+  // is still a general announcement, only the recipients come from a file.
+  const isList = kind === "list";
+  const serverKind = isList ? "general" : kind;
+  const audience = isList
+    ? "list"
+    : kind === "recommendation"
+    ? "students"
+    : "candidates";
+
+  const [listRecipients, setListRecipients] = useState<UploadedRecipient[]>([]);
 
   const [form, setForm] = useState({
     ec_name: "",
@@ -119,7 +132,9 @@ const CampaignForm: React.FC<Props> = ({ onCreated, onCancel }) => {
     setForm((prev) => ({ ...prev, [key]: value }));
 
   useEffect(() => {
-    if (!centerId || !selectedBatchId) {
+    // An uploaded list has no pool in the database to count against, so the
+    // eligibility panel does not apply to it.
+    if (isList || !centerId || !selectedBatchId) {
       setEligibility(null);
       return;
     }
@@ -142,7 +157,7 @@ const CampaignForm: React.FC<Props> = ({ onCreated, onCancel }) => {
     };
     // Re-run on kind: a recommendation counts enrolled students, an interview
     // call-up counts candidates, so the availability figures differ entirely.
-  }, [centerId, selectedBatchId, kind, audience]);
+  }, [centerId, selectedBatchId, kind, audience, isList]);
 
   const centerName = useMemo(
     () => centers.find((c) => c.center_id === centerId)?.center_name || "",
@@ -224,11 +239,11 @@ const CampaignForm: React.FC<Props> = ({ onCreated, onCancel }) => {
   const emailPayload = useMemo(
     () => ({
       ...form,
-      ec_kind: kind,
+      ec_kind: serverKind,
       ec_audience: audience,
       ec_custom_html: bodyMode === "custom" ? form.ec_custom_html : "",
     }),
-    [form, bodyMode, kind, audience]
+    [form, bodyMode, serverKind, audience]
   );
 
   const handlePreview = async () => {
@@ -332,6 +347,10 @@ const CampaignForm: React.FC<Props> = ({ onCreated, onCancel }) => {
       toast.error("Give the campaign a name");
       return;
     }
+    if (isList && listRecipients.length === 0) {
+      toast.error("Upload an email list first");
+      return;
+    }
     if (Number(form.ec_min_gap_seconds) > Number(form.ec_max_gap_seconds)) {
       toast.error("Minimum gap cannot be greater than the maximum gap");
       return;
@@ -343,6 +362,7 @@ const CampaignForm: React.FC<Props> = ({ onCreated, onCancel }) => {
         ...emailPayload,
         tb_id: selectedBatchId,
         center_id: centerId,
+        ...(isList ? { recipientList: listRecipients } : {}),
       });
       if (response?.success) {
         const test = response.test;
@@ -392,6 +412,11 @@ const CampaignForm: React.FC<Props> = ({ onCreated, onCancel }) => {
                 title: "General announcement",
                 note: "Any other message. Write your own HTML for the body.",
               },
+              {
+                value: "list",
+                title: "Upload an email list",
+                note: "One message to every address in a spreadsheet you provide.",
+              },
             ] as const
           ).map((option) => (
             <button
@@ -414,6 +439,14 @@ const CampaignForm: React.FC<Props> = ({ onCreated, onCancel }) => {
           ))}
         </div>
 
+        {isList && (
+          <p className="mt-3 rounded-md border border-sky-200 bg-sky-50 p-3 text-xs text-sky-800">
+            The same message goes to every address in the file. Sending is paced
+            exactly as for any other campaign — chunks, intervals and the random
+            gaps you set below.
+          </p>
+        )}
+
         {kind === "recommendation" && (
           <p className="mt-3 rounded-md border border-sky-200 bg-sky-50 p-3 text-xs text-sky-800">
             Goes to <strong>enrolled students</strong> at this center — never to
@@ -423,6 +456,12 @@ const CampaignForm: React.FC<Props> = ({ onCreated, onCancel }) => {
         )}
       </div>
 
+      {isList ? (
+        <RecipientListUpload
+          recipients={listRecipients}
+          onChange={setListRecipients}
+        />
+      ) : (
       <div className="rounded-lg border border-slate-200 bg-white p-5">
         <h3 className="text-base font-semibold text-slate-900">Who to contact</h3>
         <p className="mt-1 text-xs text-slate-500">
@@ -548,6 +587,7 @@ const CampaignForm: React.FC<Props> = ({ onCreated, onCancel }) => {
           </div>
         )}
       </div>
+      )}
 
       <div className="rounded-lg border border-slate-200 bg-white p-5">
         <h3 className="text-base font-semibold text-slate-900">

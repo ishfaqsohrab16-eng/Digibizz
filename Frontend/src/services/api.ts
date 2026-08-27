@@ -3885,3 +3885,46 @@ export const getEmailVerificationStatus = async (email: string) => {
   });
   return response.data as { success: boolean; verified: boolean };
 };
+
+export interface UploadedRecipient {
+  email: string;
+  name?: string;
+  merge?: Record<string, string>;
+  line?: number;
+}
+
+/** The one-column CSV operators fill in before uploading. */
+export const downloadCampaignListTemplate = () =>
+  downloadBlob(`${API_URL}/email-campaigns/list-template`, {});
+
+/**
+ * Parse an uploaded spreadsheet. Nothing is stored: the rows come back to the
+ * browser and are posted again with the campaign, so an abandoned upload
+ * leaves no list of addresses on the server.
+ */
+export const uploadCampaignRecipientList = async (file: File) => {
+  const body = new FormData();
+  body.append("file", file);
+
+  const response = await axios.post(
+    `${API_URL}/email-campaigns/upload-list`,
+    body,
+    {
+      headers: {
+        Authorization: `Bearer ${getCurrentUserToken()}`,
+        // Content-Type is deliberately omitted: the browser must set it so the
+        // multipart boundary is included, and naming it here would drop that.
+      },
+    }
+  );
+
+  return response.data as {
+    success: boolean;
+    message: string;
+    recipients: UploadedRecipient[];
+    skipped: Array<{ line: number; email: string; reason: string }>;
+    skippedTotal: number;
+    headers: string[];
+    total: number;
+  };
+};

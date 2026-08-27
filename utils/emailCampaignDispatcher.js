@@ -141,8 +141,21 @@ const renderForRecipient = (campaign, recipient) => {
   const student = recipient.student || {};
   const person = recipient.std_id ? student : candidate;
 
+  // Columns the uploaded spreadsheet carried, offered to the template as
+  // extra merge tokens. Corrupt JSON is ignored rather than failing the send -
+  // the message is still worth delivering without one optional value.
+  let merge = null;
+  if (recipient.ecr_merge_data) {
+    try {
+      merge = JSON.parse(recipient.ecr_merge_data);
+    } catch {
+      merge = null;
+    }
+  }
+
   return renderCampaignEmail({
     kind: campaign.ec_kind,
+    merge,
     name: recipient.ecr_name || person.cand_name || person.user?.user_name,
     fatherName: person.cand_fathername || person.std_fathername,
     cnic: person.cand_cnic || person.std_cnic,

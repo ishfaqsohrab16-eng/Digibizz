@@ -64,7 +64,10 @@ const EmailCampaign = sequelize.define(
      * exactly one of them is set per row.
      */
     ec_audience: {
-      type: DataTypes.ENUM("candidates", "students"),
+      // "list" is an uploaded spreadsheet of addresses, which belong to nobody
+      // in the database - so those recipient rows carry neither cand_id nor
+      // std_id, only the address and whatever the file supplied.
+      type: DataTypes.ENUM("candidates", "students", "list"),
       allowNull: false,
       defaultValue: "candidates",
     },

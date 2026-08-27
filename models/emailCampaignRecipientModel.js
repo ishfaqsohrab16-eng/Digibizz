@@ -74,6 +74,18 @@ const EmailCampaignRecipient = sequelize.define(
       allowNull: false,
       defaultValue: 0,
     },
+    /**
+     * Merge values from the uploaded spreadsheet, as JSON.
+     *
+     * A list campaign's recipients have no database record to read {{course}}
+     * or {{center}} from, so whatever columns the file carried are stored here
+     * and offered to the template as tokens. Null for candidate and student
+     * campaigns, which read those fields from the record itself.
+     */
+    ecr_merge_data: {
+      type: DataTypes.TEXT,
+      allowNull: true,
+    },
     /** Last SMTP error, truncated - enough to tell a bad address from a refusal. */
     ecr_error: {
       type: DataTypes.STRING(500),

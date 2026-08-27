@@ -88,8 +88,20 @@ const MERGE_TOKENS = Object.keys(MERGE_FIELDS);
 const applyMergeTokens = (html, data) =>
   String(html ?? "").replace(TOKEN_PATTERN, (_, token) => {
     const key = String(token).toLowerCase();
+
     const resolve = MERGE_FIELDS[key];
-    return resolve ? escapeHtml(resolve(data) ?? "") : "";
+    if (resolve) {
+      const value = resolve(data);
+      // A known token with no value falls through to the uploaded row, so a
+      // list campaign can supply {{course}} from its own spreadsheet column
+      // even though there is no candidate record behind it.
+      if (value !== undefined && value !== null && String(value) !== "") {
+        return escapeHtml(value);
+      }
+    }
+
+    const extra = data?.merge?.[key];
+    return extra === undefined || extra === null ? "" : escapeHtml(extra);
   });
 
 /**
