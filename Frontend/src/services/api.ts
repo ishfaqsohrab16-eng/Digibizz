@@ -3838,3 +3838,43 @@ export const getCampaignStarterTemplate = async () => {
   );
   return response.data as { success: boolean; html: string };
 };
+
+// ---------------------------------------------------------------------------
+// Email confirmation for the public registration form. No auth header: the
+// applicant has no account yet.
+// ---------------------------------------------------------------------------
+
+export const sendEmailVerificationCode = async (email: string) => {
+  const response = await axios.post(`${API_URL}/email-verification/send-code`, {
+    email,
+  });
+  return response.data as {
+    success: boolean;
+    message: string;
+    expiresInMinutes: number;
+    resendAfterSeconds: number;
+  };
+};
+
+export const confirmEmailVerificationCode = async (
+  email: string,
+  code: string
+) => {
+  const response = await axios.post(
+    `${API_URL}/email-verification/verify-code`,
+    { email, code }
+  );
+  return response.data as {
+    success: boolean;
+    verified: boolean;
+    message: string;
+  };
+};
+
+/** Survives a page refresh, so a confirmed address is not re-verified. */
+export const getEmailVerificationStatus = async (email: string) => {
+  const response = await axios.get(`${API_URL}/email-verification/status`, {
+    params: { email },
+  });
+  return response.data as { success: boolean; verified: boolean };
+};

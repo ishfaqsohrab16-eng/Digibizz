@@ -281,4 +281,80 @@ const interviewCall = (data) => {
   return { subject, text, html };
 };
 
-module.exports = { interviewCall, applyMergeTokens, customHtmlToText, MERGE_TOKENS };
+
+/**
+ * One-time code confirming an applicant's email address.
+ *
+ * Deliberately plain and short. A code email is read in three seconds on a
+ * phone, often in a notification preview, so the code itself leads and there
+ * is nothing to scroll past. It also offers nothing to click: the code is
+ * typed back into the form the applicant already has open, and there is no
+ * "confirm" button to press. Teaching applicants to click a link in a message
+ * about their account is the habit phishing relies on. (The shared footer
+ * still carries a support mailto, which is not an action link.)
+ *
+ * @param {object} data
+ * @param {string} data.code
+ * @param {number} [data.expiresInMinutes]
+ * @returns {{subject: string, text: string, html: string}}
+ */
+const verificationCode = (data) => {
+  const code = String(data?.code || "");
+  const minutes = Number(data?.expiresInMinutes) || 15;
+
+  // The code is in the subject too, so it can be read from the notification
+  // without opening the message.
+  const subject = `${code} is your Digibizz verification code`;
+
+  const html = documentShell(
+    subject,
+    `
+      <p style="margin:0 0 14px;color:#263238;font-size:16px;">Confirm your email address</p>
+      <p style="margin:0 0 20px;color:#546e7a;font-size:14px;line-height:1.7;">
+        Enter this code on the registration form to confirm this address belongs
+        to you.
+      </p>
+
+      <table role="presentation" width="100%" cellpadding="0" cellspacing="0" style="margin:0 0 20px;">
+        <tr>
+          <td align="center" style="background-color:#f5f7f8;border:1px solid #e0e6e3;border-radius:8px;padding:22px;">
+            <div style="font-family:'Courier New',Courier,monospace;font-size:34px;font-weight:bold;letter-spacing:8px;color:#1f2d28;">${escapeHtml(
+              code
+            )}</div>
+          </td>
+        </tr>
+      </table>
+
+      <p style="margin:0 0 8px;color:#546e7a;font-size:14px;line-height:1.7;">
+        The code expires in ${minutes} minutes.
+      </p>
+      <p style="margin:0;color:#90a4ae;font-size:13px;line-height:1.7;">
+        If you did not start a Digibizz application, you can ignore this email -
+        no account is created until the code is entered.
+      </p>
+    `
+  );
+
+  const text = [
+    "Confirm your email address",
+    "",
+    `Your Digibizz verification code is: ${code}`,
+    "",
+    `Enter it on the registration form. The code expires in ${minutes} minutes.`,
+    "",
+    "If you did not start a Digibizz application, you can ignore this email -",
+    "no account is created until the code is entered.",
+    "",
+    `Support: ${SUPPORT_EMAIL}`,
+  ].join("\n");
+
+  return { subject, text, html };
+};
+
+module.exports = {
+  interviewCall,
+  verificationCode,
+  applyMergeTokens,
+  customHtmlToText,
+  MERGE_TOKENS,
+};

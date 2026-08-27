@@ -11,6 +11,7 @@ const { sendEmailSafe } = require("../servec/emailConfig");
 const { applicationReceived } = require("../servec/emailTemplates");
 const { ADMISSION_BATCH_LABEL } = require("../servec/admissionBatch");
 const { validateAdmissionAvailability } = require("./admissionControlController");
+const { isEmailVerified } = require("./emailVerificationController");
 const AdmissionControl = require("../models/admissionControlModel");
 
 /**
@@ -121,6 +122,19 @@ exports.createCandidate = async (req, res) => {
     if (!admissionCheck.allowed) {
       return res.status(400).json({ message: admissionCheck.message });
     }
+
+    // The address must have been confirmed with a code. Checked here as well
+    // as in the form because the browser check is only a convenience - the
+    // interview call-up is sent to this address, so an unverified typo means
+    // the applicant never hears from the program and the seat is wasted.
+    if (!(await isEmailVerified(candidateData.cand_email))) {
+      return res.status(400).json({
+        message:
+          "Please confirm your email address with the code we sent before submitting.",
+        field: "cand_email",
+      });
+    }
+
     
     // Check if candidate already exists for this batch
     const existingCandidate = await Candidate.findOne({

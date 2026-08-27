@@ -1,4 +1,4 @@
-import{bh as a}from"./index-Dq1T2gIB.js";/**
+import{bj as a}from"./index-DDdmJ_AY.js";/**
  * @license lucide-react v0.462.0 - ISC
  *
  * This source code is licensed under the ISC license.
@@ -18,4 +18,4 @@ import{bh as a}from"./index-Dq1T2gIB.js";/**
  *
  * This source code is licensed under the ISC license.
  * See the LICENSE file in the root directory of this source tree.
- */const h=(r,e)=>{const t=a.forwardRef(({className:o,...s},n)=>a.createElement(p,{ref:n,iconNode:e,className:c(`lucide-${w(r)}`,o),...s}));return t.displayName=`${r}`,t};export{h as c};
+ */const b=(r,e)=>{const t=a.forwardRef(({className:o,...s},n)=>a.createElement(p,{ref:n,iconNode:e,className:c(`lucide-${w(r)}`,o),...s}));return t.displayName=`${r}`,t};export{b as c};

@@ -48,6 +48,7 @@ const courseModuleRoutes = require("./routes/courseModuleRoutes");
 const trainerTopicReportRoutes = require("./routes/trainerTopicReportRoutes");
 const admissionControlRoutes = require("./routes/admissionControlRoutes");
 const emailCampaignRoutes = require("./routes/emailCampaignRoutes");
+const emailVerificationRoutes = require("./routes/emailVerificationRoutes");
 
 require("./models/courseModuleAssociation");
 const app = express();
@@ -189,6 +190,7 @@ app.use("/api/course-modules", courseModuleRoutes);
 app.use("/api/trainer-topic-reports", trainerTopicReportRoutes);
 app.use("/api/admission-control", admissionControlRoutes);
 app.use("/api/email-campaigns", emailCampaignRoutes);
+app.use("/api/email-verification", emailVerificationRoutes);
 // Catch-all handler to return the React frontend's index.html file
 app.get("*", (req, res) => {
   res.sendFile(path.join(__dirname, "dist", "index.html"));
