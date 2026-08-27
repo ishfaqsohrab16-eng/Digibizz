@@ -6,7 +6,9 @@ const Course = require("../models/course");
 const Center = require("../models/center");
 const TrainingBatch = require("../models/trainingBatcheModel");
 const { sendEmail, isConfigured } = require("../servec/emailConfig");
-const { interviewCall } = require("../servec/campaignTemplates");
+const { interviewCall, renderCampaignEmail } = require("../servec/campaignTemplates");
+const Student = require("../models/studentModel");
+const User = require("../models/userModel");
 const { ADMISSION_BATCH_LABEL } = require("../servec/admissionBatch");
 
 /**
@@ -128,17 +130,27 @@ const perMessageDelayMs = (campaign) => {
   return randomInt(min, max) * 1000;
 };
 
-/** Build the personalised message for one recipient row. */
+/**
+ * Build the personalised message for one recipient row.
+ *
+ * A recipient is either a candidate or a student depending on the campaign's
+ * audience, so the personal fields are read from whichever one is attached.
+ */
 const renderForRecipient = (campaign, recipient) => {
   const candidate = recipient.candidate || {};
-  return interviewCall({
-    name: recipient.ecr_name || candidate.cand_name,
-    fatherName: candidate.cand_fathername,
-    cnic: candidate.cand_cnic,
-    phone: candidate.cand_phone,
-    applicationId: candidate.cand_id,
+  const student = recipient.student || {};
+  const person = recipient.std_id ? student : candidate;
+
+  return renderCampaignEmail({
+    kind: campaign.ec_kind,
+    name: recipient.ecr_name || person.cand_name || person.user?.user_name,
+    fatherName: person.cand_fathername || person.std_fathername,
+    cnic: person.cand_cnic || person.std_cnic,
+    phone: person.cand_phone || person.std_phone,
     courseName:
-      candidate.courses?.course_full_name || candidate.courses?.course_name,
+      recipient.course?.course_full_name ||
+      candidate.courses?.course_full_name ||
+      candidate.courses?.course_name,
     centerName: campaign.center?.center_name || candidate.centers?.center_name,
     // Label, not tb_name - see servec/admissionBatch.js. Intake is for
     // Batch 10 while the database batch still reads "Batch-9".
@@ -182,7 +194,8 @@ const sendTestCopies = async (campaign) => {
     return result;
   }
 
-  const rendered = interviewCall({
+  const rendered = renderCampaignEmail({
+    kind: campaign.ec_kind,
     ...TEST_CANDIDATE,
     centerName: campaign.center?.center_name || "TEST — Sample Center",
     batchName: ADMISSION_BATCH_LABEL,
@@ -233,6 +246,7 @@ const sendChunk = async (campaign) => {
       {
         model: Candidate,
         as: "candidate",
+        required: false,
         include: [
           {
             model: Course,
@@ -241,6 +255,19 @@ const sendChunk = async (campaign) => {
           },
           { model: Center, as: "centers", attributes: ["center_name"] },
         ],
+      },
+      {
+        model: Student,
+        as: "student",
+        required: false,
+        attributes: ["std_id", "std_cnic", "std_phone", "std_fathername"],
+        include: [{ model: User, attributes: ["user_name"] }],
+      },
+      {
+        model: Course,
+        as: "course",
+        required: false,
+        attributes: ["course_name", "course_full_name"],
       },
     ],
     order: [["ecr_id", "ASC"]],

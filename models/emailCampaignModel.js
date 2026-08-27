@@ -38,14 +38,35 @@ const EmailCampaign = sequelize.define(
       references: { model: Center, key: "center_id" },
     },
     /**
-     * `initial` targets candidates who have never been emailed by a campaign
-     * for this center+batch. `reminder` re-targets the recipients of an
-     * earlier campaign who have still not been interviewed.
+     * What this campaign is for. The date/time/venue columns below mean
+     * different things per kind, which is why they are named generically:
+     *
+     *   initial        - interview call-up. Candidates never emailed before
+     *                    for this center+batch.
+     *   reminder       - chases an earlier campaign's recipients who still
+     *                    have no interview recorded. Can carry a rescheduled
+     *                    date, time and venue.
+     *   recommendation - tells recommended candidates they are through, with
+     *                    the class start date, timing and venue.
+     *   general        - any other announcement, to candidates or students.
      */
     ec_kind: {
-      type: DataTypes.ENUM("initial", "reminder"),
+      type: DataTypes.ENUM("initial", "reminder", "recommendation", "general"),
       allowNull: false,
       defaultValue: "initial",
+    },
+    /**
+     * Who the campaign targets.
+     *
+     * The module started as an admissions tool, so it only knew candidates.
+     * Enrolled students are a different table with a different key, which is
+     * why email_campaign_recipients now carries both cand_id and std_id and
+     * exactly one of them is set per row.
+     */
+    ec_audience: {
+      type: DataTypes.ENUM("candidates", "students"),
+      allowNull: false,
+      defaultValue: "candidates",
     },
     /** Set on reminders: the campaign whose recipients are being chased. */
     ec_source_campaign_id: {
@@ -100,7 +121,13 @@ const EmailCampaign = sequelize.define(
       type: DataTypes.STRING(200),
       allowNull: false,
     },
-    /** Interview logistics rendered into the template. */
+    /**
+     * Event logistics rendered into the template.
+     *
+     * Named for the interview because that was the first use, but they are the
+     * generic date/time/venue of whatever the campaign is about: the interview
+     * for a call-up, the first class for a recommendation letter.
+     */
     ec_interview_date: {
       type: DataTypes.STRING(30),
       allowNull: true,

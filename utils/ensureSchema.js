@@ -21,6 +21,20 @@ const { sequelize } = require("../config/db");
  */
 const REQUIRED_COLUMNS = [
   {
+    table: "email_campaigns",
+    column: "ec_audience",
+    definition:
+      "VARCHAR(20) NOT NULL DEFAULT 'candidates' COMMENT 'candidates | students'",
+    migration: "migration/017_campaign_kinds_and_audiences.sql",
+  },
+  {
+    table: "email_campaign_recipients",
+    column: "std_id",
+    definition:
+      "INT NULL DEFAULT NULL COMMENT 'Set instead of cand_id for student-audience campaigns'",
+    migration: "migration/017_campaign_kinds_and_audiences.sql",
+  },
+  {
     table: "activity_log",
     column: "act_actor_name",
     definition: "VARCHAR(150) NULL DEFAULT NULL COMMENT 'Name of whoever made the change'",

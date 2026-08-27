@@ -11,6 +11,7 @@ import {
   FlaskConical,
 } from "lucide-react";
 import { toast } from "sonner";
+import ReminderDialog from "./ReminderDialog";
 import {
   CampaignStats,
   EmailCampaign,
@@ -77,6 +78,9 @@ const CampaignDetail: React.FC<Props> = ({ campaignId, onBack }) => {
   const [statusFilter, setStatusFilter] = useState("");
   const [loading, setLoading] = useState(true);
   const [busy, setBusy] = useState(false);
+  // A reminder asks for the rescheduled date/time/venue first - see
+  // ReminderDialog for why silently reusing the original is dangerous.
+  const [remindOpen, setRemindOpen] = useState(false);
 
   const load = useCallback(async () => {
     try {
@@ -158,6 +162,15 @@ const CampaignDetail: React.FC<Props> = ({ campaignId, onBack }) => {
 
   return (
     <div className="space-y-6">
+      <ReminderDialog
+        campaign={remindOpen ? campaign : null}
+        onCancel={() => setRemindOpen(false)}
+        onConfirm={async (payload) => {
+          await act(() => createCampaignReminder(campaign.ec_id, payload));
+          setRemindOpen(false);
+        }}
+      />
+
       <div className="flex flex-wrap items-start justify-between gap-4">
         <div>
           <button
@@ -259,7 +272,7 @@ const CampaignDetail: React.FC<Props> = ({ campaignId, onBack }) => {
             )}
           {campaign.ec_kind === "initial" && (stats?.sent || 0) > 0 && (
             <button
-              onClick={() => act(() => createCampaignReminder(campaign.ec_id, {}))}
+              onClick={() => setRemindOpen(true)}
               disabled={busy}
               className="inline-flex items-center gap-1.5 rounded-md bg-violet-600 px-3 py-2 text-sm font-semibold text-white hover:bg-violet-700 disabled:opacity-50"
             >

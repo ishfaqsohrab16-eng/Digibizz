@@ -9,7 +9,12 @@ const Candidate = require("../models/CandidateModel");
 const Course = require("../models/course");
 const Center = require("../models/center");
 const TrainingBatch = require("../models/trainingBatcheModel");
-const { interviewCall } = require("../servec/campaignTemplates");
+const Student = require("../models/studentModel");
+const User = require("../models/userModel");
+const {
+  interviewCall,
+  renderCampaignEmail,
+} = require("../servec/campaignTemplates");
 const { ADMISSION_BATCH_LABEL } = require("../servec/admissionBatch");
 const dispatcher = require("../utils/emailCampaignDispatcher");
 const { allocateEvenly } = require("../utils/allocateEvenly");
@@ -58,9 +63,18 @@ const NOT_INTERVIEWED = {
  *   - Anyone still queued (pending/failed) is excluded only while their
  *     campaign is live. Cancel it and they return to the available pool,
  *     which is the point of cancelling.
+ *
+ * Scoped by kind: a candidate who received an interview call-up must still be
+ * eligible for a recommendation letter later. Only campaigns of the SAME kind
+ * count against each other, since that is what "already contacted" means to
+ * the person creating this one.
  */
-const alreadyContactedIds = async (tb_id, center_id, { excludeCampaignId } = {}) => {
-  const campaignWhere = { tb_id, center_id };
+const alreadyContactedIds = async (
+  tb_id,
+  center_id,
+  { excludeCampaignId, kind = "initial", audience = "candidates" } = {}
+) => {
+  const campaignWhere = { tb_id, center_id, ec_kind: kind };
   if (excludeCampaignId) campaignWhere.ec_id = { [Op.ne]: excludeCampaignId };
 
   const campaigns = await EmailCampaign.findAll({
@@ -76,8 +90,11 @@ const alreadyContactedIds = async (tb_id, center_id, { excludeCampaignId } = {})
     .filter((c) => c.ec_status !== "cancelled")
     .map((c) => c.ec_id);
 
+  const idColumn = audience === "students" ? "std_id" : "cand_id";
+
   const rows = await EmailCampaignRecipient.findAll({
     where: {
+      [idColumn]: { [Op.ne]: null },
       [Op.or]: [
         { ec_id: { [Op.in]: allIds }, ecr_status: "sent" },
         ...(liveIds.length
@@ -90,11 +107,11 @@ const alreadyContactedIds = async (tb_id, center_id, { excludeCampaignId } = {})
           : []),
       ],
     },
-    attributes: [[fn("DISTINCT", col("cand_id")), "cand_id"]],
+    attributes: [[fn("DISTINCT", col(idColumn)), idColumn]],
     raw: true,
   });
 
-  return rows.map((row) => Number(row.cand_id));
+  return rows.map((row) => Number(row[idColumn]));
 };
 
 /**
@@ -107,44 +124,122 @@ const alreadyContactedIds = async (tb_id, center_id, { excludeCampaignId } = {})
  *
  * @returns {Promise<{chosen: object[], pool: object[], allocation: Map<number, number>, contacted: number}>}
  */
-const selectRecipients = async (tb_id, center_id, target) => {
-  const contacted = await alreadyContactedIds(Number(tb_id), Number(center_id));
+/**
+ * The audience a kind is allowed to target.
+ *
+ * A recommendation ("you have been selected") is addressed to people who are
+ * already enrolled students, so it is pinned to that audience rather than
+ * merely defaulted to it: sending "you have been selected" to a candidate who
+ * was not selected is the one mistake this module must make impossible.
+ *
+ * Because the pool is recomputed every time a campaign is created, students
+ * enrolled AFTER an earlier send are simply in the pool the next time - and
+ * anyone already sent to is excluded by the ledger. So "send it to whoever has
+ * joined since" needs no extra bookkeeping.
+ */
+const audienceForKind = (kind, requested) =>
+  kind === "recommendation"
+    ? "students"
+    : requested === "students"
+    ? "students"
+    : "candidates";
 
-  const where = {
-    tb_id: Number(tb_id),
-    center_id: Number(center_id),
-    cand_email: { [Op.and]: [{ [Op.ne]: null }, { [Op.ne]: "" }] },
-  };
-  if (contacted.length > 0) where.cand_id = { [Op.notIn]: contacted };
+const selectRecipients = async (
+  tb_id,
+  center_id,
+  target,
+  { kind = "initial", audience = "candidates" } = {}
+) => {
+  audience = audienceForKind(kind, audience);
 
-  const pool = await Candidate.findAll({
-    where,
-    attributes: [
-      "cand_id",
-      "cand_name",
-      "cand_fathername",
-      "cand_email",
-      "cand_phone",
-      "cand_cnic",
-      "cand_gender",
-      "course_id",
-    ],
-    include: [
-      {
-        model: Course,
-        as: "courses",
-        attributes: ["course_name", "course_full_name"],
-      },
-    ],
-    order: [["cand_id", "ASC"]],
+  const contacted = await alreadyContactedIds(Number(tb_id), Number(center_id), {
+    kind,
+    audience,
   });
+
+  let pool;
+
+  if (audience === "students") {
+    // Enrolled students. Their address lives on the linked user account, not
+    // on the student row, so it has to be joined in and lifted onto the same
+    // shape the candidate branch produces.
+    const where = { tb_id: Number(tb_id), center_id: Number(center_id) };
+    if (contacted.length > 0) where.std_id = { [Op.notIn]: contacted };
+
+    const students = await Student.findAll({
+      where,
+      attributes: [
+        "std_id",
+        "std_cnic",
+        "std_phone",
+        "std_fathername",
+        "std_gender",
+        "course_id",
+      ],
+      include: [
+        { model: User, attributes: ["user_name", "user_email"], required: true },
+        {
+          model: Course,
+          attributes: ["course_name", "course_full_name"],
+          required: false,
+        },
+      ],
+      order: [["std_id", "ASC"]],
+    });
+
+    pool = students
+      .map((student) => ({
+        std_id: student.std_id,
+        cand_id: null,
+        cand_name: student.User?.user_name || "",
+        cand_email: student.User?.user_email || "",
+        cand_fathername: student.std_fathername,
+        cand_cnic: student.std_cnic,
+        cand_phone: student.std_phone,
+        cand_gender: student.std_gender,
+        course_id: student.course_id,
+        courses: student.Course || null,
+      }))
+      // A student with no address on their account cannot be emailed; they
+      // would otherwise sit in the campaign forever, failing every attempt.
+      .filter((student) => student.cand_email);
+  } else {
+    const where = {
+      tb_id: Number(tb_id),
+      center_id: Number(center_id),
+      cand_email: { [Op.and]: [{ [Op.ne]: null }, { [Op.ne]: "" }] },
+    };
+    if (contacted.length > 0) where.cand_id = { [Op.notIn]: contacted };
+
+    pool = await Candidate.findAll({
+      where,
+      attributes: [
+        "cand_id",
+        "cand_name",
+        "cand_fathername",
+        "cand_email",
+        "cand_phone",
+        "cand_cnic",
+        "cand_gender",
+        "course_id",
+      ],
+      include: [
+        {
+          model: Course,
+          as: "courses",
+          attributes: ["course_name", "course_full_name"],
+        },
+      ],
+      order: [["cand_id", "ASC"]],
+    });
+  }
 
   // Group by course, then split the requested total evenly across them.
   const byCourse = new Map();
-  for (const candidate of pool) {
-    const key = Number(candidate.course_id);
+  for (const person of pool) {
+    const key = Number(person.course_id);
     if (!byCourse.has(key)) byCourse.set(key, []);
-    byCourse.get(key).push(candidate);
+    byCourse.get(key).push(person);
   }
 
   const allocation = allocateEvenly(
@@ -191,44 +286,43 @@ exports.getEligibility = async (req, res) => {
         .json({ success: false, message: "tb_id and center_id are required" });
     }
 
-    const contacted = await alreadyContactedIds(tb_id, center_id);
+    const kind = String(req.query.kind || "initial").toLowerCase();
+    const audience =
+      String(req.query.audience || "").toLowerCase() === "students"
+        ? "students"
+        : "candidates";
 
-    const where = {
+    // Reuse the real selection with an unreachable target, so "available" is
+    // counted exactly the way the send will count it - including the
+    // recommended-only filter and the per-kind contacted ledger.
+    const { pool, contacted } = await selectRecipients(
       tb_id,
       center_id,
-      cand_email: { [Op.and]: [{ [Op.ne]: null }, { [Op.ne]: "" }] },
-    };
-    if (contacted.length > 0) where.cand_id = { [Op.notIn]: contacted };
+      Number.MAX_SAFE_INTEGER,
+      { kind, audience }
+    );
 
-    const rows = await Candidate.findAll({
-      where,
-      attributes: [
-        "course_id",
-        [fn("COUNT", col("Candidate.cand_id")), "available"],
-      ],
-      include: [
-        {
-          model: Course,
-          as: "courses",
-          attributes: ["course_name", "course_full_name"],
-        },
-      ],
-      group: ["Candidate.course_id", "courses.course_id"],
-      raw: true,
-      nest: true,
-    });
+    const byCourse = new Map();
+    for (const person of pool) {
+      const id = Number(person.course_id);
+      if (!byCourse.has(id)) {
+        byCourse.set(id, {
+          course_id: id,
+          course_name: person.courses?.course_name || "",
+          course_full_name:
+            person.courses?.course_full_name || person.courses?.course_name || "",
+          available: 0,
+        });
+      }
+      byCourse.get(id).available += 1;
+    }
 
-    const courses = rows.map((row) => ({
-      course_id: Number(row.course_id),
-      course_name: row.courses?.course_name || "",
-      course_full_name: row.courses?.course_full_name || row.courses?.course_name || "",
-      available: Number(row.available) || 0,
-    }));
+    const courses = [...byCourse.values()];
 
     return res.json({
       success: true,
-      alreadyContacted: contacted.length,
-      totalAvailable: courses.reduce((sum, c) => sum + c.available, 0),
+      alreadyContacted: contacted,
+      totalAvailable: pool.length,
       courses,
     });
   } catch (error) {
@@ -259,6 +353,8 @@ exports.createCampaign = async (req, res) => {
       ec_contact_phone,
       ec_message,
       ec_custom_html,
+      ec_kind,
+      ec_audience,
       startNow,
     } = req.body;
 
@@ -281,10 +377,21 @@ exports.createCampaign = async (req, res) => {
     const minGap = Math.max(0, Number(ec_min_gap_seconds) || 0);
     const maxGap = Math.max(minGap, Number(ec_max_gap_seconds) || minGap);
 
+    const kind = ["initial", "reminder", "recommendation", "general"].includes(
+      String(ec_kind || "").toLowerCase()
+    )
+      ? String(ec_kind).toLowerCase()
+      : "initial";
+    const audience = audienceForKind(
+      kind,
+      String(ec_audience || "").toLowerCase()
+    );
+
     const { chosen, pool, allocation } = await selectRecipients(
       tb_id,
       center_id,
-      target
+      target,
+      { kind, audience }
     );
 
     if (pool.length === 0) {
@@ -292,7 +399,11 @@ exports.createCampaign = async (req, res) => {
       return res.status(400).json({
         success: false,
         message:
-          "Every candidate at this center has already been contacted for this batch.",
+          kind === "recommendation"
+            ? "There are no recommended candidates left to contact at this center."
+            : audience === "students"
+            ? "Every student at this center has already been contacted for this batch."
+            : "Every candidate at this center has already been contacted for this batch.",
       });
     }
 
@@ -308,7 +419,8 @@ exports.createCampaign = async (req, res) => {
         ec_name,
         tb_id: Number(tb_id),
         center_id: Number(center_id),
-        ec_kind: "initial",
+        ec_kind: kind,
+        ec_audience: audience,
         ec_target_count: chosen.length,
         ec_batch_size: Math.max(1, Number(ec_batch_size) || 25),
         ec_interval_minutes: Math.max(1, Number(ec_interval_minutes) || 15),
@@ -335,12 +447,15 @@ exports.createCampaign = async (req, res) => {
     );
 
     await EmailCampaignRecipient.bulkCreate(
-      chosen.map((candidate) => ({
+      chosen.map((person) => ({
         ec_id: campaign.ec_id,
-        cand_id: candidate.cand_id,
-        ecr_email: candidate.cand_email,
-        ecr_name: candidate.cand_name,
-        course_id: candidate.course_id,
+        // Exactly one of these is set; the other stays null and identifies
+        // which table the recipient came from.
+        cand_id: audience === "students" ? null : person.cand_id,
+        std_id: audience === "students" ? person.std_id : null,
+        ecr_email: person.cand_email,
+        ecr_name: person.cand_name,
+        course_id: person.course_id,
         ecr_status: "pending",
       })),
       { transaction }
@@ -466,13 +581,19 @@ exports.createReminder = async (req, res) => {
         ec_min_gap_seconds: minGap,
         ec_max_gap_seconds: maxGap,
         ec_subject: ec_subject || `Reminder: ${source.ec_subject}`,
-        ec_interview_date: ec_interview_date ?? source.ec_interview_date,
-        ec_interview_time: ec_interview_time ?? source.ec_interview_time,
-        ec_reporting_time: ec_reporting_time ?? source.ec_reporting_time,
-        ec_venue: ec_venue ?? source.ec_venue,
-        ec_contact_person: ec_contact_person ?? source.ec_contact_person,
-        ec_contact_phone: ec_contact_phone ?? source.ec_contact_phone,
+        // A reminder is usually sent BECAUSE the sitting was rescheduled, so
+        // the new date, time and venue are asked for and override the
+        // original. Left blank they fall back to the source campaign's, which
+        // is the right behaviour for a simple "you did not attend" chase.
+        ec_interview_date: ec_interview_date || source.ec_interview_date,
+        ec_interview_time: ec_interview_time || source.ec_interview_time,
+        ec_reporting_time: ec_reporting_time || source.ec_reporting_time,
+        ec_venue: ec_venue || source.ec_venue,
+        ec_contact_person: ec_contact_person || source.ec_contact_person,
+        ec_contact_phone: ec_contact_phone || source.ec_contact_phone,
         ec_message: ec_message ?? source.ec_message,
+        ec_custom_html: source.ec_custom_html,
+        ec_audience: source.ec_audience,
         ec_status: startNow ? "running" : "draft",
         ec_next_run_at: startNow ? new Date() : null,
         ec_created_by: req.user?.id || req.user?.user_id || null,
@@ -494,10 +615,17 @@ exports.createReminder = async (req, res) => {
 
     await transaction.commit();
 
+    const rescheduled = Boolean(
+      ec_interview_date || ec_interview_time || ec_venue
+    );
+
     return res.status(201).json({
       success: true,
-      message: `Reminder created for ${chosen.length} candidate(s) who have not been interviewed`,
+      message: rescheduled
+        ? `Reminder created for ${chosen.length} candidate(s) with the new date, time and venue`
+        : `Reminder created for ${chosen.length} candidate(s) who have not been interviewed`,
       campaign,
+      rescheduled,
     });
   } catch (error) {
     await transaction.rollback();
@@ -792,7 +920,14 @@ exports.previewTemplate = async (req, res) => {
       const { chosen, pool } = await selectRecipients(
         tb_id,
         center_id,
-        Number(ec_target_count) || 1
+        Number(ec_target_count) || 1,
+        {
+          kind: String(req.body?.ec_kind || "initial").toLowerCase(),
+          audience:
+            String(req.body?.ec_audience || "").toLowerCase() === "students"
+              ? "students"
+              : "candidates",
+        }
       );
       sample = chosen[0] || pool[0] || null;
     }
@@ -820,7 +955,8 @@ exports.previewTemplate = async (req, res) => {
       ? await Center.findByPk(Number(center_id), { attributes: ["center_name"] })
       : null;
 
-    const rendered = interviewCall({
+    const rendered = renderCampaignEmail({
+      kind: String(req.body?.ec_kind || "initial").toLowerCase(),
       name: sample?.cand_name || "Applicant Name",
       fatherName: sample?.cand_fathername || "Father Name",
       cnic: sample?.cand_cnic || "00000-0000000-0",
@@ -937,7 +1073,14 @@ exports.previewRecipients = async (req, res) => {
     const { chosen, pool, contacted } = await selectRecipients(
       tb_id,
       center_id,
-      target
+      target,
+      {
+        kind: String(req.query.kind || "initial").toLowerCase(),
+        audience:
+          String(req.query.audience || "").toLowerCase() === "students"
+            ? "students"
+            : "candidates",
+      }
     );
     const rows = chosen.map(toListRow);
 

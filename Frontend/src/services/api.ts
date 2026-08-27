@@ -3573,7 +3573,8 @@ export interface EmailCampaign {
   ec_name: string;
   tb_id: number;
   center_id: number;
-  ec_kind: "initial" | "reminder";
+  ec_kind: "initial" | "reminder" | "recommendation" | "general";
+  ec_audience?: "candidates" | "students";
   ec_source_campaign_id?: number | null;
   ec_target_count: number;
   ec_batch_size: number;
@@ -3625,10 +3626,12 @@ const campaignHeaders = () => ({
 
 export const getCampaignEligibility = async (
   tb_id: number,
-  center_id: number
+  center_id: number,
+  kind = "initial",
+  audience = "candidates"
 ) => {
   const response = await axios.get(`${API_URL}/email-campaigns/eligibility`, {
-    params: { tb_id, center_id },
+    params: { tb_id, center_id, kind, audience },
     headers: campaignHeaders(),
   });
   return response.data as CampaignEligibility;
@@ -3802,12 +3805,16 @@ const downloadBlob = async (url: string, params: Record<string, unknown>) => {
 export const downloadCampaignRecipientPreview = (
   tb_id: number,
   center_id: number,
-  count: number
+  count: number,
+  kind = "initial",
+  audience = "candidates"
 ) =>
   downloadBlob(`${API_URL}/email-campaigns/recipients/preview`, {
     tb_id,
     center_id,
     count,
+    kind,
+    audience,
     format: "csv",
   });
 

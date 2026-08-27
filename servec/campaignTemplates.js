@@ -351,8 +351,213 @@ const verificationCode = (data) => {
   return { subject, text, html };
 };
 
+
+/**
+ * "You have been selected" letter, sent to recommended candidates.
+ *
+ * Everything time-and-place related - class start date, class timing, venue,
+ * reporting time - is entered on the campaign at send time rather than read
+ * from the database, because that is how the program actually works: the
+ * schedule is decided per intake, not stored per center.
+ *
+ * Personal details come from the candidate's own application, so the letter
+ * confirms back what they applied for and they can spot a wrong course or
+ * center before the first day rather than on it.
+ *
+ * @param {object} data
+ * @param {string} data.name
+ * @param {string} [data.fatherName]
+ * @param {string} [data.cnic]
+ * @param {string} [data.phone]
+ * @param {string} [data.courseName]
+ * @param {string} [data.centerName]
+ * @param {string} [data.batchName]
+ * @param {string} [data.interviewDate]   Class start date
+ * @param {string} [data.interviewTime]   Class timing
+ * @param {string} [data.reportingTime]   Reporting time on day one
+ * @param {string} [data.venue]           Class venue
+ * @param {string} [data.contactPerson]
+ * @param {string} [data.contactPhone]
+ * @param {string} [data.message]
+ * @param {string} [data.subject]
+ * @returns {{subject: string, text: string, html: string}}
+ */
+const recommendationLetter = (data) => {
+  const {
+    name,
+    fatherName,
+    cnic,
+    phone,
+    courseName,
+    centerName,
+    batchName,
+    interviewDate,
+    interviewTime,
+    reportingTime,
+    venue,
+    contactPerson,
+    contactPhone,
+    message,
+    subject: subjectOverride,
+  } = data;
+
+  const subject =
+    String(subjectOverride || "").trim() ||
+    `You have been selected${courseName ? ` for ${courseName}` : ""} | Digibizz Program`;
+
+  const rows = detailRows([
+    ["Course", courseName],
+    ["Center", centerName],
+    ["Training Batch", batchName],
+    ["Classes Begin", formatDate(interviewDate) || interviewDate],
+    ["Class Timing", interviewTime],
+    ["Reporting Time", reportingTime],
+    ["Class Venue", venue],
+    ["Contact Person", contactPerson],
+    ["Contact Number", contactPhone],
+  ]);
+
+  const applicantRows = detailRows([
+    ["Name", name],
+    ["Father's Name", fatherName],
+    ["CNIC", maskCnic(cnic)],
+    ["Contact No.", phone],
+  ]);
+
+  const messageBlock = message
+    ? `<p style="margin:0 0 18px;padding:12px 14px;background-color:#f5f7f8;border-left:3px solid ${BRAND};color:#37474f;font-size:14px;line-height:1.7;">${paragraphHtml(
+        message
+      )}</p>`
+    : "";
+
+  const html = documentShell(
+    subject,
+    `
+      <p style="margin:0 0 14px;color:#263238;font-size:16px;">Dear <strong>${escapeHtml(
+        name || "Applicant"
+      )}</strong>,</p>
+      <p style="margin:0 0 18px;color:#546e7a;font-size:14px;line-height:1.7;">
+        Congratulations &mdash; following your interview you have been
+        <strong>recommended for admission</strong> to the Digibizz Program${
+          courseName ? ` for <strong>${escapeHtml(courseName)}</strong>` : ""
+        }${centerName ? ` at <strong>${escapeHtml(centerName)}</strong>` : ""}.
+        Your class details are below.
+      </p>
+
+      ${messageBlock}
+
+      <table role="presentation" width="100%" cellpadding="0" cellspacing="0" style="border:1px solid #eceff1;border-radius:8px;border-collapse:separate;overflow:hidden;margin-bottom:18px;">
+        <tr>
+          <td colspan="2" style="background-color:#f5f7f8;padding:12px 14px;color:#37474f;font-size:13px;font-weight:700;text-transform:uppercase;letter-spacing:0.5px;">Your Class</td>
+        </tr>
+        ${rows}
+      </table>
+
+      <table role="presentation" width="100%" cellpadding="0" cellspacing="0" style="border:1px solid #eceff1;border-radius:8px;border-collapse:separate;overflow:hidden;margin-bottom:22px;">
+        <tr>
+          <td colspan="2" style="background-color:#f5f7f8;padding:12px 14px;color:#37474f;font-size:13px;font-weight:700;text-transform:uppercase;letter-spacing:0.5px;">Your Details</td>
+        </tr>
+        ${applicantRows}
+      </table>
+
+      <p style="margin:0 0 10px;color:#37474f;font-size:14px;font-weight:700;">Bring on your first day</p>
+      <ul style="margin:0 0 22px;padding-left:20px;color:#546e7a;font-size:14px;line-height:1.8;">
+        <li>Your <strong>original CNIC</strong> and one photocopy</li>
+        <li>Original <strong>educational documents</strong> and photocopies</li>
+        <li>Two recent <strong>passport-size photographs</strong></li>
+        <li>A notebook and pen</li>
+      </ul>
+
+      <p style="margin:0 0 22px;color:#546e7a;font-size:14px;line-height:1.7;">
+        Attendance is taken from the first class. If you cannot attend on the
+        starting date, please tell us in advance${
+          contactPhone ? ` on ${escapeHtml(contactPhone)}` : ""
+        } so your seat is not given to someone on the waiting list.
+      </p>
+
+      <p style="margin:22px 0 0;color:#546e7a;font-size:14px;line-height:1.7;">
+        Best regards,<br /><strong>Admissions Team</strong><br />Digibizz Program
+      </p>
+    `
+  );
+
+  const text = [
+    `Dear ${name || "Applicant"},`,
+    "",
+    `Congratulations - following your interview you have been recommended for admission to the Digibizz Program${
+      courseName ? ` for ${courseName}` : ""
+    }${centerName ? ` at ${centerName}` : ""}. Your class details are below.`,
+    "",
+    message ? message : null,
+    message ? "" : null,
+    "YOUR CLASS",
+    courseName ? `Course: ${courseName}` : null,
+    centerName ? `Center: ${centerName}` : null,
+    batchName ? `Training Batch: ${batchName}` : null,
+    interviewDate
+      ? `Classes Begin: ${formatDate(interviewDate) || interviewDate}`
+      : null,
+    interviewTime ? `Class Timing: ${interviewTime}` : null,
+    reportingTime ? `Reporting Time: ${reportingTime}` : null,
+    venue ? `Class Venue: ${venue}` : null,
+    contactPerson ? `Contact Person: ${contactPerson}` : null,
+    contactPhone ? `Contact Number: ${contactPhone}` : null,
+    "",
+    "YOUR DETAILS",
+    name ? `Name: ${name}` : null,
+    fatherName ? `Father's Name: ${fatherName}` : null,
+    maskCnic(cnic) ? `CNIC: ${maskCnic(cnic)}` : null,
+    phone ? `Contact No.: ${phone}` : null,
+    "",
+    "BRING ON YOUR FIRST DAY",
+    "- Your original CNIC and one photocopy",
+    "- Original educational documents and photocopies",
+    "- Two recent passport-size photographs",
+    "- A notebook and pen",
+    "",
+    "Attendance is taken from the first class. If you cannot attend on the",
+    "starting date, please tell us in advance so your seat is not given to",
+    "someone on the waiting list.",
+    "",
+    `Support: ${SUPPORT_EMAIL}`,
+    "",
+    "Best regards,",
+    "Admissions Team - Digibizz Program",
+  ]
+    .filter((line) => line !== null)
+    .join("\n");
+
+  return { subject, text, html };
+};
+
+/**
+ * Pick the right letter for a campaign.
+ *
+ * Custom HTML wins over every kind: if an admin wrote their own message, that
+ * IS the message. Otherwise the kind decides, and an unknown kind falls back
+ * to the interview letter rather than sending nothing.
+ */
+const renderCampaignEmail = (data) => {
+  if (String(data?.customHtml || "").trim()) {
+    // interviewCall already handles the custom-HTML branch, and routing it
+    // through one place keeps merge-token behaviour identical for every kind.
+    return interviewCall(data);
+  }
+
+  switch (String(data?.kind || "").toLowerCase()) {
+    case "recommendation":
+      return recommendationLetter(data);
+    case "reminder":
+      return interviewCall({ ...data, isReminder: true });
+    default:
+      return interviewCall(data);
+  }
+};
+
 module.exports = {
   interviewCall,
+  recommendationLetter,
+  renderCampaignEmail,
   verificationCode,
   applyMergeTokens,
   customHtmlToText,

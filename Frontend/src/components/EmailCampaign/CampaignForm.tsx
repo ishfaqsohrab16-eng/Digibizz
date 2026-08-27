@@ -83,6 +83,19 @@ const CampaignForm: React.FC<Props> = ({ onCreated, onCancel }) => {
   const [device, setDevice] = useState<"desktop" | "mobile">("desktop");
   const [previewOf, setPreviewOf] = useState<{ name: string } | null>(null);
 
+  /**
+   * What this campaign is. It decides which letter is sent, who is eligible,
+   * and what the date/time/venue fields mean.
+   *
+   * A recommendation always goes to enrolled STUDENTS, never to candidates:
+   * "you have been selected" reaching someone who was not selected is the one
+   * mistake worth designing out. The server pins this too.
+   */
+  const [kind, setKind] = useState<"initial" | "recommendation" | "general">(
+    "initial"
+  );
+  const audience = kind === "recommendation" ? "students" : "candidates";
+
   const [form, setForm] = useState({
     ec_name: "",
     ec_target_count: 200,
@@ -113,7 +126,7 @@ const CampaignForm: React.FC<Props> = ({ onCreated, onCancel }) => {
 
     let cancelled = false;
     setLoadingEligibility(true);
-    getCampaignEligibility(selectedBatchId, centerId)
+    getCampaignEligibility(selectedBatchId, centerId, kind, audience)
       .then((data) => {
         if (!cancelled) setEligibility(data);
       })
@@ -127,7 +140,9 @@ const CampaignForm: React.FC<Props> = ({ onCreated, onCancel }) => {
     return () => {
       cancelled = true;
     };
-  }, [centerId, selectedBatchId]);
+    // Re-run on kind: a recommendation counts enrolled students, an interview
+    // call-up counts candidates, so the availability figures differ entirely.
+  }, [centerId, selectedBatchId, kind, audience]);
 
   const centerName = useMemo(
     () => centers.find((c) => c.center_id === centerId)?.center_name || "",
@@ -209,9 +224,11 @@ const CampaignForm: React.FC<Props> = ({ onCreated, onCancel }) => {
   const emailPayload = useMemo(
     () => ({
       ...form,
+      ec_kind: kind,
+      ec_audience: audience,
       ec_custom_html: bodyMode === "custom" ? form.ec_custom_html : "",
     }),
-    [form, bodyMode]
+    [form, bodyMode, kind, audience]
   );
 
   const handlePreview = async () => {
@@ -289,7 +306,9 @@ const CampaignForm: React.FC<Props> = ({ onCreated, onCancel }) => {
       await downloadCampaignRecipientPreview(
         selectedBatchId,
         centerId,
-        Number(form.ec_target_count) || 0
+        Number(form.ec_target_count) || 0,
+        kind,
+        audience
       );
       toast.success("Recipient list downloaded");
     } catch (error: any) {
@@ -349,13 +368,70 @@ const CampaignForm: React.FC<Props> = ({ onCreated, onCancel }) => {
 
   return (
     <form onSubmit={handleSubmit} className="space-y-6">
+      {/* What this campaign is. Chosen first because it decides who is
+          eligible and what the date/time/venue fields below mean. */}
+      <div className="rounded-lg border border-slate-200 bg-white p-5">
+        <h3 className="text-base font-semibold text-slate-900">
+          What are you sending?
+        </h3>
+        <div className="mt-3 grid grid-cols-1 gap-3 md:grid-cols-3">
+          {(
+            [
+              {
+                value: "initial",
+                title: "Interview call-up",
+                note: "To candidates who have not been emailed yet for this center.",
+              },
+              {
+                value: "recommendation",
+                title: "Selection letter",
+                note: "To enrolled students, with the class start date, timing and venue.",
+              },
+              {
+                value: "general",
+                title: "General announcement",
+                note: "Any other message. Write your own HTML for the body.",
+              },
+            ] as const
+          ).map((option) => (
+            <button
+              key={option.value}
+              type="button"
+              onClick={() => setKind(option.value)}
+              className={`rounded-md border p-3 text-left transition-colors ${
+                kind === option.value
+                  ? "border-emerald-500 bg-emerald-50"
+                  : "border-slate-200 hover:bg-slate-50"
+              }`}
+            >
+              <span className="block text-sm font-semibold text-slate-900">
+                {option.title}
+              </span>
+              <span className="mt-1 block text-xs text-slate-600">
+                {option.note}
+              </span>
+            </button>
+          ))}
+        </div>
+
+        {kind === "recommendation" && (
+          <p className="mt-3 rounded-md border border-sky-200 bg-sky-50 p-3 text-xs text-sky-800">
+            Goes to <strong>enrolled students</strong> at this center — never to
+            candidates. Anyone already sent this letter is skipped, so students
+            who enrol later can simply be sent it in a follow-up campaign.
+          </p>
+        )}
+      </div>
+
       <div className="rounded-lg border border-slate-200 bg-white p-5">
         <h3 className="text-base font-semibold text-slate-900">Who to contact</h3>
         <p className="mt-1 text-xs text-slate-500">
-          Applications for <strong>{selectedBatchName || "the selected batch"}</strong>.
-          Candidates already emailed by an earlier campaign for this center are
+          {audience === "students" ? "Enrolled students" : "Applications"} for{" "}
+          <strong>{selectedBatchName || "the selected batch"}</strong>. Anyone
+          already emailed by an earlier campaign of this type for this center is
           skipped automatically.
         </p>
+
 
         <div className="mt-4 grid grid-cols-1 gap-4 md:grid-cols-2">
           <Field label="Center">
@@ -475,11 +551,12 @@ const CampaignForm: React.FC<Props> = ({ onCreated, onCancel }) => {
 
       <div className="rounded-lg border border-slate-200 bg-white p-5">
         <h3 className="text-base font-semibold text-slate-900">
-          Interview details
+          {kind === "recommendation" ? "Class details" : "Interview details"}
         </h3>
         <p className="mt-1 text-xs text-slate-500">
-          These go into the email. The rest of each message - name, CNIC, course,
-          center - comes from the candidate's own application.
+          You enter these at send time; they go straight into the email. The
+          rest of each message - name, CNIC, course, center - comes from the
+          recipient's own record.
         </p>
 
         <div className="mt-4 grid grid-cols-1 gap-4 md:grid-cols-2">
@@ -491,7 +568,7 @@ const CampaignForm: React.FC<Props> = ({ onCreated, onCancel }) => {
               className={inputClass}
             />
           </Field>
-          <Field label="Interview date">
+          <Field label={kind === "recommendation" ? "Classes begin" : "Interview date"}>
             <input
               type="date"
               value={form.ec_interview_date}
@@ -499,7 +576,7 @@ const CampaignForm: React.FC<Props> = ({ onCreated, onCancel }) => {
               className={inputClass}
             />
           </Field>
-          <Field label="Interview time">
+          <Field label={kind === "recommendation" ? "Class timing" : "Interview time"}>
             <input
               type="text"
               value={form.ec_interview_time}
@@ -518,7 +595,7 @@ const CampaignForm: React.FC<Props> = ({ onCreated, onCancel }) => {
             />
           </Field>
           <div className="md:col-span-2">
-            <Field label="Venue">
+            <Field label={kind === "recommendation" ? "Class venue" : "Venue"}>
               <input
                 type="text"
                 value={form.ec_venue}

@@ -2,6 +2,7 @@ const { DataTypes } = require("sequelize");
 const { sequelize } = require("../config/db");
 const EmailCampaign = require("./emailCampaignModel");
 const Candidate = require("./CandidateModel");
+const Student = require("./studentModel");
 const Course = require("./course");
 
 /**
@@ -28,10 +29,21 @@ const EmailCampaignRecipient = sequelize.define(
       allowNull: false,
       references: { model: EmailCampaign, key: "ec_id" },
     },
+    /**
+     * Exactly one of cand_id / std_id is set, depending on the campaign's
+     * audience. Candidates and students live in different tables with
+     * different keys, and a single "recipient_id" column would lose which
+     * table it pointed at - so both are kept, both nullable.
+     */
     cand_id: {
       type: DataTypes.INTEGER,
-      allowNull: false,
+      allowNull: true,
       references: { model: Candidate, key: "cand_id" },
+    },
+    std_id: {
+      type: DataTypes.INTEGER,
+      allowNull: true,
+      references: { model: Student, key: "std_id" },
     },
     /** Snapshotted so a later edit to the candidate cannot silently redirect mail. */
     ecr_email: {
@@ -72,9 +84,14 @@ const EmailCampaignRecipient = sequelize.define(
     tableName: "email_campaign_recipients",
     timestamps: true,
     indexes: [
+      // One row per person per campaign, whichever kind of person they are.
+      // MySQL allows repeated NULLs in a unique index, so a student-audience
+      // campaign (every cand_id NULL) does not collide with itself.
       { unique: true, fields: ["ec_id", "cand_id"] },
+      { unique: true, fields: ["ec_id", "std_id"] },
       { fields: ["ec_id", "ecr_status"] },
       { fields: ["cand_id"] },
+      { fields: ["std_id"] },
     ],
   }
 );
@@ -86,6 +103,10 @@ EmailCampaignRecipient.belongsTo(EmailCampaign, {
 EmailCampaignRecipient.belongsTo(Candidate, {
   foreignKey: "cand_id",
   as: "candidate",
+});
+EmailCampaignRecipient.belongsTo(Student, {
+  foreignKey: "std_id",
+  as: "student",
 });
 EmailCampaignRecipient.belongsTo(Course, {
   foreignKey: "course_id",
