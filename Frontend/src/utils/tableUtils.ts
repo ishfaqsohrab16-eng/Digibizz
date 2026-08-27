@@ -187,6 +187,8 @@ export const DEFAULT_EARNINGS_SUBMISSIONS_COLUMNS: Column[] = [
   { id: "amount", label: "Amount", visible: true },
   { id: "date", label: "Date", visible: true },
   { id: "status", label: "Status", visible: true },
+  // So a reviewer can see why a colleague already rejected this one.
+  { id: "rejectReason", label: "Reason", visible: true },
   { id: "centerName", label: "Center", visible: true },
   { id: "courseName", label: "Course", visible: true },
   { id: "trainingBatchName", label: "Training Batch", visible: true },

@@ -2,6 +2,7 @@ const express = require("express");
 const router = express.Router();
 const {
   getAllFeedback,
+  getFeedbackWindow,
   createFeedback,
   updateFeedback,
   deleteFeedback,
@@ -12,6 +13,9 @@ const {
 } = require("../controllers/feedbackController");
 const { isAdminAuthenticated } = require("../middleware/authMiddleware");
 router.get("/", isAdminAuthenticated, getAllFeedback);
+// Whether the signed-in student may submit this week, so the form can say so
+// before they fill it in.
+router.get("/window", isAdminAuthenticated, getFeedbackWindow);
 router.post("/", isAdminAuthenticated, createFeedback);
 router.put("/:id", isAdminAuthenticated, updateFeedback);
 router.delete("/:id", isAdminAuthenticated, deleteFeedback);

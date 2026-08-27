@@ -21,6 +21,34 @@ const { sequelize } = require("../config/db");
  */
 const REQUIRED_COLUMNS = [
   {
+    table: "students_feedback",
+    column: "sf_week",
+    definition:
+      "VARCHAR(10) NULL DEFAULT NULL COMMENT 'ISO week key (2026-W34); one feedback per student per batch per week'",
+    migration: "migration/014_feedback_once_per_week.sql",
+  },
+  {
+    table: "earnings",
+    column: "earning_reject_reason",
+    definition:
+      "TEXT NULL DEFAULT NULL COMMENT 'Why the submission was rejected; shown to the student'",
+    migration: "migration/013_add_earning_review_fields.sql",
+  },
+  {
+    table: "earnings",
+    column: "earning_reviewed_by",
+    definition:
+      "INT NULL DEFAULT NULL COMMENT 'user_id of whoever approved or rejected this'",
+    migration: "migration/013_add_earning_review_fields.sql",
+  },
+  {
+    table: "earnings",
+    column: "earning_reviewed_at",
+    definition:
+      "DATETIME NULL DEFAULT NULL COMMENT 'When it was approved or rejected'",
+    migration: "migration/013_add_earning_review_fields.sql",
+  },
+  {
     table: "email_campaigns",
     column: "ec_custom_html",
     definition:

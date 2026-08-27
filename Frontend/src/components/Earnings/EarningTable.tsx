@@ -25,13 +25,39 @@ export default function EarningsTable({
   const [viewData, setViewData] = useState<any[]>([]);
   const [columns, setColumns] = useState<Column[]>(DEFAULT_EARNINGS_COLUMNS);
 
+  const [loading, setLoading] = useState(false);
+
   useEffect(() => {
+    let cancelled = false;
+
     const fetchEarnings = async () => {
-      const response = await getEarnings(selectedBatchId, user_id);
-      setData(response.data);
+      setLoading(true);
+      try {
+        const response = await getEarnings(selectedBatchId, user_id);
+        if (cancelled) return;
+        setData(Array.isArray(response?.data) ? response.data : []);
+      } catch (error: any) {
+        if (cancelled) return;
+        // Previously unguarded: a failed request threw an unhandled rejection
+        // and the table just sat empty with no explanation.
+        setData([]);
+        toast({
+          title: "Could not load your earnings",
+          description:
+            error?.response?.data?.message ||
+            (error instanceof Error ? error.message : "Please try again."),
+          variant: "destructive",
+        });
+      } finally {
+        if (!cancelled) setLoading(false);
+      }
     };
+
     fetchEarnings();
-  }, [selectedBatchId]);
+    return () => {
+      cancelled = true;
+    };
+  }, [selectedBatchId, user_id]);
 
   const handleView = (item: any) => {
     setSelectedEarning(item);
@@ -57,9 +83,19 @@ export default function EarningsTable({
       });
 
       if (response.success) {
-        // Refresh the data only on success
-        const updatedData = await getEarnings(selectedBatchId, user_id);
-        setData(updatedData.data);
+        // Refresh only on success. Guarded like the initial load - this used to
+        // be a bare await that could throw after the success toast had already
+        // been shown, leaving a stale row on screen.
+        try {
+          const updatedData = await getEarnings(selectedBatchId, user_id);
+          setData(Array.isArray(updatedData?.data) ? updatedData.data : []);
+        } catch {
+          toast({
+            variant: "destructive",
+            title: "Deleted, but the list could not be refreshed",
+            description: "Reload the page to see the current list.",
+          });
+        }
       }
     } catch (error: any) {
       toast({
@@ -92,6 +128,7 @@ export default function EarningsTable({
         columns={columns}
         setColumns={setColumns}
         isActionBtn={true}
+        isLoading={loading}
         onView={handleView}
         onDelete={handleDelete}
       />

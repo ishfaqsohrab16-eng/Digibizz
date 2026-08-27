@@ -12,7 +12,11 @@ import {
 } from "lucide-react";
 
 import { useBatch } from "../../context/BatchContext";
-import { submitFeedback, getTrainersForFeedBack } from "../../services/api";
+import {
+  submitFeedback,
+  getTrainersForFeedBack,
+  getFeedbackWindow,
+} from "../../services/api";
 import { toast } from "sonner";
 import Loader from "../Loader";
 
@@ -106,14 +110,40 @@ export function StudentFeedback() {
     setRatings(newRatings);
   };
 
-  const isFriday = () => {
-    const today = new Date();
-    return today.getDay() === 5; // 5 represents Friday (0 is Sunday)
+  /**
+   * Whether this week's feedback is still open.
+   *
+   * Feedback is once per week on ANY day of that week. It used to be
+   * Friday-only, and that check lived only here - so a student who was busy on
+   * Friday lost the week entirely, while the API itself accepted unlimited
+   * submissions on any day. The server is now the authority; this state only
+   * decides what the form says before it is filled in.
+   */
+  const [feedbackWindow, setFeedbackWindow] = useState<{
+    canSubmit: boolean;
+    weekLabel: string;
+    submittedOn: string | null;
+    message: string;
+  } | null>(null);
+
+  const loadWindow = async () => {
+    try {
+      const result = await getFeedbackWindow();
+      setFeedbackWindow(result);
+    } catch {
+      // Not fatal: the server re-checks on submit, so leave the form usable
+      // rather than blocking a student because one extra call failed.
+      setFeedbackWindow(null);
+    }
   };
 
+  useEffect(() => {
+    loadWindow();
+  }, []);
+
   const validateFeedback = () => {
-    if (!isFriday()) {
-      setError("Feedback can only be submitted on Fridays");
+    if (feedbackWindow && !feedbackWindow.canSubmit) {
+      setError(feedbackWindow.message);
       return false;
     }
 
@@ -131,12 +161,15 @@ export function StudentFeedback() {
   };
 
   const handleSubmit = async () => {
+    // Declared outside the try so the catch can dismiss it - a const inside
+    // the try block is not in scope there.
+    let loadingToast: string | number | undefined;
     try {
       setError(null);
       if (!validateFeedback()) return;
 
       setIsSubmitting(true);
-      const loadingToast = toast.loading("Submitting feedback...");
+      loadingToast = toast.loading("Submitting feedback...");
 
       const today = new Date();
       const feedbackData: FeedbackSubmission = {
@@ -153,18 +186,25 @@ export function StudentFeedback() {
         sf_month: today.toLocaleString("default", { month: "long" }), // Format: January, February, etc.
       };
 
-      await submitFeedback(feedbackData);
-      toast.success("Feedback submitted successfully!", { id: loadingToast });
+      const result = await submitFeedback(feedbackData);
+      toast.success(result?.message || "Feedback submitted", { id: loadingToast });
 
       // Reset form
       setRatings(ratings.map((r) => ({ ...r, value: 0 })));
       setTrainerFeedback("");
       setLabFeedback("");
-    } catch (err) {
+      // Re-check so the form immediately shows that this week is now used.
+      await loadWindow();
+    } catch (err: any) {
+      // Show the server's own message. It explains WHY - already submitted
+      // this week, no trainer allocated, a rating out of range - where a
+      // generic "failed to submit" leaves the student with nothing to act on.
       const errorMessage =
-        err instanceof Error ? err.message : "Failed to submit feedback";
-      toast.error(errorMessage);
+        err?.response?.data?.message ||
+        (err instanceof Error ? err.message : "Could not submit your feedback");
+      toast.error(errorMessage, { id: loadingToast });
       setError(errorMessage);
+      if (err?.response?.status === 409) await loadWindow();
     } finally {
       setIsSubmitting(false);
     }
@@ -328,6 +368,25 @@ export function StudentFeedback() {
             ))}
           </div>
 
+          {/* States the rule up front, so a student is not told only after
+              filling the whole form in. */}
+          {feedbackWindow && (
+            <div
+              className={`mb-4 p-4 rounded-xl border ${
+                feedbackWindow.canSubmit
+                  ? "bg-emerald-50 border-emerald-300 text-emerald-800"
+                  : "bg-amber-50 border-amber-300 text-amber-800"
+              }`}
+            >
+              <p className="font-medium">
+                {feedbackWindow.canSubmit
+                  ? `This week is open — ${feedbackWindow.weekLabel}`
+                  : `Already submitted this week — ${feedbackWindow.weekLabel}`}
+              </p>
+              <p className="text-sm mt-0.5">{feedbackWindow.message}</p>
+            </div>
+          )}
+
           {error && (
             <div className="mb-4 p-4 bg-red-100 border border-red-400 text-red-700 rounded-xl">
               {error}
@@ -336,13 +395,13 @@ export function StudentFeedback() {
 
           <button
             onClick={handleSubmit}
-            disabled={isSubmitting || !isFriday()}
+            disabled={isSubmitting || feedbackWindow?.canSubmit === false}
             className={`
               w-full py-4 rounded-xl font-medium
               flex items-center justify-center space-x-2
               transform transition-all duration-300
               ${
-                !isFriday()
+                feedbackWindow?.canSubmit === false
                   ? "bg-gray-300 text-gray-500 cursor-not-allowed"
                   : isSubmitting
                   ? "bg-green-300 cursor-not-allowed"
@@ -356,8 +415,8 @@ export function StudentFeedback() {
               }`}
             />
             <span>
-              {!isFriday()
-                ? "Feedback submission only available on Fridays"
+              {feedbackWindow?.canSubmit === false
+                ? "Already submitted for this week"
                 : isSubmitting
                 ? "Submitting..."
                 : "Submit Feedback"}

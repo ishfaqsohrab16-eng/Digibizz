@@ -8,7 +8,11 @@ import {
   RefreshCw,
 } from "lucide-react";
 import { useBatch } from "../../context/BatchContext";
-import { getStudentDashboardData, createCertificate } from "../../services/api";
+import {
+  getStudentDashboardData,
+  createCertificate,
+  getFeedbackWindow,
+} from "../../services/api";
 import StatCard from "./StudentDashboardItems/StatCard";
 import StudentDataChart from "./StudentDashboardItems/StudentDataChart";
 import DiscussionItem from "./StudentDashboardItems/DiscussionItem";
@@ -301,6 +305,28 @@ const StudentDashboard = ({ openForm }: AdminDashboardProps) => {
     }
   }, [user_id, selectedBatchId]);
 
+  // Whether this week's feedback is still outstanding. Failure is silent by
+  // design: the reminder is a nicety, and a dashboard that errors because one
+  // optional banner could not load is worse than no banner.
+  const [feedbackWindow, setFeedbackWindow] = useState<{
+    canSubmit: boolean;
+    weekLabel: string;
+  } | null>(null);
+
+  useEffect(() => {
+    let cancelled = false;
+    getFeedbackWindow()
+      .then((result) => {
+        if (!cancelled) setFeedbackWindow(result);
+      })
+      .catch(() => {
+        if (!cancelled) setFeedbackWindow(null);
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [user_id]);
+
   useEffect(() => {
     if (dashboardData?.givCertificate) {
       setShowCelebration(true);
@@ -481,11 +507,16 @@ const StudentDashboard = ({ openForm }: AdminDashboardProps) => {
       )}
 
       <div className="max-w-7xl mx-auto">
-      { date.getDay() === 5 && (
+      {/* Shown whenever this week's feedback is still outstanding, not only
+          on Friday: feedback can now be given on any day of the week, so a
+          Friday-only reminder both nagged at the wrong time and stayed silent
+          for the six days it could actually be acted on. */}
+      {feedbackWindow?.canSubmit && (
         <div className="mb-4 p-3 bg-yellow-100 text-teal rounded border-l-4 border-yellow-500">
           <p className="font-medium">⚠️ Weekly Feedback Not Submitted</p>
           <p className="text-sm">
-            Please submit your weekly feedback to keep your dashboard updated. 📋
+            Feedback for {feedbackWindow.weekLabel} is still open — you can submit
+            on any day this week. 📋
           </p>
           <button
             onClick={() => openForm("StudentFeedback")}

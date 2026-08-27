@@ -216,18 +216,27 @@ exports.getEarningsByProfile = async (req, res) => {
       where: { user_id },
     });
     if (!student) {
-      return res.status(404).json({ message: "Student not found" });
+      return res
+        .status(404)
+        .json({ success: false, message: "Student profile not found" });
     }
     const earnings = await EarningsModel.findAll({
       where: { tb_id, std_id: student.std_id },
+      order: [["earning_id", "DESC"]],
     });
 
-    res.status(200).json({
+    return res.status(200).json({
       success: true,
       data: earnings,
     });
   } catch (error) {
+    // This catch used to log and then fall through without responding, so the
+    // browser sat waiting until the request timed out with no error shown.
     console.error("Error fetching earnings:", error);
+    return res.status(500).json({
+      success: false,
+      message: "Server error fetching earnings",
+    });
   }
 };
 // Get earnings by student ID
@@ -263,11 +272,45 @@ exports.getEarningsByStudent = async (req, res) => {
   }
 };
 
-// Update earning status
+/** 0 pending, 1 approved, 2 rejected. */
+const EARNING_STATUSES = [0, 1, 2];
+const EARNING_REJECTED = 2;
+const EARNING_APPROVED = 1;
+
+/**
+ * Approve or reject a submission.
+ *
+ * A rejection must carry a reason. Without one the student sees only that the
+ * submission failed, resubmits the same thing, and it is rejected again - so
+ * the reason is required by the API rather than merely offered by the UI, and
+ * it is returned to the student alongside the status.
+ */
 exports.updateEarningStatus = async (req, res) => {
   try {
     const { earning_id } = req.params;
-    const { earning_status } = req.body;
+    const status = Number(req.body?.earning_status);
+    const reason = String(req.body?.earning_reject_reason || "").trim();
+
+    if (!EARNING_STATUSES.includes(status)) {
+      return res.status(400).json({
+        success: false,
+        message: "Status must be pending, approved or rejected",
+      });
+    }
+
+    if (status === EARNING_REJECTED && !reason) {
+      return res.status(400).json({
+        success: false,
+        message: "Please give a reason for rejecting this submission",
+      });
+    }
+
+    if (reason.length > 1000) {
+      return res.status(400).json({
+        success: false,
+        message: "Keep the reason under 1000 characters",
+      });
+    }
 
     const earning = await EarningsModel.findByPk(earning_id);
 
@@ -278,13 +321,27 @@ exports.updateEarningStatus = async (req, res) => {
       });
     }
 
-    await earning.update({ earning_status });
+    await earning.update({
+      earning_status: status,
+      // Clear the reason on approval so an old rejection note cannot linger on
+      // a record that has since been accepted.
+      earning_reject_reason: status === EARNING_REJECTED ? reason : null,
+      earning_reviewed_by: req.user?.id || req.admin?.id || null,
+      earning_reviewed_at:
+        status === EARNING_APPROVED || status === EARNING_REJECTED
+          ? new Date()
+          : null,
+    });
 
     res.status(200).json({
       success: true,
-      message: "Earning status updated successfully",
+      message:
+        status === EARNING_REJECTED
+          ? "Submission rejected and the reason sent to the student"
+          : "Earning status updated successfully",
       data: earning,
       earningStatus: earning.earning_status,
+      rejectReason: earning.earning_reject_reason,
     });
   } catch (error) {
     console.error("Error updating earning status:", error);
@@ -786,6 +843,10 @@ const generateResponse = (
         totalEarnings: studentData.earnings,
         date: earning.earning_date,
         status: earning.earning_status,
+        // Carried through so a reviewer sees why a colleague rejected it and
+        // does not have to guess, and so the student's own view can show it.
+        rejectReason: earning.earning_reject_reason || null,
+        reviewedAt: earning.earning_reviewed_at || null,
         proof: earning.earning_proof,
         centerName: earning.centers.center_name,
         courseName: earning.courses.course_name,

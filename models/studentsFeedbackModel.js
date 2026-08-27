@@ -89,10 +89,31 @@ const StudentsFeedback = sequelize.define(
       type: DataTypes.STRING(50),
       allowNull: false,
     },
+    /**
+     * ISO week key ("2026-W34") of the submission.
+     *
+     * Feedback is once per week, on any day of that week. Storing the week
+     * makes the rule enforceable by a unique index rather than by a
+     * check-then-insert, which two quick clicks can race past.
+     */
+    sf_week: {
+      type: DataTypes.STRING(10),
+      allowNull: true,
+    },
   },
   {
     tableName: "students_feedback",
     timestamps: false,
+    indexes: [
+      // One submission per student, per batch, per week. Existing rows have a
+      // NULL sf_week and MySQL allows repeated NULLs in a unique index, so
+      // history is unaffected.
+      {
+        unique: true,
+        name: "students_feedback_once_per_week",
+        fields: ["std_rollno", "tb_id", "sf_week"],
+      },
+    ],
   }
 );
 

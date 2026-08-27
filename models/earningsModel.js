@@ -81,6 +81,26 @@ const EarningsModel = sequelize.define(
         isIn: [[0, 1, 2]], // 0: pending, 1: approved, 2: rejected
       },
     },
+    /**
+     * Why a submission was rejected, shown to the student and to every
+     * reviewer. A rejection with no stated reason is not actionable: the
+     * student resubmits the same thing and the reviewer rejects it again.
+     * Required by the API whenever the status is set to 2, and cleared when a
+     * record is later approved so a stale reason cannot linger.
+     */
+    earning_reject_reason: {
+      type: DataTypes.TEXT,
+      allowNull: true,
+    },
+    /** Who last approved or rejected this, and when. */
+    earning_reviewed_by: {
+      type: DataTypes.INTEGER,
+      allowNull: true,
+    },
+    earning_reviewed_at: {
+      type: DataTypes.DATE,
+      allowNull: true,
+    },
     earning_date: {
       type: DataTypes.STRING(50),
       allowNull: false,

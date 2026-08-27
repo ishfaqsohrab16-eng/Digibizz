@@ -6,6 +6,7 @@ import { Column, FilterBy } from "../../types/columns";
 import { useEffect, useState } from "react"; // add useRef
 import { toast } from "sonner";
 import { updateEarningStatus } from "../../services/api";
+import RejectEarningDialog from "./RejectEarningDialog";
 import { useBatch } from "../../context/BatchContext";
 import { DataTable } from "../AdmissionPortal/DataTable";
 
@@ -63,33 +64,61 @@ export const EarningSubmissions = ({ data }: { data: any }) => {
     console.log("Current page set to:", currentPage);
   }, [currentPage, selectedBatchId]);
 
-  const handleEarningStatusChange = async (row: any, status: string) => {
-    try {
-      let response;
-      if (status === "approved") {
-        response = await updateEarningStatus(row.earningId, 1);
-      }
-      if (status === "rejected") {
-        response = await updateEarningStatus(row.earningId, 2);
-      }
+  // Rejecting opens a dialog first: the student is shown the reason, so one
+  // is required rather than optional.
+  const [rejecting, setRejecting] = useState<any | null>(null);
 
-      if (response.success) {
+  const applyStatus = async (
+    row: any,
+    status: number,
+    reason?: string
+  ): Promise<boolean> => {
+    try {
+      const response = await updateEarningStatus(row.earningId, status, reason);
+
+      if (response?.success) {
         setEarningStatus(response.earningStatus);
         toast.success(
-          status === "approved"
-            ? "Success story approved successfully!"
-            : "Success story rejected successfully!"
+          response.message ||
+            (status === 1 ? "Submission approved" : "Submission rejected")
         );
-      } else {
-        toast.error(response.message || "Failed to update status");
+        return true;
       }
-    } catch (err) {
+
+      toast.error(response?.message || "Could not update the status");
+      return false;
+    } catch (err: any) {
+      // Surface the server's own message - it explains WHY, e.g. a missing
+      // reason - instead of a generic failure the reviewer cannot act on.
+      const message =
+        err?.response?.data?.message ||
+        (err instanceof Error ? err.message : "Could not update the status");
       console.error("Error updating earning status:", err);
-      toast.error("An error occurred while updating the status");
+      toast.error(message);
+      return false;
+    }
+  };
+
+  const handleEarningStatusChange = async (row: any, status: string) => {
+    if (status === "rejected") {
+      setRejecting(row);
+      return;
+    }
+    if (status === "approved") {
+      await applyStatus(row, 1);
     }
   };
 
   return (
+    <>
+    <RejectEarningDialog
+      submission={rejecting}
+      onCancel={() => setRejecting(null)}
+      onConfirm={async (reason) => {
+        const ok = await applyStatus(rejecting, 2, reason);
+        if (ok) setRejecting(null);
+      }}
+    />
     <DataTable
       data={data} // Always use parent data
       columns={columns}
@@ -113,5 +142,6 @@ export const EarningSubmissions = ({ data }: { data: any }) => {
       currentPage={currentPage}
       setCurrentPage={setCurrentPage}
     />
+    </>
   );
 };

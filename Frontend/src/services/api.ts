@@ -1687,12 +1687,14 @@ export const getEarningsReport = async () => {
 };
 export const updateEarningStatus = async (
   earningId: number,
-  status: number
+  status: number,
+  /** Required when status is 2 (rejected); the server rejects a blank one. */
+  rejectReason?: string
 ) => {
   try {
     const response = await axios.patch(
       `${API_URL}/earnings/update-status/${earningId}`,
-      { earning_status: status },
+      { earning_status: status, earning_reject_reason: rejectReason },
       {
         headers: {
           Authorization: `Bearer ${getCurrentUserToken()}`,
@@ -2073,6 +2075,24 @@ export const createQuiz = async () => {
     throw error;
   }
 };
+/** Whether the signed-in student may submit feedback this week. */
+export const getFeedbackWindow = async () => {
+  const response = await axios.get(`${API_URL}/feedback/window`, {
+    headers: {
+      Authorization: `Bearer ${getCurrentUserToken()}`,
+      "Content-Type": "application/json",
+    },
+  });
+  return response.data as {
+    success: boolean;
+    canSubmit: boolean;
+    week: string;
+    weekLabel: string;
+    submittedOn: string | null;
+    message: string;
+  };
+};
+
 export const submitFeedback = async (data: FeedbackSubmission) => {
   try {
     const response = await axios.post(`${API_URL}/feedback/`, data, {

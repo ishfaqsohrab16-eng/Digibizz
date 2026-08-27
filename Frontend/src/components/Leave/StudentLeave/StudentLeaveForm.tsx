@@ -1,5 +1,6 @@
 import React, { useState, useEffect } from "react";
 import { useBatch } from "../../../context/BatchContext";
+import { getStudendByUserId } from "../../../services/api";
 import SettingsHeader from "../../Settings/SettingsHeader";
 import CustomCKEditor from "../../Assignment/CustomCKEditor";
 import { StudentLeave } from "../../../services/api";
@@ -50,31 +51,64 @@ const StudentLeaveForm = ({
   const STUDENT_DASHBOARD_CACHE_KEY = "studentDashboardData";
   const CACHE_DURATION = 24 * 60 * 60 * 1000; 
   const MAX_CACHE_ITEMS = 5; 
+  /**
+   * Load the student's own course and center, for display.
+   *
+   * This used to read ONLY from a localStorage cache and silently do nothing
+   * when it was absent - on a new device, after clearing site data, or simply
+   * before the dashboard had ever been opened. The identity fields then stayed
+   * empty and every submission came back "Missing required fields", which is
+   * the error students were seeing.
+   *
+   * The cache is now just a fast path; the API is the fallback. The server
+   * derives the real identity from the signed-in user either way, so these
+   * values are cosmetic and a failure here no longer blocks submitting.
+   */
+  const applyStudent = (studentData: any) => {
+    if (!studentData) return false;
+    setFormData((prev) => ({
+      ...prev,
+      std_cnic: studentData.std_cnic ?? prev.std_cnic,
+      course_id: studentData.course_id ?? prev.course_id,
+      center_id: studentData.center_id ?? prev.center_id,
+    }));
+    setTrainerName("Trainer: ");
+    setCourseName(studentData.course_full_name || studentData.course_name || "");
+    setCenterName(studentData.center_name || "");
+    return true;
+  };
+
   const fetchStudentByUserId = async () => {
+    if (userType !== "student" || !user_id) {
+      setIsLoadingCenters(false);
+      setIsLoadingCourses(false);
+      return;
+    }
+
+    setIsLoadingCenters(true);
+    setIsLoadingCourses(true);
+
     try {
-      if (userType === "student") {
-        const cacheKey = `${STUDENT_DASHBOARD_CACHE_KEY}_${user_id}_${selectedBatchId}`;
-        const cachedData = localStorage.getItem(cacheKey);
+      const cacheKey = `${STUDENT_DASHBOARD_CACHE_KEY}_${user_id}_${selectedBatchId}`;
+      const cachedData = localStorage.getItem(cacheKey);
 
-        if (cachedData) {
-          const parsedData = JSON.parse(cachedData);
-          const studentData = parsedData.data.studentProfilebyCNIC?.data;
-
-          if (studentData) {
-            setFormData((prev) => ({
-              ...prev,
-              std_cnic: studentData.std_cnic,
-              course_id: studentData.course_id,
-              center_id: studentData.center_id,
-            }));
-            setTrainerName("Trainer: ");
-            setCourseName(studentData.course_full_name);
-            setCenterName(studentData.center_name);
-          }
+      if (cachedData) {
+        try {
+          const parsed = JSON.parse(cachedData);
+          if (applyStudent(parsed?.data?.studentProfilebyCNIC?.data)) return;
+        } catch {
+          // A corrupt cache entry must not stop the API fallback below.
+          localStorage.removeItem(cacheKey);
         }
       }
+
+      const response = await getStudendByUserId(user_id);
+      applyStudent(response?.data ?? response);
     } catch (error) {
-      console.error("Error fetching data:", error);
+      console.error("Error loading your profile:", error);
+      toast.error(
+        "Could not load your course and center details. You can still submit - they are taken from your account."
+      );
     } finally {
       setIsLoadingCenters(false);
       setIsLoadingCourses(false);
@@ -97,34 +131,20 @@ const StudentLeaveForm = ({
     setFormData((prev) => ({ ...prev, [name]: value }));
     setErrors((prev) => ({ ...prev, [name]: "" }));
   };
-  const generateSlCode = () => {
-    return Math.floor(Math.random() * 900000000000 + 100000000000).toString();
-  };
-  function dateCustomFormatting(date: Date): string {
-    const padStart = (value: number): string =>
-      value.toString().padStart(2, "0");
-
-    return `${padStart(date.getDate())}/${padStart(
-      date.getMonth() + 1
-    )}/${date.getFullYear()}`;
-  }
-
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
 
     setIsSubmitting(true);
 
     try {
-      formData.tb_id = selectedBatchId;
-      formData.sl_month = new Date().toLocaleString("default", {
-        month: "long",
+      // The server now derives the student, batch, center, course, code,
+      // month and submit date from the signed-in account, so only the leave
+      // itself is sent. Supplying them here was what made the form dependent
+      // on a cache that is often not there.
+      const response = await StudentLeave({
+        ...formData,
+        tb_id: selectedBatchId,
       });
-
-      const date = new Date();
-      const dateFormat = dateCustomFormatting(date);
-      formData.sl_submit_date = dateFormat;
-      formData.sl_code = generateSlCode();
-      const response = await StudentLeave(formData);
       // Reset form
 
       setFormData({
@@ -141,14 +161,20 @@ const StudentLeaveForm = ({
         sl_trainer_comments: "",
         sl_submit_date: "",
       });
-      toast.success(response.data.message);
+      toast.success(
+        response?.data?.message || "Leave application submitted"
+      );
       openForm("StudentLeave");
-    } catch (error) {
+    } catch (error: any) {
       console.error("Submission error:", error);
+      // handleApiError already unwraps the server's message, so this shows the
+      // real reason - already applied for that date, monthly limit reached,
+      // enrolment incomplete - instead of a generic failure.
       const errorMessage =
-        error instanceof Error
+        error?.response?.data?.message ||
+        (error instanceof Error
           ? error.message
-          : "Error submitting leave application";
+          : "Could not submit your leave application");
       toast.error(errorMessage);
     } finally {
       setIsSubmitting(false);

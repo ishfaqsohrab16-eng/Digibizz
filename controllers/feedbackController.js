@@ -6,6 +6,12 @@ const MastterTrainer = require("../models/masterTrainersModel");
 const User = require("../models/userModel");
 const Course = require("../models/course");
 const Center = require("../models/center");
+const {
+  isoWeekKey,
+  localDateKey,
+  monthKey,
+  weekLabel,
+} = require("../utils/weekKey");
 const getAllFeedback = async (req, res) => {
   try {
     const feedbacks = await StudentsFeedback.findAll();
@@ -15,27 +21,120 @@ const getAllFeedback = async (req, res) => {
   }
 };
 
+/** Rating fields, all scored 1-5. */
+const RATING_FIELDS = [
+  "sf_lecture",
+  "sf_queries",
+  "sf_knowledge",
+  "sf_punctuality",
+  "sf_lab_clean",
+  "sf_lab_internet",
+];
+
+const MAX_COMMENT = 2000;
+
+/**
+ * Resolve the student submitting feedback.
+ *
+ * The student is taken from the authenticated token, never from the request
+ * body. `user_id` used to be read straight out of req.body, which meant any
+ * signed-in user could file feedback in another student's name simply by
+ * changing one field - and, because feedback drives trainer scores, could
+ * repeatedly rate a trainer while appearing to be different students.
+ */
+const resolveStudent = async (req) => {
+  const userId = req.user?.id || req.admin?.id;
+  if (!userId) return null;
+  return Student.findOne({ where: { user_id: userId } });
+};
+
+/**
+ * Whether the signed-in student may submit feedback right now.
+ *
+ * Lets the form show the rule up front instead of letting the student fill in
+ * the whole thing and only then be told it is not allowed.
+ */
+const getFeedbackWindow = async (req, res) => {
+  try {
+    const student = await resolveStudent(req);
+    if (!student) {
+      return res
+        .status(404)
+        .json({ success: false, message: "Student profile not found" });
+    }
+
+    const week = isoWeekKey();
+    const existing = await StudentsFeedback.findOne({
+      where: { std_rollno: student.std_rollno, tb_id: student.tb_id, sf_week: week },
+      attributes: ["sf_id", "sf_date"],
+    });
+
+    return res.json({
+      success: true,
+      canSubmit: !existing,
+      week,
+      weekLabel: weekLabel(),
+      submittedOn: existing?.sf_date || null,
+      message: existing
+        ? `You already submitted feedback for this week (${weekLabel()}). The next one opens on Monday.`
+        : `Feedback is open for this week (${weekLabel()}). You can submit on any day, once per week.`,
+    });
+  } catch (error) {
+    console.error("Feedback window error:", error);
+    return res
+      .status(500)
+      .json({ success: false, message: "Server error checking the feedback window" });
+  }
+};
+
+/**
+ * Submit this week's feedback.
+ *
+ * Once per week, on any day of that week. The previous rule was Friday-only
+ * and lived entirely in the browser, so it was both stricter than intended and
+ * trivially bypassed - the API accepted unlimited submissions on any day.
+ */
 const createFeedback = async (req, res) => {
   try {
-    const {
-      user_id,
-      sf_lecture,
-      sf_queries,
-      sf_knowledge,
-      sf_punctuality,
-      sf_trainer_feedback,
-      sf_lab_clean,
-      sf_lab_internet,
-      sf_lab_feedback,
-      sf_date,
-      sf_month,
-    } = req.body;
-    const student = await Student.findOne({
-      where: { user_id: user_id },
-    });
+    const student = await resolveStudent(req);
     if (!student) {
-      return res.status(404).json({ message: "Student not found" });
+      return res
+        .status(404)
+        .json({ success: false, message: "Student profile not found" });
     }
+
+    // Ratings are validated rather than trusted: the previous version wrote
+    // whatever arrived, so a malformed or out-of-range score silently skewed
+    // the trainer's averages.
+    const ratings = {};
+    for (const field of RATING_FIELDS) {
+      const value = Number(req.body?.[field]);
+      if (!Number.isInteger(value) || value < 1 || value > 5) {
+        return res.status(400).json({
+          success: false,
+          message: `Please give a rating between 1 and 5 for every category`,
+          field,
+        });
+      }
+      ratings[field] = value;
+    }
+
+    const trainerComment = String(req.body?.sf_trainer_feedback || "").trim();
+    const labComment = String(req.body?.sf_lab_feedback || "").trim();
+
+    if (!trainerComment || !labComment) {
+      return res.status(400).json({
+        success: false,
+        message: "Please write both the trainer and the lab feedback",
+      });
+    }
+    if (trainerComment.length > MAX_COMMENT || labComment.length > MAX_COMMENT) {
+      return res.status(400).json({
+        success: false,
+        message: `Keep each comment under ${MAX_COMMENT} characters`,
+      });
+    }
+
     const trainer = await TrainerCenterAllocation.findOne({
       where: {
         tb_id: student.tb_id,
@@ -45,48 +144,125 @@ const createFeedback = async (req, res) => {
     });
     if (!trainer) {
       return res.status(400).json({
+        success: false,
         message:
-          "Trainer allocation not found for this student's batch, center, and course",
+          "No trainer is allocated to your batch, center and course yet. Please tell your center manager.",
       });
     }
+
+    const week = isoWeekKey();
+
+    const existing = await StudentsFeedback.findOne({
+      where: { std_rollno: student.std_rollno, tb_id: student.tb_id, sf_week: week },
+      attributes: ["sf_id", "sf_date"],
+    });
+    if (existing) {
+      return res.status(409).json({
+        success: false,
+        message: `You have already submitted feedback for this week (${weekLabel()}). The next one opens on Monday.`,
+        submittedOn: existing.sf_date,
+      });
+    }
+
+    // Dates are set here, not taken from the browser. A client-supplied date
+    // let a submission be back- or forward-dated into another week, which is
+    // exactly what the once-a-week rule has to prevent.
+    const now = new Date();
+
     const newFeedback = await StudentsFeedback.create({
       std_rollno: student.std_rollno,
       tb_id: student.tb_id,
       center_id: student.center_id,
       t_id: trainer.t_id,
       course_id: student.course_id,
-      sf_lecture,
-      sf_queries,
-      sf_knowledge,
-      sf_punctuality,
-      sf_trainer_feedback,
-      sf_lab_clean,
-      sf_lab_internet,
-      sf_lab_feedback,
-      sf_date,
-      sf_month,
+      ...ratings,
+      sf_trainer_feedback: trainerComment,
+      sf_lab_feedback: labComment,
+      sf_date: localDateKey(now),
+      sf_month: monthKey(now),
+      sf_week: week,
     });
-    res.status(201).json(newFeedback);
+
+    return res.status(201).json({
+      success: true,
+      message: "Thank you - your feedback for this week has been recorded.",
+      data: newFeedback,
+    });
   } catch (error) {
+    // The unique index is the real guard: two fast clicks can both pass the
+    // check above before either has inserted, and only the database can settle
+    // that race. Report it as the same friendly conflict, not a 500.
+    if (error?.name === "SequelizeUniqueConstraintError") {
+      return res.status(409).json({
+        success: false,
+        message: `You have already submitted feedback for this week (${weekLabel()}).`,
+      });
+    }
     console.error("Create feedback error:", error);
-    res.status(400).json({ message: error.message });
+    return res.status(500).json({
+      success: false,
+      message: "Server error saving your feedback. Please try again.",
+    });
   }
 };
 
 const updateFeedback = async (req, res) => {
   const { id } = req.params;
   try {
-    const [updated] = await StudentsFeedback.update(req.body, {
+    // Whitelist. This used to pass req.body straight to update(), so a caller
+    // could rewrite std_rollno, t_id, tb_id or sf_week - reassigning someone
+    // else's feedback to a different trainer, or freeing up a week slot.
+    const editable = {};
+    for (const field of [...RATING_FIELDS, "sf_trainer_feedback", "sf_lab_feedback"]) {
+      if (req.body?.[field] === undefined) continue;
+
+      if (RATING_FIELDS.includes(field)) {
+        const value = Number(req.body[field]);
+        if (!Number.isInteger(value) || value < 1 || value > 5) {
+          return res.status(400).json({
+            success: false,
+            message: "Ratings must be between 1 and 5",
+            field,
+          });
+        }
+        editable[field] = value;
+        continue;
+      }
+
+      const text = String(req.body[field]).trim();
+      if (text.length > MAX_COMMENT) {
+        return res.status(400).json({
+          success: false,
+          message: `Keep each comment under ${MAX_COMMENT} characters`,
+          field,
+        });
+      }
+      editable[field] = text;
+    }
+
+    if (Object.keys(editable).length === 0) {
+      return res
+        .status(400)
+        .json({ success: false, message: "Nothing to update" });
+    }
+
+    const [updated] = await StudentsFeedback.update(editable, {
       where: { sf_id: id },
     });
-    if (updated) {
-      const updatedFeedback = await StudentsFeedback.findByPk(id);
-      res.json(updatedFeedback);
-    } else {
-      res.status(404).json({ message: "Feedback not found" });
+
+    if (!updated) {
+      return res
+        .status(404)
+        .json({ success: false, message: "Feedback not found" });
     }
+
+    const updatedFeedback = await StudentsFeedback.findByPk(id);
+    return res.json({ success: true, data: updatedFeedback });
   } catch (error) {
-    res.status(400).json({ message: error.message });
+    console.error("Update feedback error:", error);
+    return res
+      .status(500)
+      .json({ success: false, message: "Server error updating feedback" });
   }
 };
 
@@ -96,13 +272,17 @@ const deleteFeedback = async (req, res) => {
     const deleted = await StudentsFeedback.destroy({
       where: { sf_id: id },
     });
-    if (deleted) {
-      res.json({ message: "Feedback deleted" });
-    } else {
-      res.status(404).json({ message: "Feedback not found" });
+    if (!deleted) {
+      return res
+        .status(404)
+        .json({ success: false, message: "Feedback not found" });
     }
+    return res.json({ success: true, message: "Feedback deleted" });
   } catch (error) {
-    res.status(500).json({ message: error.message });
+    console.error("Delete feedback error:", error);
+    return res
+      .status(500)
+      .json({ success: false, message: "Server error deleting feedback" });
   }
 };
 const getFeedbackByTbId = async (req, res) => {
@@ -255,6 +435,7 @@ const getFeedbackForTrainer = async (req, res) => {
 };
 module.exports = {
   getAllFeedback,
+  getFeedbackWindow,
   createFeedback,
   updateFeedback,
   deleteFeedback,

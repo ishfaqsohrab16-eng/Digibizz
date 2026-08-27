@@ -6,75 +6,176 @@ const User = require("../models/userModel");
 const StudentModel = require("../models/studentModel");
 const TrainerModel = require("../models/trainersModel");
 const TrainerCenterAllocation = require("../models/trainersCenterAllocationModel");
+const { monthKey, localDateKey } = require("../utils/weekKey");
 
-const createLeave = async (req, res, next) => {
+const MAX_LEAVES_PER_MONTH = 3;
+const MAX_SUBJECT = 255;
+const MAX_BODY = 20000;
+
+/** 12-digit code, retried on the astronomically unlikely collision. */
+const generateLeaveCode = async () => {
+  for (let attempt = 0; attempt < 5; attempt += 1) {
+    const code = String(
+      Math.floor(Math.random() * 900000000000 + 100000000000)
+    );
+    const clash = await studentLeave.findOne({ where: { sl_code: code } });
+    if (!clash) return code;
+  }
+  // Fall back to something that cannot collide rather than failing the request.
+  return `L${Date.now()}`;
+};
+
+/**
+ * File a leave application.
+ *
+ * Everything identifying the student - CNIC, batch, center, course - is read
+ * from their own record via the authenticated token, never from the request
+ * body. Previously the browser supplied all of it, which caused two problems:
+ *
+ *   1. The form filled those fields from a localStorage cache, so on a new
+ *      device, after clearing site data, or before that cache was written, the
+ *      values were empty and every submission failed with "Missing required
+ *      fields". That is the error students were hitting.
+ *   2. The whole body was passed to create(), so a crafted request could set
+ *      sl_status and file a leave that was already approved - or file one in
+ *      another student's name.
+ */
+const createLeave = async (req, res) => {
   try {
-    const {
-      sl_code,
-      std_cnic,
-      tb_id,
-      course_id,
-      center_id,
-      sl_date,
-      sl_month,
-      sl_subject,
-      sl_body,
-      sl_submit_date,
-    } = req.body;
-    const maxLeavesAllowed = 3;
-    // Check required fields
-    if (
-      !sl_code ||
-      !std_cnic ||
-      !tb_id ||
-      !course_id ||
-      !center_id ||
-      !sl_date ||
-      !sl_month ||
-      !sl_subject ||
-      !sl_body ||
-      !sl_submit_date
-    ) {
-      return res.status(400).json({ message: "Missing required fields" });
+    const userId = req.user?.id || req.admin?.id;
+    if (!userId) {
+      return res
+        .status(401)
+        .json({ success: false, message: "Please sign in again" });
     }
 
-    // Validate foreign keys
-    const trainingBatch = await TrainingBatch.findByPk(tb_id);
-    const center = await Center.findByPk(center_id);
-    const course = await Course.findByPk(course_id);
-
-    if (!trainingBatch || !center || !course) {
+    const student = await StudentModel.findOne({ where: { user_id: userId } });
+    if (!student) {
       return res.status(404).json({
-        message: "Invalid batch, center, or course reference",
+        success: false,
+        message: "No student profile is linked to this account",
       });
     }
 
-    // Check existing leaves count
-    const currentCount = await studentLeave.count({
-      where: {
-        std_cnic,
-        sl_month,
-      },
+    const sl_date = String(req.body?.sl_date || "").trim();
+    const sl_subject = String(req.body?.sl_subject || "").trim();
+    const sl_body = String(req.body?.sl_body || "").trim();
+
+    if (!sl_date) {
+      return res
+        .status(400)
+        .json({ success: false, message: "Please choose the date of leave" });
+    }
+    if (!sl_subject) {
+      return res
+        .status(400)
+        .json({ success: false, message: "Please enter a subject" });
+    }
+    // The body arrives as rich text, so an "empty" editor is often "<p></p>".
+    if (!sl_body || !sl_body.replace(/<[^>]*>/g, "").trim()) {
+      return res
+        .status(400)
+        .json({ success: false, message: "Please describe the reason for leave" });
+    }
+    if (sl_subject.length > MAX_SUBJECT) {
+      return res.status(400).json({
+        success: false,
+        message: `Keep the subject under ${MAX_SUBJECT} characters`,
+      });
+    }
+    if (sl_body.length > MAX_BODY) {
+      return res
+        .status(400)
+        .json({ success: false, message: "That reason is too long" });
+    }
+
+    const leaveDate = new Date(sl_date);
+    if (Number.isNaN(leaveDate.getTime())) {
+      return res
+        .status(400)
+        .json({ success: false, message: "That date is not valid" });
+    }
+
+    // Year-qualified ("2026-08") rather than a localised month name. The old
+    // value was produced by the browser's locale, so the monthly cap counted
+    // "August" from every year together - and broke entirely for a student
+    // whose browser was not set to English.
+    const month = monthKey(leaveDate);
+
+    if (!student.tb_id || !student.center_id || !student.course_id) {
+      return res.status(400).json({
+        success: false,
+        message:
+          "Your enrolment is incomplete, so leave cannot be filed. Please contact your center manager.",
+      });
+    }
+
+    // One application per date; the previous version allowed unlimited
+    // duplicates for the same day.
+    const duplicate = await studentLeave.findOne({
+      where: { std_cnic: student.std_cnic, tb_id: student.tb_id, sl_date },
+    });
+    if (duplicate) {
+      return res.status(409).json({
+        success: false,
+        message: "You have already applied for leave on that date",
+      });
+    }
+
+    const used = await studentLeave.count({
+      where: { std_cnic: student.std_cnic, sl_month: month },
     });
 
-    if (currentCount >= maxLeavesAllowed) {
+    if (used >= MAX_LEAVES_PER_MONTH) {
       return res.status(400).json({
-        message: `You have 0 leave(s) remaining in this month. We allow max. ${maxLeavesAllowed} leaves in a month.`,
+        success: false,
+        message: `You have used all ${MAX_LEAVES_PER_MONTH} leaves for this month.`,
       });
     }
 
-    // Calculate remaining leaves
-    const remainingLeaves = maxLeavesAllowed - currentCount;
+    const newLeave = await studentLeave.create({
+      sl_code: await generateLeaveCode(),
+      std_cnic: student.std_cnic,
+      tb_id: student.tb_id,
+      center_id: student.center_id,
+      course_id: student.course_id,
+      sl_date,
+      sl_month: month,
+      sl_subject,
+      sl_body,
+      // Never taken from the request: a student must not be able to file a
+      // leave that is already approved, or pre-fill the trainer's comment.
+      sl_status: 0,
+      sl_trainer_comments: "",
+      sl_submit_date: localDateKey(),
+    });
 
-    // Create the leave
-    const newLeave = await studentLeave.create(req.body);
+    // Counted AFTER the insert. The previous message used the pre-insert count,
+    // so a student who had just used their first leave was told they still had
+    // all three remaining.
+    const remaining = Math.max(MAX_LEAVES_PER_MONTH - (used + 1), 0);
 
-    res.status(201).json({
-      message: `Leave created successfully. You have ${remainingLeaves} leave(s) remaining in this month. We allow max. ${maxLeavesAllowed} leaves in a month.`,
+    return res.status(201).json({
+      success: true,
+      message: `Leave application submitted. You have ${remaining} leave(s) remaining this month.`,
+      remaining,
       data: newLeave,
     });
   } catch (err) {
-    next(err);
+    // Previously this called next(err), which reached the global handler and
+    // returned a raw Sequelize message as a 500 - unreadable to a student and
+    // indistinguishable from a real outage.
+    console.error("Create leave error:", err);
+    if (err?.name === "SequelizeUniqueConstraintError") {
+      return res.status(409).json({
+        success: false,
+        message: "That leave application already exists",
+      });
+    }
+    return res.status(500).json({
+      success: false,
+      message: "Could not submit your leave application. Please try again.",
+    });
   }
 };
 

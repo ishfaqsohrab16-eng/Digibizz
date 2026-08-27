@@ -20,9 +20,11 @@ router.get(
   studentLeaveController.getAllLeavesAsTrainer
 );
 
+// Distinct path from "/leaves/:user_id". Both were registered as a single
+// dynamic segment on the same path, so this one was unreachable - every
+// request matched getAllLeaves above and getLeaveById never ran.
 router.get(
-  "/leaves/:id",
-
+  "/leave/:id",
   isAdminAuthenticated,
   studentLeaveController.getLeaveById
 );
