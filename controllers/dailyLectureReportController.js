@@ -42,53 +42,85 @@ const createReport = async (req, res) => {
       return res.status(404).json({ message: "Trainer not found" });
     }
 
-    const trainerCenter = await TrainerCenterAllocation.findOne({
+    // One report per class the trainer teaches, not one overall.
+    //
+    // This used to take findOne on the allocations and file the report against
+    // that single center and course. A trainer running online classes for
+    // three centers submitted one report and two of those centers showed
+    // nothing for the day - the lecture happened, the record did not exist.
+    const allocations = await TrainerCenterAllocation.findAll({
       where: { t_id: trainer.t_id, tb_id },
     });
 
-    if (!trainerCenter) {
+    if (allocations.length === 0) {
       return res
         .status(404)
         .json({ message: "Trainer is not allocated to this batch" });
     }
 
-    const center_id = trainerCenter.center_id;
-    const course_id = trainerCenter.course_id;
-    const reportData = {
-      t_id: trainer.t_id,
-      center_id,
-      course_id,
-      tb_id,
-      dlr_date,
-      dlr_title,
-      dlr_topics,
-      dlr_practical,
-      dlr_assignment,
-      dlr_challenges,
-      dlr_month,
-    };
+    // De-duplicated: the same class allocated twice must not produce two
+    // identical reports for one lecture.
+    const classes = [];
+    const seen = new Set();
+    for (const allocation of allocations) {
+      const key = `${allocation.center_id}|${allocation.course_id}`;
+      if (seen.has(key)) continue;
+      seen.add(key);
+      classes.push(allocation);
+    }
 
-    // Check if report already exists for this trainer, batch, and date
-    const existingReport = await DailyLectureReport.findOne({
-      where: {
-         t_id: trainer.t_id,
-        tb_id,
-        dlr_date,
-      },
+    // Already-submitted classes are skipped rather than failing the whole
+    // request: a trainer who added a center mid-batch, or whose first attempt
+    // half-succeeded, must still be able to file for the remaining classes.
+    const existing = await DailyLectureReport.findAll({
+      where: { t_id: trainer.t_id, tb_id, dlr_date },
+      attributes: ["center_id", "course_id"],
+      raw: true,
     });
+    const alreadyFiled = new Set(
+      existing.map((row) => `${row.center_id}|${row.course_id}`)
+    );
 
-    if (existingReport) {
+    const pending = classes.filter(
+      (allocation) =>
+        !alreadyFiled.has(`${allocation.center_id}|${allocation.course_id}`)
+    );
+
+    if (pending.length === 0) {
       return res.status(400).json({
         success: false,
-        message: `Report for this date ${dlr_date} is already submitted`,
+        message: `Report for ${dlr_date} is already submitted for all your classes`,
       });
     }
-    const report = await DailyLectureReport.create(reportData);
+
+    const created = await DailyLectureReport.bulkCreate(
+      pending.map((allocation) => ({
+        t_id: trainer.t_id,
+        center_id: allocation.center_id,
+        course_id: allocation.course_id,
+        tb_id,
+        dlr_date,
+        dlr_title,
+        dlr_topics,
+        dlr_practical,
+        dlr_assignment,
+        dlr_challenges,
+        dlr_month,
+      }))
+    );
+
+    const skipped = classes.length - pending.length;
 
     res.status(201).json({
       success: true,
-      message: `Report created successfully for date ${dlr_date}`,
-      data: report,
+      message:
+        classes.length === 1
+          ? `Report created successfully for date ${dlr_date}`
+          : `Report filed for ${created.length} of your ${classes.length} classes on ${dlr_date}` +
+            (skipped ? ` (${skipped} already submitted)` : ""),
+      data: created,
+      classes: classes.length,
+      skipped,
     });
   } catch (error) {
     console.error("Report creation error:", error);

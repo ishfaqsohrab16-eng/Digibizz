@@ -440,21 +440,30 @@ exports.getStudentQuizzes = async (req, res) => {
     const student = await Student.findOne({
       where: { user_id: user_id },
     });
-    const trainerCenterAllocations = await TrainerCenterAllocation.findOne({
+    // Every trainer allocated to this student's class, not just one.
+    // A class with two trainers showed the student only one of their quiz
+    // sets, and the other trainer's quizzes were invisible.
+    const trainerCenterAllocations = await TrainerCenterAllocation.findAll({
       where: {
         course_id: student.course_id,
         center_id: student.center_id,
         tb_id: student.tb_id,
       },
     });
-    if (!trainerCenterAllocations) {
-      return res.status(404).json({ message: "Trainer not found" });
+    if (trainerCenterAllocations.length === 0) {
+      return res
+        .status(404)
+        .json({ message: "No trainer is allocated to your class yet" });
     }
+
+    const classTrainerIds = [
+      ...new Set(trainerCenterAllocations.map((a) => a.t_id)),
+    ];
 
     // Get quizzes with question count
     const quizzes = await StudentQuiz.findAll({
       where: {
-        t_id: trainerCenterAllocations.t_id,
+        t_id: { [Op.in]: classTrainerIds },
         tb_id,
       },
     });

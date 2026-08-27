@@ -22,6 +22,7 @@ const {
   buildStats,
   toDateKey,
 } = require("../utils/attendanceCalculator");
+const { allocationSqlScope } = require("../utils/trainerScope");
 exports.registerStudent = async (req, res) => {
   const transaction = await sequelize.transaction(); // Initialize transaction
   try {
@@ -496,11 +497,15 @@ exports.getStudentProfile = async (req, res) => {
       t_course_ids = trainerCenters.map((center) => center.course_id);
 
       // Build WHERE clause safely with proper checks for empty arrays
-      if (t_center_ids.length > 0 && t_course_ids.length > 0) {
+      // Pairs, not IN(centers) AND IN(courses). The latter is the cross
+      // product: a trainer teaching Digital at BUITEMS and Creative at UoB
+      // also matched Digital-at-UoB, so they saw another trainer's students.
+      const classSql = allocationSqlScope(trainerCenters, "s");
+
+      if (classSql) {
         whereClause = `WHERE u.user_type = 'Student'
           AND s.tb_id = ${tb_id}
-          AND s.center_id IN (${t_center_ids.join(",")})
-          AND s.course_id IN (${t_course_ids.join(",")})`;
+          AND ${classSql}`;
       } else {
         whereClause = `WHERE u.user_type = 'Student'
           AND s.tb_id = ${tb_id}`;

@@ -9,6 +9,8 @@ const User = require("../models/userModel"); // Add this line to import User mod
 const Student = require("../models/studentModel");
 const sendEmail = require("../servec/emailConfig");
 const { validationResult } = require("express-validator");
+const { Op } = require("sequelize");
+const { allocationScope } = require("../utils/trainerScope");
 
 exports.createAnnouncement = async (req, res) => {
   try {
@@ -25,34 +27,54 @@ exports.createAnnouncement = async (req, res) => {
       });
     }
 
-    const trainerCenter = await TrainerCenterAllocation.findOne({
-      where: {
-        t_id: trainer.t_id,
-        tb_id: tb_id,
-      },
+    // One announcement per class the trainer teaches.
+    //
+    // This used to take findOne and post to that single center and course, so
+    // a trainer running online classes for three centers wrote an announcement
+    // and two of those classes never saw it.
+    const allocations = await TrainerCenterAllocation.findAll({
+      where: { t_id: trainer.t_id, tb_id },
     });
 
-    if (!trainerCenter) {
+    if (allocations.length === 0) {
       return res.status(404).json({
         success: false,
         message: "Trainer is not allocated to this batch",
       });
     }
 
-    const announcement = await ClassAnnouncements.create({
-      ca_title,
-      ca_message,
-      t_id: trainer.t_id,
-      tb_id,
-      course_id: trainerCenter.course_id,
-      center_id: trainerCenter.center_id,
-      ca_added_on: new Date().toISOString().split("T")[0],
+    // De-duplicated so a class allocated twice does not show the same
+    // announcement twice.
+    const seen = new Set();
+    const classes = allocations.filter((allocation) => {
+      const key = `${allocation.center_id}|${allocation.course_id}`;
+      if (seen.has(key)) return false;
+      seen.add(key);
+      return true;
     });
+
+    const addedOn = new Date().toISOString().split("T")[0];
+
+    const announcements = await ClassAnnouncements.bulkCreate(
+      classes.map((allocation) => ({
+        ca_title,
+        ca_message,
+        t_id: trainer.t_id,
+        tb_id,
+        course_id: allocation.course_id,
+        center_id: allocation.center_id,
+        ca_added_on: addedOn,
+      }))
+    );
 
     res.status(201).json({
       success: true,
-      message: "Announcement created successfully",
-      data: announcement,
+      message:
+        classes.length === 1
+          ? "Announcement created successfully"
+          : `Announcement posted to all ${classes.length} of your classes`,
+      data: announcements,
+      classes: classes.length,
     });
   } catch (error) {
     console.error("Error creating announcement:", error);
@@ -85,17 +107,17 @@ exports.getAnnouncements = async (req, res) => {
           });
         }
 
-        const trainerCenter = await TrainerCenterAllocation.findOne({
-          where: {
-            t_id: trainer.t_id,
-            tb_id: tb_id,
-          },
+        const allocations = await TrainerCenterAllocation.findAll({
+          where: { t_id: trainer.t_id, tb_id },
         });
 
-        if (trainerCenter) {
+        // Every class they teach, not the first one. Written as pairs rather
+        // than IN(centers) AND IN(courses), which is the cross product and
+        // would also match classes taught by somebody else.
+        const scope = allocationScope(allocations);
+        if (scope) {
           whereClause.t_id = trainer.t_id;
-          whereClause.center_id = trainerCenter.center_id;
-          whereClause.course_id = trainerCenter.course_id;
+          Object.assign(whereClause, { [Op.and]: [scope] });
         }
       } catch (error) {
         console.error("Error finding trainer details:", error);

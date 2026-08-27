@@ -7,6 +7,10 @@ const StudentModel = require("../models/studentModel");
 const TrainerModel = require("../models/trainersModel");
 const TrainerCenterAllocation = require("../models/trainersCenterAllocationModel");
 const { monthKey, localDateKey } = require("../utils/weekKey");
+const {
+  getTrainerAllocations,
+  withAllocationScope,
+} = require("../utils/trainerScope");
 
 const MAX_LEAVES_PER_MONTH = 3;
 const MAX_SUBJECT = 255;
@@ -212,45 +216,59 @@ const getAllLeaves = async (req, res, next) => {
     next(err);
   }
 };
-const getAllLeavesAsTrainer = async (req, res, next) => {
+/**
+ * Every leave application from every class this trainer teaches.
+ *
+ * This used to take findOne on the allocations and filter by that single
+ * center and course, so a trainer running online classes for three centers saw
+ * the leaves of one of them. The dashboard counted all three, which is why it
+ * could report two pending requests while this list came back empty.
+ */
+const getAllLeavesAsTrainer = async (req, res) => {
   try {
     const { user_id, tb_id } = req.params;
 
     if (!user_id) {
-      return res.status(400).json({ message: "User ID is required" });
+      return res
+        .status(400)
+        .json({ success: false, message: "User ID is required" });
     }
-    const Trainer = await TrainerModel.findOne({
-      where: {
-        user_id: user_id,
-      },
-    });
-    const TrainerCenterAllocations = await TrainerCenterAllocation.findOne({
-      where: {
-        tb_id: tb_id,
-        t_id: Trainer.t_id,
-      },
-    });
 
-    if (!TrainerCenterAllocations) {
-      return res.status(404).json({ message: "Trainer not found" });
+    const { trainer, allocations } = await getTrainerAllocations(user_id, tb_id);
+
+    if (!trainer) {
+      // Previously this dereferenced Trainer.t_id without checking, so a
+      // missing trainer became a TypeError and a generic 500.
+      return res
+        .status(404)
+        .json({ success: false, message: "Trainer profile not found" });
+    }
+
+    const where = withAllocationScope({ tb_id }, allocations);
+
+    if (!where) {
+      // No allocations means no classes, so no leaves - an empty list, never
+      // an unscoped query that would return every student in the program.
+      return res.json([]);
     }
 
     const leaves = await studentLeave.findAll({
-      where: {
-        tb_id: tb_id,
-        course_id: TrainerCenterAllocations.course_id,
-        center_id: TrainerCenterAllocations.center_id,
-      },
+      where,
       include: [
         { model: TrainingBatch, as: "training_batches" },
-
         { model: Center, as: "centers" },
         { model: Course, as: "courses" },
       ],
+      order: [["sl_id", "DESC"]],
     });
-    res.json(leaves);
+
+    return res.json(leaves);
   } catch (err) {
-    next(err);
+    console.error("Error fetching trainer leaves:", err);
+    return res.status(500).json({
+      success: false,
+      message: "Server error loading leave applications",
+    });
   }
 };
 const getLeaveById = async (req, res, next) => {

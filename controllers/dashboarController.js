@@ -216,18 +216,24 @@ exports.getStudentDashoard = async (req, res) => {
         tb_id: tb_id,
       },
     });
-    const trainerCenterAllocation = await TrainerCenterAllocation.findOne({
+    // Every trainer on this student's class. With findOne, a class taught by
+    // two trainers counted only one of their quiz sets, so the student's
+    // "total quizzes" was lower than the number they could actually see.
+    const trainerCenterAllocation = await TrainerCenterAllocation.findAll({
       where: {
         tb_id: tb_id,
         center_id: studentProfile.center_id,
         course_id: studentProfile.course_id,
       },
     });
-    const totalQuizzes = trainerCenterAllocation
+    const classTrainerIds = [
+      ...new Set(trainerCenterAllocation.map((a) => a.t_id)),
+    ];
+    const totalQuizzes = classTrainerIds.length
       ? await Quiz.count({
           where: {
             tb_id: tb_id,
-            t_id: trainerCenterAllocation.t_id,
+            t_id: { [Op.in]: classTrainerIds },
           },
         })
       : 0;
@@ -509,10 +515,25 @@ exports.getTrainerDashoard = async (req, res) => {
     const allowedCenters = allocations.map((a) => a.center_id);
     const allowedCourses = allocations.map((a) => a.course_id);
 
+    /**
+     * The trainer's actual (center, course) pairs.
+     *
+     * Every query below used to filter with
+     *   course_id IN (allowedCourses) AND center_id IN (allowedCenters)
+     * which is the CROSS PRODUCT of the two lists, not the pairs. A trainer
+     * teaching Digital at BUITEMS and Creative at UoB also matched
+     * Digital-at-UoB and Creative-at-BUITEMS - classes taught by somebody else.
+     * Every figure on this dashboard was inflated by those extra classes, and
+     * the lists showed other trainers' students.
+     *
+     * Spread into a where clause; allocations is non-empty by the guard above,
+     * so this is never null here.
+     */
+    const classScope = allocationScope(allocations);
+
     const pendingLeaves = await StudentLeaves.count({
       where: {
-        course_id: { [Op.in]: allowedCourses },
-        center_id: { [Op.in]: allowedCenters },
+        ...classScope,
         tb_id: tb_id,
         sl_status: 0,
       },
@@ -591,8 +612,7 @@ exports.getTrainerDashoard = async (req, res) => {
     const attendanceRecords = await Attendance.findAll({
       where: {
         tb_id,
-        course_id: { [Op.in]: allowedCourses },
-        center_id: { [Op.in]: allowedCenters },
+        ...classScope,
         attend_date: { [Op.between]: [startDateString, currentDateString] },
       },
       attributes: ["attend_date"],
@@ -629,8 +649,7 @@ exports.getTrainerDashoard = async (req, res) => {
     const attendance = await Attendance.findOne({
       where: {
         tb_id,
-        course_id: { [Op.in]: allowedCourses },
-        center_id: { [Op.in]: allowedCenters },
+        ...classScope,
         attend_date: todayFormatted,
       },
     });
@@ -640,8 +659,7 @@ exports.getTrainerDashoard = async (req, res) => {
     const dailyReport = await DailyReport.findOne({
       where: {
         tb_id,
-        course_id: { [Op.in]: allowedCourses },
-        center_id: { [Op.in]: allowedCenters },
+        ...classScope,
         t_id: trainer.t_id,
         dlr_date: todayFormatted,
       },
@@ -657,8 +675,7 @@ exports.getTrainerDashoard = async (req, res) => {
     const recentAssignments = await Assignment.findAll({
       where: {
         tb_id,
-        course_id: { [Op.in]: allowedCourses },
-        center_id: { [Op.in]: allowedCenters },
+        ...classScope,
       },
       limit: 5,
       order: [["as_added_on", "DESC"]],
@@ -667,8 +684,7 @@ exports.getTrainerDashoard = async (req, res) => {
     const activeStudents = await student.count({
       where: {
         tb_id,
-        course_id: { [Op.in]: allowedCourses },
-        center_id: { [Op.in]: allowedCenters },
+        ...classScope,
         std_lms_status: 1,
       },
     });
@@ -676,16 +692,14 @@ exports.getTrainerDashoard = async (req, res) => {
     const totalStudents = await student.count({
       where: {
         tb_id,
-        course_id: { [Op.in]: allowedCourses },
-        center_id: { [Op.in]: allowedCenters },
+        ...classScope,
       },
     });
     
     const batchEarnings = await Earnings.sum("earning_amount", {
       where: {
         tb_id,
-        course_id: { [Op.in]: allowedCourses },
-        center_id: { [Op.in]: allowedCenters },
+        ...classScope,
         earning_status: 1,
       },
     });
@@ -696,8 +710,7 @@ exports.getTrainerDashoard = async (req, res) => {
     const successStories = await Earnings.count({
       where: {
         tb_id,
-        course_id: { [Op.in]: allowedCourses },
-        center_id: { [Op.in]: allowedCenters },
+        ...classScope,
         earning_status: 1,
       },
     });

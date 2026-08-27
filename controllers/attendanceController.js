@@ -9,6 +9,10 @@ const TrainerCenterAllocation = require("../models/trainersCenterAllocationModel
 const User = require("../models/userModel");
 const CenterDates = require("../models/centersDatesModel");
 const { Op } = require("sequelize");
+const {
+  allocationScope,
+  allocationCenterIds,
+} = require("../utils/trainerScope");
 const { startOfMonth, endOfMonth } = require("date-fns");
 const { Sequelize } = require("sequelize");
 // config/db exports { sequelize, testConnection } - the previous code assigned
@@ -322,14 +326,17 @@ exports.getAttendanceHistory = async (req, res) => {
           return res.status(403).json({ message: "Trainer not assigned to this batch" });
         }
 
-        const allowedCenters = allocations.map((a) => a.center_id);
-        const allowedCourses = allocations.map((a) => a.course_id);
+        const allowedCenters = allocationCenterIds(allocations);
 
-        // Force the queries to ONLY look at the trainer's allowed students
-        studentWhere.center_id = { [Op.in]: allowedCenters };
-        attendanceWhere.center_id = { [Op.in]: allowedCenters };
-        studentWhere.course_id = { [Op.in]: allowedCourses };
-        attendanceWhere.course_id = { [Op.in]: allowedCourses };
+        // Restrict to the trainer's actual (center, course) PAIRS.
+        //
+        // This was center_id IN (...) AND course_id IN (...), which is the
+        // cross product: a trainer teaching Digital at BUITEMS and Creative at
+        // UoB also matched Digital-at-UoB - another trainer's students, whose
+        // attendance they could then see and mark.
+        const classScope = allocationScope(allocations);
+        Object.assign(studentWhere, { [Op.and]: [classScope] });
+        Object.assign(attendanceWhere, { [Op.and]: [classScope] });
 
         // A trainer allocated to several centers should be able to narrow to
         // one of them; only fall back to the first when they haven't chosen.
@@ -524,12 +531,11 @@ exports.getAttendance = async (req, res) => {
           .json({ message: "Trainer not assigned to this batch" });
       }
 
-      attendanceWhere.center_id = {
-        [Op.in]: allocations.map((allocation) => allocation.center_id),
-      };
-      attendanceWhere.course_id = {
-        [Op.in]: allocations.map((allocation) => allocation.course_id),
-      };
+      // Pairs, not the cross product of the two lists - see the note in
+      // utils/trainerScope.js.
+      Object.assign(attendanceWhere, {
+        [Op.and]: [allocationScope(allocations)],
+      });
     } else {
       // Staff may narrow by center/course; "0" or absent means "all".
       const { centerId, courseId } = req.query;

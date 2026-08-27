@@ -5,6 +5,7 @@ const TrainingBatch = require("../models/trainingBatcheModel");
 const Trainer = require("../models/trainersModel");
 const TrainerCenterAllocation = require("../models/trainersCenterAllocationModel");
 const { sequelize } = require("../config/db");
+const { allocationSqlScope } = require("../utils/trainerScope");
 
 // Helper function to fetch student statistics
 const fetchStudentStatistics = async (student, tb_id) => {
@@ -173,6 +174,7 @@ const fetchStudentStatistics = async (student, tb_id) => {
 exports.getStudentProfile = async (tb_id, center_id, course_id, user_id, userType) => {
   let t_center_ids = [];
   let t_course_ids = [];
+  let trainerAllocations = [];
 
   try {
     // Handle trainer-specific logic
@@ -201,15 +203,20 @@ exports.getStudentProfile = async (tb_id, center_id, course_id, user_id, userTyp
 
       t_center_ids = trainerCenters.map((center) => center.center_id);
       t_course_ids = trainerCenters.map((center) => center.course_id);
+      trainerAllocations = trainerCenters;
     }
 
-    // Build the WHERE clause dynamically
+    // Pairs, not IN(centers) AND IN(courses). The latter is the cross
+    // product, so a trainer teaching Digital at BUITEMS and Creative at UoB
+    // also matched Digital-at-UoB - another trainer's students.
+    const classSql =
+      userType === "trainer" ? allocationSqlScope(trainerAllocations, "s") : null;
+
     const whereClause =
       userType === "trainer"
         ? `WHERE LOWER(u.user_type) = 'student'
            AND s.tb_id = ${tb_id}
-           AND s.center_id IN (${t_center_ids.join(",")})
-           AND s.course_id IN (${t_course_ids.join(",")})`
+           AND ${classSql || "1 = 0"}`
         : `WHERE LOWER(u.user_type) = 'student'
            AND s.tb_id = ${tb_id}`;
 
