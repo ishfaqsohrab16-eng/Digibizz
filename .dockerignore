@@ -57,8 +57,11 @@ Frontend/.env.*
 .DS_Store
 Thumbs.db
 
-# Nixpacks regenerates these on every build.
-.nixpacks
+# NOTE: .nixpacks must NOT be ignored. Nixpacks generates the Dockerfile inside
+# it and that Dockerfile does
+#   COPY .nixpacks/nixpkgs-<hash>.nix .nixpacks/nixpkgs-<hash>.nix
+# so excluding the directory makes the build fail at that step with
+# "failed to compute cache key: /.nixpacks/nixpkgs-<hash>.nix: not found".
 
 # -----------------------------------------------------------------------------
 # Bind-mounted directories
