@@ -73,6 +73,10 @@ export const DEFAULT_COLUMNS: Column[] = [
   { id: "cand_interview_marks", label: "Interview Marks", visible: true },
   { id: "recommended", label: "Recommended", visible: true },
   { id: "laptop_pc", label: "Laptop/PC", visible: true },
+  // Interviewer-verified, and deliberately distinct from the `institute` the
+  // applicant typed on the form. Renders "Not asked" while nobody has answered,
+  // which must stay distinguishable from an explicit "No".
+  { id: "uob_student", label: "UoB Student", visible: true },
   { id: "cand_local_domicile", label: "Domicile", visible: true },
   { id: "cand_degree_level", label: "Qualification", visible: true },
 ];

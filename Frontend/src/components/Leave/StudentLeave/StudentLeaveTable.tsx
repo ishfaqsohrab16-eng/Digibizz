@@ -45,8 +45,20 @@ export default function StudentLeaveTable({
   );
 
   useEffect(() => {
+    // BatchContext fills user_id/userType from localStorage in its own effect,
+    // so both are still 0/"" on the first render. Fetching here used to fire
+    // immediately with user_id=0, the server answered 404, and because the
+    // effect only depended on selectedBatchId it never retried once the real
+    // user arrived - the list stayed empty while the dashboard, which loads
+    // later with a valid user, correctly counted the same leaves.
+    if (!user_id || !userType) return;
+    if (userType !== "student" && (!selectedBatchId || selectedBatchId === -1)) {
+      return;
+    }
+
     const fetchEarnings = async () => {
       try {
+        setErrorMessage("");
         let response;
         if (userType === "student") {
           response = await getStudentLeave(user_id);
@@ -55,8 +67,13 @@ export default function StudentLeaveTable({
         }
         setResponse(response);
 
-        if (response.message === "Trainer not found") {
-          toast.error(response.message);
+        // The server sends {success:false, message} for a missing trainer
+        // profile. Matching one exact string missed every other failure and
+        // left the table silently blank, so key off the shape instead.
+        if (response && !Array.isArray(response) && response.success === false) {
+          const message = response.message || "Could not load leave applications";
+          toast.error(message);
+          setErrorMessage(message);
           setData([]);
           setResponse([]);
           return;
@@ -101,12 +118,22 @@ export default function StudentLeaveTable({
           setData(formattedData);
         }
       } catch (e) {
+        // A thrown request (404 for an unallocated trainer, network failure)
+        // used to be swallowed here, so the page rendered an empty table with
+        // no indication anything had gone wrong.
         console.error("Error fetching data:", e);
+        const message =
+          (e as { response?: { data?: { message?: string } } })?.response?.data
+            ?.message || "Could not load leave applications";
+        toast.error(message);
+        setErrorMessage(message);
+        setData([]);
+        setResponse([]);
       }
     };
 
     fetchEarnings();
-  }, [selectedBatchId]);
+  }, [selectedBatchId, user_id, userType]);
   const getDataBySlCNIC = (sl_code: string) => {
     if (Array.isArray(response)) {
       const filteredData = response

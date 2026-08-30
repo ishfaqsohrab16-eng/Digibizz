@@ -97,13 +97,25 @@ export default function TrainerLeaveTable({
       setData(formattedData);
     } catch (error) {
       console.error("Error fetching trainer leaves:", error);
-      setErrorMessage("Failed to fetch trainer leaves.");
+      // Show the server's reason rather than a generic line - "Trainer profile
+      // not found" and a network failure need different responses from staff.
+      const message =
+        (error as { response?: { data?: { message?: string } } })?.response?.data
+          ?.message || "Failed to fetch trainer leaves.";
+      setErrorMessage(message);
+      setData([]);
     }
   };
 
   useEffect(() => {
+    // user_id and userType arrive from BatchContext one render after mount.
+    // Firing before then sent user_id=0, got a 404, and never retried because
+    // the effect ignored those two values - the table stayed empty even though
+    // the trainer had leaves.
+    if (!user_id || !userType) return;
+    if (!selectedBatchId || selectedBatchId === -1) return;
     fetchTrainerLeaves();
-  }, [selectedBatchId]);
+  }, [selectedBatchId, user_id, userType]);
 
   const getDataByTlCode = (tl_code: string) => {
     if (!response || !Array.isArray(response)) {

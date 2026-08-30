@@ -21,6 +21,7 @@ import {
   getCenter,
 } from "../../services/api";
 import { Course } from "../../types/trainer";
+import { useBatch } from "../../context/BatchContext";
 
 interface FormData {
   cand_interview_marks: string;
@@ -103,6 +104,10 @@ const initialAcademicInfo: AcademicInfo = {
 };
 
 const InterviewPortal = () => {
+  // The batch the portal is actually showing. Every candidate lookup must be
+  // scoped to it - searching a hard-coded batch is what made candidates moved
+  // to Batch 10 come back as "not found".
+  const { selectedBatchId, selectedBatchName } = useBatch();
   const [searchCnic, setSearchCnic] = useState("");
   const [isSearching, setIsSearching] = useState(false);
   const [studentInfo, setStudentInfo] =
@@ -204,14 +209,34 @@ const InterviewPortal = () => {
       toast.error("Please enter a CNIC number");
       return;
     }
+    // -1 is BatchContext's "nothing selected yet" value. Searching with it
+    // would query a batch that cannot exist and report a misleading "not found".
+    if (!selectedBatchId || selectedBatchId === -1) {
+      toast.error("Select a training batch before searching");
+      return;
+    }
     setRejectReason("");
     setIsSearching(true);
     setHasData(false);
     try {
-      const response = await getCandidateProfileByCnic(searchCnic);
+      const response = await getCandidateProfileByCnic(
+        searchCnic,
+        selectedBatchId
+      );
 
       if (response.success === false) {
-        throw new Error("Student not found");
+        // Say which batch was searched, and pass the server's own reason
+        // through - "admissions closed for this batch" and "no such candidate"
+        // are different problems and used to look identical to the interviewer.
+        throw new Error(
+          response.message ||
+            `No candidate with this CNIC in ${selectedBatchName || "this batch"}`
+        );
+      }
+      // A CNIC already enrolled as a student returns success with no candidate
+      // record; without this the next line would throw a bare TypeError.
+      if (response.student_data || !response.candidate) {
+        throw new Error(response.message || "This CNIC is already enrolled as a student");
       }
       const data = response.candidate;
 

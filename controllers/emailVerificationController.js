@@ -141,7 +141,9 @@ exports.sendCode = async (req, res) => {
     });
 
     try {
-      await sendEmail({ to: email, subject, text, html });
+      // priority: the applicant is watching the form for this code, so it must
+      // not queue behind a running campaign on the bulk transport.
+      await sendEmail({ to: email, subject, text, html, priority: true });
     } catch (error) {
       console.error(`[verify] could not send a code to ${email}:`, error?.message || error);
       return res.status(502).json({

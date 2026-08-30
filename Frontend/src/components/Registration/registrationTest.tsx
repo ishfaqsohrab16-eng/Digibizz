@@ -23,11 +23,18 @@ interface RegistrationDetailsProps {
   candName: string;
   handleNext: (test: number, name?: string) => void;
   cnicNo: string;
+  /**
+   * The batch the candidate applied to. Required, and deliberately not
+   * defaulted: a hard-coded batch here would look up the wrong batch's
+   * candidates the moment intake moves on.
+   */
+  tbId: number;
 }
 const QuizInterface: React.FC<RegistrationDetailsProps> = ({
   candName,
   handleNext,
   cnicNo,
+  tbId,
 }) => {
   const [currentQuestionIndex, setCurrentQuestionIndex] = useState(0);
   const [timeRemaining, setTimeRemaining] = useState(quizData.totalTime);
@@ -61,7 +68,7 @@ const QuizInterface: React.FC<RegistrationDetailsProps> = ({
   }
   const fetchCandidateProfile = async () => {
     try {
-      const response = await getCandidateProfileByCnic(cnicNo);
+      const response = await getCandidateProfileByCnic(cnicNo, tbId);
 
       setCandidate({
         candName: response.candidate.name || "Unknown Candidate",
@@ -75,7 +82,7 @@ const QuizInterface: React.FC<RegistrationDetailsProps> = ({
 
   useEffect(() => {
     fetchCandidateProfile();
-  }, [cnicNo]);
+  }, [cnicNo, tbId]);
   useEffect(() => {
     let intervalId: NodeJS.Timeout;
     if (timeRemaining > 0 && !isQuizComplete) {

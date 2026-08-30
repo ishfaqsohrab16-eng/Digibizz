@@ -207,6 +207,16 @@ function AdmissionPortal() {
               : String(candidate.recommended ?? "").trim().toLowerCase() === "no"
               ? "Not Recommend"
               : "",
+            // Tri-state: NULL means the interviewer was never asked, which is
+            // not the same answer as "No". Written to its own display key so
+            // the raw flag survives for anything that needs the real value.
+            uob_student:
+              candidate.is_uob_student === null ||
+              candidate.is_uob_student === undefined
+                ? "Not asked"
+                : Number(candidate.is_uob_student) === 1
+                ? "Yes"
+                : "No",
           }))
         : [];
 

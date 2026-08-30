@@ -49,7 +49,7 @@ if (!isConfigured) {
   );
 }
 
-const transporter = nodemailer.createTransport({
+const baseTransportOptions = {
   host: SMTP_HOST,
   port: SMTP_PORT,
   secure: SMTP_SECURE, // true => implicit TLS (465), false => STARTTLS (587)
@@ -59,19 +59,50 @@ const transporter = nodemailer.createTransport({
     rejectUnauthorized: SMTP_REJECT_UNAUTHORIZED,
     servername: SMTP_HOST,
   },
-  // Reuse connections instead of opening one socket per message. Bulk senders
-  // (class announcements) would otherwise hit the server's connection limit.
-  pool: true,
-  maxConnections: 2,
-  maxMessages: 50,
-  rateDelta: 1000,
-  rateLimit: 5,
   // Without timeouts a stalled SMTP server hangs the HTTP request forever.
   connectionTimeout: 15000,
   greetingTimeout: 15000,
   socketTimeout: 30000,
   logger: SMTP_DEBUG,
   debug: SMTP_DEBUG,
+};
+
+/**
+ * Bulk transport: campaigns and class announcements.
+ *
+ * Reuses connections instead of opening one socket per message, and is rate
+ * limited so a campaign cannot flood the mail server.
+ */
+const transporter = nodemailer.createTransport({
+  ...baseTransportOptions,
+  pool: true,
+  maxConnections: 2,
+  maxMessages: 50,
+  rateDelta: 1000,
+  rateLimit: 5,
+});
+
+/**
+ * Transactional transport: verification codes, password resets - anything a
+ * person is sitting in front of a form waiting for.
+ *
+ * These used to share the bulk pool above. nodemailer queues a message when
+ * every pooled connection is busy and additionally holds it back to honour
+ * `rateLimit`, so while a campaign was running a registration code waited
+ * behind that campaign's messages - and because the send is awaited before the
+ * HTTP response, the applicant's browser waited with it. That is the "code
+ * arrives very late" report.
+ *
+ * A separate transport means campaign traffic and applicant traffic can never
+ * queue behind one another. It is deliberately not rate limited: it carries
+ * one message per human action, which the cooldown in the verification
+ * controller already bounds.
+ */
+const priorityTransporter = nodemailer.createTransport({
+  ...baseTransportOptions,
+  pool: true,
+  maxConnections: 1,
+  maxMessages: 100,
 });
 
 /** Escape untrusted values before interpolating them into HTML. */
@@ -136,6 +167,9 @@ const renderLayout = (subject, bodyHtml) => `
  *   sendEmail(to, subject, text, html)
  *   sendEmail({ to, subject, text, html, replyTo, cc, bcc, attachments })
  *
+ * Pass `priority: true` for mail a user is actively waiting on, so it goes out
+ * on the transactional transport instead of queueing behind campaign sends.
+ *
  * Note: `text` and `html` are two representations of the SAME message, not two
  * sections. The previous implementation rendered both, so recipients saw every
  * message twice. `html` wins when it has content; otherwise `text` is used.
@@ -168,8 +202,10 @@ const sendEmail = async (to, subject, text, html) => {
       ? options.text
       : htmlToText(options.html);
 
+  const activeTransport = options.priority ? priorityTransporter : transporter;
+
   try {
-    const info = await transporter.sendMail({
+    const info = await activeTransport.sendMail({
       from: `"${SMTP_FROM_NAME}" <${SMTP_FROM_ADDRESS}>`,
       to: options.to,
       cc: options.cc,
@@ -217,11 +253,25 @@ const sendEmailSafe = (...args) =>
     .then(() => true)
     .catch(() => false);
 
+/**
+ * Send mail a user is waiting on, over the transactional transport.
+ * Same signature as sendEmail.
+ */
+const sendPriorityEmail = async (to, subject, text, html) => {
+  const options =
+    to && typeof to === "object" && !Array.isArray(to)
+      ? to
+      : { to, subject, text, html };
+  return sendEmail({ ...options, priority: true });
+};
+
 /** Check host reachability + credentials without sending a message. */
 const verifyTransport = async () => {
   if (!isConfigured) return false;
   try {
-    await transporter.verify();
+    // Both transports, so the first verification code does not pay for the
+    // TLS handshake and AUTH round trip on a cold transactional connection.
+    await Promise.all([transporter.verify(), priorityTransporter.verify()]);
     console.log(`[email] SMTP ready: ${SMTP_HOST}:${SMTP_PORT} (secure=${SMTP_SECURE})`);
     return true;
   } catch (error) {
@@ -237,7 +287,9 @@ const verifyTransport = async () => {
 module.exports = sendEmail;
 module.exports.sendEmail = sendEmail;
 module.exports.sendEmailSafe = sendEmailSafe;
+module.exports.sendPriorityEmail = sendPriorityEmail;
 module.exports.verifyTransport = verifyTransport;
 module.exports.transporter = transporter;
+module.exports.priorityTransporter = priorityTransporter;
 module.exports.escapeHtml = escapeHtml;
 module.exports.isConfigured = isConfigured;

@@ -7,6 +7,7 @@ const MasterTrainer = require("../models/masterTrainersModel");
 const TrainerCenterAllocation = require("../models/trainersCenterAllocationModel");
 const Admin = require("../models/adminModel");
 const User = require("../models/userModel");
+const { withAllocationScope } = require("../utils/trainerScope");
 
 const createLeave = async (req, res, next) => {
   try {
@@ -131,24 +132,31 @@ const getAllLeaves = async (req, res, next) => {
       return res.status(404).json({ message: "Student not found" });
     }
 
-    const TrainerCenterAllocations = await TrainerCenterAllocation.findOne({
+    // Every (center, course) pair this trainer teaches, not just the first.
+    // findOne() here is what made a trainer with more than one class see an
+    // empty list while the dashboard - which counts across all allocations -
+    // reported 2 pending leaves.
+    const allocations = await TrainerCenterAllocation.findAll({
       where: {
         tb_id: tb_id,
         t_id: Trainers.t_id,
       },
     });
 
-    if (!TrainerCenterAllocations) {
-      return res.status(404).json({ message: "Trainer not found" });
+    // No allocations means "matches nothing", but that is a legitimately empty
+    // list, not an error. A 404 here blanked the page for trainers who simply
+    // had no class assigned yet.
+    const scopedWhere = withAllocationScope(
+      { tb_id: tb_id, t_id: Trainers.t_id },
+      allocations
+    );
+
+    if (!scopedWhere) {
+      return res.json({ data: [], userTrainer: users });
     }
 
     const leaves = await trainerLeave.findAll({
-      where: {
-        tb_id: tb_id,
-        t_id: Trainers.t_id,
-        course_id: TrainerCenterAllocations.course_id,
-        center_id: TrainerCenterAllocations.center_id,
-      },
+      where: scopedWhere,
       include: [
         { model: TrainingBatch, as: "training_batches" },
         { model: Trainer, as: "trainers" },

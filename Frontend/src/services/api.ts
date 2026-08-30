@@ -1320,7 +1320,16 @@ export const saveBatchAdmissionControl = async (data: {
   return response.data;
 };
 
-export const getCandidateProfileByCnic = async (cnic: string, tbId: number = 9) => {
+/**
+ * Look up a candidate by CNIC within a specific batch.
+ *
+ * `tbId` is REQUIRED and has deliberately no default. It used to default to 9,
+ * which silently pinned every caller to Batch 9: once candidates were moved to
+ * Batch 10 the Interview Panel searched the wrong batch and reported "not
+ * found", while its heading still read "Batch 10" (that comes from BatchContext).
+ * Callers must pass the batch they are actually showing.
+ */
+export const getCandidateProfileByCnic = async (cnic: string, tbId: number) => {
   try {
     const response = await axios.get(
       `${API_URL}/candidateRoutes/check-cnic/${cnic}?tb_id=${tbId}`,
