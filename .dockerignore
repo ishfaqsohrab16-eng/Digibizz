@@ -1,0 +1,79 @@
+# What Docker must NOT ship as build context.
+#
+# Without this file the entire working directory is packed up and sent to the
+# builder on every deploy. On the production VPS that was 16.79 GB, which took
+# ~30 minutes to transfer before any build step ran, and was then copied twice
+# more by Nixpacks (COPY . /app) for another ~20 minutes. The actual work -
+# `npm install` - takes about 90 seconds.
+#
+# Everything listed here is either reinstalled during the build, regenerated,
+# or has no business inside a container image.
+
+# Reinstalled by `npm install` in the image. Shipping the host's copy is both
+# slow and wrong: native modules built for the host may not match the image.
+node_modules
+Frontend/node_modules
+
+# Full repository history. Never read at runtime.
+.git
+.gitignore
+.gitattributes
+
+# Backups and archives. `code_23May.zip` alone is 6.28 GB.
+*.zip
+*.tar
+*.tar.gz
+*.tgz
+*.bak
+*.dump
+
+# Database dumps. migration/*.sql is kept - it is small and applied on start.
+*.sql
+!migration/*.sql
+migration/database/
+
+# Frontend build output. The SERVED bundle is the repo-root `dist/`, which is
+# committed. Frontend/dist is only the intermediate build directory.
+Frontend/dist
+
+# Logs and caches
+logs
+*.log
+npm-debug.log*
+.npm
+.eslintcache
+
+# Local environment files. Real values come from Easypanel's Environment tab;
+# copying a stray .env into the image would silently override them.
+.env
+.env.local
+.env.*.local
+Frontend/.env
+Frontend/.env.*
+
+# Editor and OS noise
+.vscode
+.idea
+.DS_Store
+Thumbs.db
+
+# Nixpacks regenerates these on every build.
+.nixpacks
+
+# -----------------------------------------------------------------------------
+# uploads/ - READ BEFORE UNCOMMENTING
+# -----------------------------------------------------------------------------
+# This is almost certainly the bulk of the 16.79 GB: student photos, documents
+# and earning proofs accumulated since launch. It is gitignored, so it exists
+# only on the server.
+#
+# app.js serves it with express.static(path.join(__dirname, "uploads")), so the
+# running container MUST be able to read it. Only exclude it here if Easypanel
+# mounts it as a volume - otherwise every uploaded file 404s.
+#
+# Check first, on the VPS:
+#   docker inspect <container> --format '{{json .Mounts}}' | tr ',' '\n' | grep -i upload
+#
+# If a mount pointing at uploads exists, uncomment the next line. If not, set a
+# volume up in Easypanel (Mounts tab) FIRST, then uncomment.
+# uploads
