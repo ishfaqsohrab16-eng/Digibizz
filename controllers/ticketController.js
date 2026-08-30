@@ -9,6 +9,9 @@ const TrainerAlocation = require("../models/trainersCenterAllocationModel");
 const User = require("../models/userModel");
 const MasterTrainer = require("../models/masterTrainersModel");
 const { validationResult } = require("express-validator");
+// Used when a reply arrives without an explicit date/time. Referenced but never
+// imported, so posting a ticket reply threw "format is not defined".
+const { format } = require("date-fns");
 
 // Create Ticket
 exports.createTicket = async (req, res) => {

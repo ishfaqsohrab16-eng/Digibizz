@@ -413,10 +413,44 @@ const CampaignForm: React.FC<Props> = ({ onCreated, onCancel }) => {
       </div>
 
       {isList ? (
-        <RecipientListUpload
-          recipients={listRecipients}
-          onChange={setListRecipients}
-        />
+        <div className="space-y-4">
+          {/*
+            A list campaign still belongs to a center: email_campaigns.center_id
+            is NOT NULL with a foreign key, and the server rejects a create
+            without it. This selector used to render only in the branch below,
+            so for an uploaded list there was no way to set a center - centerId
+            stayed 0, "Choose a center" never cleared, and Create campaign was
+            permanently disabled with no visible field to fix it.
+          */}
+          <div className="rounded-lg border border-slate-200 bg-white p-5">
+            <h3 className="text-base font-semibold text-slate-900">Center</h3>
+            <p className="mt-1 text-xs text-slate-500">
+              Recipients come from the file you upload below. The center is what
+              this campaign is filed under for reporting.
+            </p>
+            <div className="mt-4 md:w-1/2">
+              <Field label="Center">
+                <select
+                  value={centerId}
+                  onChange={(e) => setCenterId(Number(e.target.value))}
+                  className={inputClass}
+                >
+                  <option value={0}>Select a center</option>
+                  {centers.map((center) => (
+                    <option key={center.center_id} value={center.center_id}>
+                      {center.center_name}
+                    </option>
+                  ))}
+                </select>
+              </Field>
+            </div>
+          </div>
+
+          <RecipientListUpload
+            recipients={listRecipients}
+            onChange={setListRecipients}
+          />
+        </div>
       ) : (
         <div className="rounded-lg border border-slate-200 bg-white p-5">
           <h3 className="text-base font-semibold text-slate-900">

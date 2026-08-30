@@ -4,7 +4,10 @@ import { ClassroomNav } from "./navigation/ClassroomNav";
 import { CenterNav } from "./navigation/CenterNav";
 import { AssessmentNav } from "./navigation/AssessmentNav";
 import { useBatch } from "../../context/BatchContext";
-import { getTrainingBatches } from "../../services/api";
+import {
+  getTrainingBatches,
+  getTrainingBatchesForTrainer,
+} from "../../services/api";
 import { UserData } from "../../types/admin";
 import mobileImage from "../../assets/icon.png";
 import { Superscript } from "lucide-react";
@@ -41,7 +44,10 @@ export const Sidebar: React.FC<SidebarProps> = ({
   const { setCenterId } = useBatch();
   const { setCourseId, setStdCNIC } = useBatch();
   const { userType, setUserType } = useBatch();
-  const { setSelectedBatchId, setSelectedBatchName, setlatestSelectedBatch, latestSelectedBatch, selectedBatchId } =
+  // latestSelectedBatch is no longer read here: the trainer dropdown used it to
+  // pick batches by array position, which is what surfaced unassigned batches.
+  // The setter stays - other screens still read the value.
+  const { setSelectedBatchId, setSelectedBatchName, setlatestSelectedBatch, selectedBatchId } =
     useBatch();
   const [trainingBatches, setTrainingBatches] = useState<
     Array<{ tb_id: number; tb_name: string }>
@@ -166,11 +172,26 @@ export const Sidebar: React.FC<SidebarProps> = ({
 
   const fetchTrainingBatches = async () => {
     try {
-      const data = await getTrainingBatches();
       const userType = getUserType();
       setUserType(userType);
 
-      const sortedBatches = data.data.sort(
+      // Trainers get only the batches they actually teach in. Everyone else
+      // still sees every batch. Falls back to the full list if the scoped call
+      // fails, so a backend hiccup degrades to the old behaviour instead of an
+      // empty sidebar.
+      let data;
+      if (userType === "trainer" && user_id) {
+        try {
+          data = await getTrainingBatchesForTrainer(user_id);
+        } catch (scopedError) {
+          console.error("Falling back to all batches:", scopedError);
+          data = await getTrainingBatches();
+        }
+      } else {
+        data = await getTrainingBatches();
+      }
+
+      const sortedBatches = (data?.data || []).sort(
         (a: { created_at: string }, b: { created_at: string }) =>
           new Date(b.created_at).getTime() - new Date(a.created_at).getTime()
       );
@@ -320,22 +341,11 @@ export const Sidebar: React.FC<SidebarProps> = ({
                         className="w-full p-2 bg-card text-foreground rounded focus:ring-2 focus:ring-primary focus:border-primary outline-none"
                         value={selectedBatch}
                         onChange={(e) => {
-                          const allowedBatches = (() => {
-                            const idx = trainingBatches.findIndex(
-                              (batch) => batch.tb_id === latestSelectedBatch
-                            );
-                            let allowed = [];
-                            if (idx >= 1 ) {
-                              // Always include the latest selected batch
-                              allowed.push(trainingBatches[idx]);
-                              // Add previous batch if it exists
-                             
-                              allowed.push(trainingBatches[idx - 1]);
-                              
-                            }
-                            return allowed;
-                          })();
-                          const selectedBatchObj = allowedBatches.find(
+                          // trainingBatches is already scoped to this trainer's
+                          // allocations, so every entry is selectable. The old
+                          // code re-derived a 2-item window by array position,
+                          // which offered batches the trainer had no class in.
+                          const selectedBatchObj = trainingBatches.find(
                             (batch) => batch.tb_name === e.target.value
                           );
                           if (selectedBatchObj) {
@@ -353,23 +363,19 @@ export const Sidebar: React.FC<SidebarProps> = ({
                         }}
                       >
                         <option value="">Switch Batch</option>
-                        {(() => {
-                          const latestIdx = trainingBatches.findIndex(
-                            (batch) => batch.tb_id === latestSelectedBatch
-                          );
-                          let allowed: Array<{ tb_id: number; tb_name: string }> = [];
-                          if (latestIdx >= 1 ) {
-                            // Always include the latest selected batch
-                            allowed.push(trainingBatches[latestIdx]);
-                            allowed.push(trainingBatches[latestIdx - 1]);
-                            
-                          }
-                          return allowed.map((batch) => (
-                            <option key={batch.tb_id} value={batch.tb_name}>
-                              {batch.tb_name}
-                            </option>
-                          ));
-                        })()}
+                        {/*
+                          Every batch this trainer is allocated to, straight from
+                          the server. The previous version listed entries by
+                          array index (latest, latest-1), which had nothing to do
+                          with allocations: a newly created batch appeared for
+                          every trainer, and nothing appeared at all when the
+                          trainer's batch sat at index 0.
+                        */}
+                        {trainingBatches.map((batch) => (
+                          <option key={batch.tb_id} value={batch.tb_name}>
+                            {batch.tb_name}
+                          </option>
+                        ))}
                       </select>
                       <div className="rounded">
                         <div className="text-xs uppercase sidebar-menu-item-muted">

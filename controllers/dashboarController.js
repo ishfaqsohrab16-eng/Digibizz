@@ -28,6 +28,10 @@ const CenterUsers = require("../models/centerUsersModel");
 const profileController = require("./profileController");
 const { getStudentAttendanceStats } = require("../utils/attendanceCalculator");
 const { getAppSettings } = require("../utils/appSettings");
+// Used by getTrainerDashoard to scope every query to the trainer's real
+// (center, course) pairs. This import was missing, so the trainer dashboard
+// threw "ReferenceError: allocationScope is not defined" and returned a 500.
+const { allocationScope } = require("../utils/trainerScope");
 
 exports.getStudentDashoard = async (req, res) => {
   try {
@@ -507,8 +511,28 @@ exports.getTrainerDashoard = async (req, res) => {
       where: { t_id: trainer.t_id, tb_id: tb_id },
     });
 
+    // A trainer with no class in this batch is a normal, expected state - it is
+    // every trainer's situation the moment a new batch is created and before
+    // allocations are made. Answering 403 made the dashboard render "Error
+    // Loading Dashboard" for the whole batch until somebody assigned a class.
+    // An empty dashboard is the truthful answer: nothing to show yet, not a
+    // failure. The shape matches the success payload exactly so the client
+    // needs no special case.
     if (!allocations || allocations.length === 0) {
-      return res.status(403).json({ message: "Trainer not assigned to this batch" });
+      return res.status(200).json({
+        notAssignedToBatch: true,
+        statistics: {
+          pendingLeaves: { count: 0, lastUpdated: new Date() },
+          missingAttendance: { count: 0, dates: [], lastUpdated: new Date() },
+          recentAssignments: [],
+          students: { active: 0, total: 0 },
+          batchEarnings: "0.00",
+          successStories: { count: 0, lastUpdated: new Date() },
+          unansweredTickets: { count: 0, lastUpdated: new Date() },
+          isDailyReportSubmitted: false,
+          isAttendance: false,
+        },
+      });
     }
 
     // Extract arrays of all allowed centers and courses for this trainer

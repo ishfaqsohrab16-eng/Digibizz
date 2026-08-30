@@ -2,10 +2,17 @@ require("dotenv").config();
 const express = require("express");
 const path = require("path");
 const app = require("./app");
+// app.js owns the app.listen() call; this is the http.Server it returned.
+// Without it `server` below was undefined and every SIGTERM threw instead of
+// shutting down cleanly.
+const server = app.server;
 
 // Graceful shutdown
 process.on("SIGTERM", () => {
   console.log("SIGTERM signal received: closing HTTP server");
+  if (!server) {
+    process.exit(0);
+  }
   server.close(() => {
     console.log("HTTP server closed");
     process.exit(0);

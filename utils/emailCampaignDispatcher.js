@@ -274,7 +274,12 @@ const sendChunk = async (campaign) => {
         as: "student",
         required: false,
         attributes: ["std_id", "std_cnic", "std_phone", "std_fathername"],
-        include: [{ model: User, attributes: ["user_name"] }],
+        // studentModel declares this as StudentModel.belongsTo(User, { as: "user" }),
+        // and Sequelize refuses an aliased association included without its
+        // alias - which failed every student-audience chunk with "user is
+        // associated to student using an alias". Line ~159 already reads
+        // person.user?.user_name, so "user" is the name it must carry.
+        include: [{ model: User, as: "user", attributes: ["user_name"] }],
       },
       {
         model: Course,

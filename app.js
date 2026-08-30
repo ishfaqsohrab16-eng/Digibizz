@@ -239,7 +239,13 @@ emailCampaignDispatcher.start();
 
 const PORT = process.env.PORT || 5000;
 
-app.listen(PORT, () => {
+// The http.Server is kept so server.js can close it on SIGTERM. Previously only
+// `app` was exported, and server.js called `server.close()` on a name that was
+// never defined - so every shutdown died with "server is not defined" instead of
+// draining connections, and the container was killed mid-request.
+const server = app.listen(PORT, () => {
   console.log(`Server running on port ${PORT}`);
 });
+
 module.exports = app;
+module.exports.server = server;

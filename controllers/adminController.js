@@ -1,4 +1,12 @@
-const fs = require("fs").promises;
+﻿const fs = require("fs").promises;
+// The sync helpers (existsSync/unlinkSync) do NOT exist on fs.promises, so
+// calling them on the promises binding above threw "not a function" and broke
+// every profile-photo cleanup. Kept as a separate binding so the existing
+// `await fs.unlink` calls stay on the promises API.
+const fsSync = require("fs");
+// Used by the profile photo cleanup below; was referenced but never imported,
+// so that branch threw "path is not defined".
+const path = require("path");
 const jwt = require("jsonwebtoken");
 const Admin = require("../models/adminModel");
 const User = require("../models/userModel");
@@ -622,7 +630,7 @@ exports.updateAdminProfile = async (req, res) => {
     const currentAdmin = await Admin.findByPk(adminId);
     if (!currentAdmin) {
       if (req.file) {
-        fs.unlinkSync(req.file.path);
+        fsSync.unlinkSync(req.file.path);
       }
       return res.status(404).json({ message: "Admin not found" });
     }
@@ -642,8 +650,8 @@ exports.updateAdminProfile = async (req, res) => {
           "..",
           currentAdmin.profile_photo
         );
-        if (fs.existsSync(oldPhotoPath)) {
-          fs.unlinkSync(oldPhotoPath);
+        if (fsSync.existsSync(oldPhotoPath)) {
+          fsSync.unlinkSync(oldPhotoPath);
         }
       }
       updateData.profile_photo = `/uploads/admin-profiles/${req.file.filename}`;
@@ -656,7 +664,7 @@ exports.updateAdminProfile = async (req, res) => {
 
     if (updatedRowsCount === 0) {
       if (req.file) {
-        fs.unlinkSync(req.file.path);
+        fsSync.unlinkSync(req.file.path);
       }
       return res.status(404).json({ message: "Admin not found" });
     }
@@ -673,7 +681,7 @@ exports.updateAdminProfile = async (req, res) => {
   } catch (error) {
     // Delete uploaded file if update fails
     if (req.file) {
-      fs.unlinkSync(req.file.path);
+      fsSync.unlinkSync(req.file.path);
     }
     console.error("Profile update error:", error);
     res.status(500).json({ message: "Server error updating profile" });
@@ -881,8 +889,8 @@ exports.updateProfilePhoto = async (req, res) => {
       const path = require("path");
       const fullPath = path.join(__dirname, "..", "public", oldPhotoPath);
 
-      if (fs.existsSync(fullPath)) {
-        fs.unlinkSync(fullPath);
+      if (fsSync.existsSync(fullPath)) {
+        fsSync.unlinkSync(fullPath);
       }
     }
     res.json({

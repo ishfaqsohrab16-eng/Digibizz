@@ -527,6 +527,29 @@ export async function getTrainingBatches() {
 
   return response.data;
 }
+/**
+ * Only the batches this trainer is actually allocated to.
+ *
+ * The sidebar previously picked a trainer's batches by their position in the
+ * full list, so a newly created batch was offered to every trainer even with no
+ * class assigned in it - and selecting it produced a broken dashboard.
+ * Same response shape as getTrainingBatches, so callers are interchangeable.
+ */
+export async function getTrainingBatchesForTrainer(user_id: number) {
+  const response = await axios.get(
+    `${API_URL}/training_batches/for-trainer/${user_id}`,
+    {
+      headers: {
+        Authorization: `Bearer ${getCurrentUserToken()}`,
+        "Content-Type": "application/json",
+      },
+    }
+  );
+  if (!response.data) {
+    throw new Error("No Training batchs data received");
+  }
+  return response.data;
+}
 export async function getTrainingBatchById(id: string) {
   const response = await fetch(`${API_URL}/training_batches/${id}`, {
     method: "GET",

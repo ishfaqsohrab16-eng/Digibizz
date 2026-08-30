@@ -110,7 +110,10 @@ exports.createAssignment = async (req, res) => {
 // Get Assignment by ID
 exports.getAssignmentById = async (req, res) => {
   try {
-    const { tb_id } = req.params;
+    // The route is GET /:id, so the primary key comes from req.params.id.
+    // `id` was used bare here and is not a variable in scope, so this endpoint
+    // threw "id is not defined" on every call.
+    const { id, tb_id } = req.params;
     const assignment = await Assignment.findByPk(id, {
       where: { tb_id },
       include: [
