@@ -1,339 +1,194 @@
-const fs = require("fs");
-const path = require("path");
-const { Op, fn, col, literal } = require("sequelize");
-const db = require("../config/db");
-const sequelize = db.sequelize;
+const { Op, fn, col } = require("sequelize");
+const { sequelize } = require("../config/db");
 const EmailCampaign = require("../models/emailCampaignModel");
 const EmailCampaignRecipient = require("../models/emailCampaignRecipientModel");
-const Candidate = require("../models/CandidateModel");
-const Course = require("../models/course");
-const Center = require("../models/center");
-const TrainingBatch = require("../models/trainingBatcheModel");
-const Student = require("../models/studentModel");
-const User = require("../models/userModel");
-const {
-  interviewCall,
-  renderCampaignEmail,
-} = require("../servec/campaignTemplates");
-const { ADMISSION_BATCH_LABEL } = require("../servec/admissionBatch");
 const dispatcher = require("../utils/emailCampaignDispatcher");
-const { allocateEvenly } = require("../utils/allocateEvenly");
 const {
   parseRecipientList,
   buildTemplateCsv,
+  MAX_ROWS,
 } = require("../utils/recipientListParser");
+const { STARTER_HTML } = require("../servec/campaignTemplates");
+const { isConfigured } = require("../servec/emailConfig");
 
 /**
- * Email campaigns for candidate outreach.
+ * Email campaigns: upload a list of addresses, write an email, send it slowly.
  *
- * The workflow this supports: pick a center, say how many candidates to
- * contact, and the quota is split evenly across that center's courses. A
- * later campaign for the same center automatically skips everyone already
- * contacted, so "200 now, 200 tomorrow, then 100" needs no manual bookkeeping.
- * A reminder campaign re-targets one earlier campaign's recipients, but only
- * those who still have not been interviewed.
+ * This module is standalone. It used to be part of admissions - a campaign
+ * belonged to a center and a batch, and its recipients were candidates or
+ * enrolled students resolved out of those tables, with three different
+ * built-in letter templates and merge tokens filled in per person. All of that
+ * is gone. A campaign is now:
+ *
+ *   a name, a subject, one piece of HTML, and a list of email addresses.
+ *
+ * The HTML is static: every recipient receives byte-identical markup. There is
+ * no token substitution, so there is nothing that can differ between two
+ * recipients and nothing to preview "as seen by" any particular person - what
+ * the compose screen shows IS what every address receives.
+ *
+ * Sending is paced rather than fired in one burst; see
+ * utils/emailCampaignDispatcher.js for why and how.
  */
 
+/** Deliberately permissive - the receiving server decides validity in the end. */
+const looksLikeEmail = (value) =>
+  /^[^\s@]+@[^\s@]+\.[^\s@]{2,}$/.test(value) && value.length <= 150;
+
+const EMPTY_STATS = { pending: 0, sent: 0, failed: 0, skipped: 0, total: 0 };
+
 /**
- * A candidate counts as interviewed once marks or an interview date exist, so
- * "not interviewed" means neither is set. `TBD` is the placeholder the
- * interview portal writes, not a real mark, so it must not count as done.
+ * Normalise a list of rows into the addresses that will actually be queued.
+ *
+ * Re-done here rather than trusted from the browser: the file was parsed in a
+ * separate request, so the payload posted to create the campaign could have
+ * been edited in between. Duplicates and malformed addresses are dropped
+ * silently at this point because the upload step already reported them.
  */
-const NOT_INTERVIEWED = {
-  [Op.and]: [
-    {
-      [Op.or]: [
-        { cand_interview_marks: null },
-        { cand_interview_marks: "" },
-        { cand_interview_marks: "TBD" },
-      ],
-    },
-    {
-      [Op.or]: [{ interview_date: null }, { interview_date: "" }],
-    },
-  ],
+const cleanRecipients = (rows) => {
+  const seen = new Set();
+  const cleaned = [];
+
+  for (const row of Array.isArray(rows) ? rows : []) {
+    const email = String(row?.email || "").trim().toLowerCase();
+    if (!email || !looksLikeEmail(email)) continue;
+    if (seen.has(email)) continue;
+    seen.add(email);
+    cleaned.push({
+      email,
+      // Kept for the recipient table and the CSV export so an operator can
+      // recognise a row. It is NOT merged into the message.
+      name: String(row?.name || "").trim().slice(0, 150) || null,
+    });
+  }
+
+  return cleaned;
 };
 
-/**
- * Candidate ids that must not be picked up by a new campaign for this
- * center+batch. This ledger is what makes "now send the next 200" work.
- *
- * Two separate rules, because cancelling a campaign has to free people up
- * without un-sending real email:
- *
- *   - Anyone actually SENT to is excluded forever, even if their campaign was
- *     later cancelled. Cancelling cannot retract a delivered message, and
- *     re-mailing them would be a duplicate.
- *   - Anyone still queued (pending/failed) is excluded only while their
- *     campaign is live. Cancel it and they return to the available pool,
- *     which is the point of cancelling.
- *
- * Scoped by kind: a candidate who received an interview call-up must still be
- * eligible for a recommendation letter later. Only campaigns of the SAME kind
- * count against each other, since that is what "already contacted" means to
- * the person creating this one.
- */
-const alreadyContactedIds = async (
-  tb_id,
-  center_id,
-  { excludeCampaignId, kind = "initial", audience = "candidates" } = {}
-) => {
-  const campaignWhere = { tb_id, center_id, ec_kind: kind };
-  if (excludeCampaignId) campaignWhere.ec_id = { [Op.ne]: excludeCampaignId };
-
-  const campaigns = await EmailCampaign.findAll({
-    where: campaignWhere,
-    attributes: ["ec_id", "ec_status"],
-    raw: true,
-  });
-
-  if (campaigns.length === 0) return [];
-
-  const allIds = campaigns.map((c) => c.ec_id);
-  const liveIds = campaigns
-    .filter((c) => c.ec_status !== "cancelled")
-    .map((c) => c.ec_id);
-
-  const idColumn = audience === "students" ? "std_id" : "cand_id";
+/** Per-campaign counts, used by both the list and the detail screen. */
+const statsFor = async (campaignIds) => {
+  if (!campaignIds.length) return {};
 
   const rows = await EmailCampaignRecipient.findAll({
-    where: {
-      [idColumn]: { [Op.ne]: null },
-      [Op.or]: [
-        { ec_id: { [Op.in]: allIds }, ecr_status: "sent" },
-        ...(liveIds.length
-          ? [
-              {
-                ec_id: { [Op.in]: liveIds },
-                ecr_status: { [Op.in]: ["pending", "failed"] },
-              },
-            ]
-          : []),
-      ],
-    },
-    attributes: [[fn("DISTINCT", col(idColumn)), idColumn]],
+    where: { ec_id: { [Op.in]: campaignIds } },
+    attributes: ["ec_id", "ecr_status", [fn("COUNT", col("ecr_id")), "count"]],
+    group: ["ec_id", "ecr_status"],
     raw: true,
   });
 
-  return rows.map((row) => Number(row[idColumn]));
+  return rows.reduce((acc, row) => {
+    const id = Number(row.ec_id);
+    if (!acc[id]) acc[id] = { ...EMPTY_STATS };
+    acc[id][row.ecr_status] = Number(row.count) || 0;
+    acc[id].total += Number(row.count) || 0;
+    return acc;
+  }, {});
+};
+
+// ---------------------------------------------------------------------------
+// Compose helpers
+// ---------------------------------------------------------------------------
+
+/** Starter HTML for the compose editor. */
+exports.getStarterTemplate = async (_req, res) => {
+  return res.json({ success: true, html: STARTER_HTML });
 };
 
 /**
- * Work out exactly who a new campaign would contact.
+ * The spreadsheet operators fill in.
  *
- * Shared by createCampaign and the "download the list before sending"
- * preview, deliberately: if the two computed the list separately they could
- * drift, and the whole point of the download is that it shows the people who
- * will actually be emailed.
- *
- * @returns {Promise<{chosen: object[], pool: object[], allocation: Map<number, number>, contacted: number}>}
+ * One column, "Email". Nothing else is read, because nothing else is used -
+ * the message is identical for every address.
  */
-/**
- * The audience a kind is allowed to target.
- *
- * A recommendation ("you have been selected") is addressed to people who are
- * already enrolled students, so it is pinned to that audience rather than
- * merely defaulted to it: sending "you have been selected" to a candidate who
- * was not selected is the one mistake this module must make impossible.
- *
- * Because the pool is recomputed every time a campaign is created, students
- * enrolled AFTER an earlier send are simply in the pool the next time - and
- * anyone already sent to is excluded by the ledger. So "send it to whoever has
- * joined since" needs no extra bookkeeping.
- */
-const audienceForKind = (kind, requested) =>
-  kind === "recommendation"
-    ? "students"
-    : requested === "students"
-    ? "students"
-    : "candidates";
-
-const selectRecipients = async (
-  tb_id,
-  center_id,
-  target,
-  { kind = "initial", audience = "candidates" } = {}
-) => {
-  audience = audienceForKind(kind, audience);
-
-  const contacted = await alreadyContactedIds(Number(tb_id), Number(center_id), {
-    kind,
-    audience,
-  });
-
-  let pool;
-
-  if (audience === "students") {
-    // Enrolled students. Their address lives on the linked user account, not
-    // on the student row, so it has to be joined in and lifted onto the same
-    // shape the candidate branch produces.
-    const where = { tb_id: Number(tb_id), center_id: Number(center_id) };
-    if (contacted.length > 0) where.std_id = { [Op.notIn]: contacted };
-
-    const students = await Student.findAll({
-      where,
-      attributes: [
-        "std_id",
-        "std_cnic",
-        "std_phone",
-        "std_fathername",
-        "std_gender",
-        "course_id",
-      ],
-      include: [
-        { model: User, attributes: ["user_name", "user_email"], required: true },
-        {
-          model: Course,
-          attributes: ["course_name", "course_full_name"],
-          required: false,
-        },
-      ],
-      order: [["std_id", "ASC"]],
-    });
-
-    pool = students
-      .map((student) => ({
-        std_id: student.std_id,
-        cand_id: null,
-        cand_name: student.User?.user_name || "",
-        cand_email: student.User?.user_email || "",
-        cand_fathername: student.std_fathername,
-        cand_cnic: student.std_cnic,
-        cand_phone: student.std_phone,
-        cand_gender: student.std_gender,
-        course_id: student.course_id,
-        courses: student.Course || null,
-      }))
-      // A student with no address on their account cannot be emailed; they
-      // would otherwise sit in the campaign forever, failing every attempt.
-      .filter((student) => student.cand_email);
-  } else {
-    const where = {
-      tb_id: Number(tb_id),
-      center_id: Number(center_id),
-      cand_email: { [Op.and]: [{ [Op.ne]: null }, { [Op.ne]: "" }] },
-    };
-    if (contacted.length > 0) where.cand_id = { [Op.notIn]: contacted };
-
-    pool = await Candidate.findAll({
-      where,
-      attributes: [
-        "cand_id",
-        "cand_name",
-        "cand_fathername",
-        "cand_email",
-        "cand_phone",
-        "cand_cnic",
-        "cand_gender",
-        "course_id",
-      ],
-      include: [
-        {
-          model: Course,
-          as: "courses",
-          attributes: ["course_name", "course_full_name"],
-        },
-      ],
-      order: [["cand_id", "ASC"]],
-    });
-  }
-
-  // Group by course, then split the requested total evenly across them.
-  const byCourse = new Map();
-  for (const person of pool) {
-    const key = Number(person.course_id);
-    if (!byCourse.has(key)) byCourse.set(key, []);
-    byCourse.get(key).push(person);
-  }
-
-  const allocation = allocateEvenly(
-    Math.max(0, Math.floor(Number(target) || 0)),
-    [...byCourse.entries()].map(([key, list]) => ({
-      key,
-      available: list.length,
-    }))
+exports.downloadListTemplate = async (_req, res) => {
+  res.setHeader("Content-Type", "text/csv; charset=utf-8");
+  res.setHeader(
+    "Content-Disposition",
+    'attachment; filename="email-list-template.csv"'
   );
-
-  const chosen = [];
-  for (const [courseId, list] of byCourse.entries()) {
-    chosen.push(...list.slice(0, allocation.get(courseId) || 0));
-  }
-
-  return { chosen, pool, allocation, contacted: contacted.length };
+  return res.send(buildTemplateCsv());
 };
 
-/** Shape one candidate for the CSV / preview list. */
-const toListRow = (candidate) => ({
-  cand_id: candidate.cand_id,
-  name: candidate.cand_name || "",
-  father_name: candidate.cand_fathername || "",
-  cnic: candidate.cand_cnic || "",
-  email: candidate.cand_email || "",
-  phone: candidate.cand_phone || "",
-  gender: candidate.cand_gender || "",
-  course:
-    candidate.courses?.course_full_name || candidate.courses?.course_name || "",
-});
-
 /**
- * How many candidates a new campaign could reach right now, per course.
- * Drives the "available" figures on the create screen.
+ * Read an uploaded spreadsheet and report what it contains.
+ *
+ * Nothing is saved here. The parsed addresses go back to the browser, are
+ * shown for confirmation, and are posted again when the campaign is created -
+ * so an operator always sees exactly who is about to be mailed before anything
+ * is written.
  */
-exports.getEligibility = async (req, res) => {
+exports.uploadRecipientList = async (req, res) => {
   try {
-    const tb_id = Number(req.query.tb_id);
-    const center_id = Number(req.query.center_id);
-
-    if (!tb_id || !center_id) {
-      return res
-        .status(400)
-        .json({ success: false, message: "tb_id and center_id are required" });
+    if (!req.file?.buffer) {
+      return res.status(400).json({
+        success: false,
+        message: "Choose a .xlsx or .csv file with an Email column.",
+      });
     }
 
-    const kind = String(req.query.kind || "initial").toLowerCase();
-    const audience =
-      String(req.query.audience || "").toLowerCase() === "students"
-        ? "students"
-        : "candidates";
-
-    // Reuse the real selection with an unreachable target, so "available" is
-    // counted exactly the way the send will count it - including the
-    // recommended-only filter and the per-kind contacted ledger.
-    const { pool, contacted } = await selectRecipients(
-      tb_id,
-      center_id,
-      Number.MAX_SAFE_INTEGER,
-      { kind, audience }
+    const { recipients, skipped, total } = parseRecipientList(
+      req.file.buffer,
+      req.file.originalname
     );
 
-    const byCourse = new Map();
-    for (const person of pool) {
-      const id = Number(person.course_id);
-      if (!byCourse.has(id)) {
-        byCourse.set(id, {
-          course_id: id,
-          course_name: person.courses?.course_name || "",
-          course_full_name:
-            person.courses?.course_full_name || person.courses?.course_name || "",
-          available: 0,
-        });
-      }
-      byCourse.get(id).available += 1;
+    if (!recipients.length) {
+      return res.status(400).json({
+        success: false,
+        message: "No usable email addresses in that file.",
+        skipped,
+      });
     }
-
-    const courses = [...byCourse.values()];
 
     return res.json({
       success: true,
-      alreadyContacted: contacted,
-      totalAvailable: pool.length,
-      courses,
+      total,
+      accepted: recipients.length,
+      // Only the address and an optional name survive; extra columns are not
+      // used because the message is the same for everyone.
+      recipients: recipients.map((r) => ({ email: r.email, name: r.name })),
+      skipped,
+      maxRows: MAX_ROWS,
     });
   } catch (error) {
-    console.error("Error computing campaign eligibility:", error);
+    // parseRecipientList throws messages written for the operator - "no email
+    // column", "no rows below the header" - so they are passed straight
+    // through rather than replaced with a generic failure.
+    return res.status(400).json({
+      success: false,
+      message: error.message || "Could not read that file.",
+    });
+  }
+};
+
+/**
+ * Show the email exactly as it will be sent.
+ *
+ * With no merge tokens this is a straight echo of the author's HTML, which is
+ * the point: there is no per-recipient variation that a preview could hide.
+ */
+exports.previewTemplate = async (req, res) => {
+  try {
+    const html = String(req.body?.ec_custom_html || "").trim();
+    if (!html) {
+      return res
+        .status(400)
+        .json({ success: false, message: "Write the email body first." });
+    }
+
+    return res.json({
+      success: true,
+      subject: String(req.body?.ec_subject || "").trim() || "(no subject)",
+      html,
+    });
+  } catch (error) {
+    console.error("Error previewing template:", error);
     return res.status(500).json({ success: false, message: "Server error" });
   }
 };
+
+// ---------------------------------------------------------------------------
+// Campaigns
+// ---------------------------------------------------------------------------
 
 /** Create a campaign and freeze its recipient list. */
 exports.createCampaign = async (req, res) => {
@@ -341,445 +196,114 @@ exports.createCampaign = async (req, res) => {
   try {
     const {
       ec_name,
-      tb_id,
-      center_id,
-      ec_target_count,
+      ec_subject,
+      ec_custom_html,
       ec_batch_size,
       ec_interval_minutes,
       ec_min_gap_seconds,
       ec_max_gap_seconds,
-      ec_subject,
-      ec_interview_date,
-      ec_interview_time,
-      ec_reporting_time,
-      ec_venue,
-      ec_contact_person,
-      ec_contact_phone,
-      ec_message,
-      ec_custom_html,
-      ec_kind,
-      ec_audience,
-      // Rows parsed from an uploaded spreadsheet, for a "list" campaign.
       recipientList,
       startNow,
     } = req.body;
 
-    if (!ec_name || !tb_id || !center_id) {
-      await transaction.rollback();
-      return res.status(400).json({
-        success: false,
-        message: "Name, batch and center are required",
-      });
-    }
-
-    const target = Math.max(0, Number(ec_target_count) || 0);
-    if (target === 0) {
+    if (!String(ec_name || "").trim()) {
       await transaction.rollback();
       return res
         .status(400)
-        .json({ success: false, message: "Number of emails must be at least 1" });
+        .json({ success: false, message: "Give the campaign a name." });
     }
 
-    const minGap = Math.max(0, Number(ec_min_gap_seconds) || 0);
-    const maxGap = Math.max(minGap, Number(ec_max_gap_seconds) || minGap);
+    if (!String(ec_subject || "").trim()) {
+      await transaction.rollback();
+      return res
+        .status(400)
+        .json({ success: false, message: "Give the email a subject." });
+    }
 
-    // Every campaign carries its own HTML now. Without this guard an empty
-    // body would fall through to the built-in interview letter, which is no
-    // longer offered in the UI and would be a surprise to whoever sent it.
     if (!String(ec_custom_html || "").trim()) {
       await transaction.rollback();
       return res.status(400).json({
         success: false,
-        message: "Write the email body before creating the campaign",
+        message: "Write the email body before creating the campaign.",
       });
     }
 
-    const kind = ["initial", "reminder", "recommendation", "general"].includes(
-      String(ec_kind || "").toLowerCase()
-    )
-      ? String(ec_kind).toLowerCase()
-      : "initial";
-    const requestedAudience = String(ec_audience || "").toLowerCase();
-    const audience =
-      requestedAudience === "list"
-        ? "list"
-        : audienceForKind(kind, requestedAudience);
-
-    // An uploaded list is its own recipient source: the addresses belong to
-    // nobody in the database, so there is no pool to select from and no
-    // per-course quota to divide. It is re-validated here rather than trusted
-    // from the browser, because the parse happened in a separate request and
-    // the payload could have been edited in between.
-    if (audience === "list") {
-      const rows = Array.isArray(recipientList) ? recipientList : [];
-      const seen = new Set();
-      const cleaned = [];
-
-      for (const row of rows) {
-        const email = String(row?.email || "").trim().toLowerCase();
-        if (!email || !/^[^s@]+@[^s@]+.[^s@]{2,}$/.test(email)) continue;
-        if (seen.has(email)) continue;
-        seen.add(email);
-        cleaned.push({
-          email,
-          name: String(row?.name || "").trim().slice(0, 150),
-          merge:
-            row?.merge && typeof row.merge === "object" ? row.merge : null,
-        });
-      }
-
-      if (cleaned.length === 0) {
-        await transaction.rollback();
-        return res.status(400).json({
-          success: false,
-          message: "That list has no usable email addresses.",
-        });
-      }
-
-      const listCampaign = await EmailCampaign.create(
-        {
-          ec_name,
-          tb_id: Number(tb_id),
-          center_id: Number(center_id),
-          ec_kind: kind,
-          ec_audience: "list",
-          ec_target_count: cleaned.length,
-          ec_batch_size: Math.max(1, Number(ec_batch_size) || 25),
-          ec_interval_minutes: Math.max(1, Number(ec_interval_minutes) || 15),
-          ec_min_gap_seconds: minGap,
-          ec_max_gap_seconds: maxGap,
-          ec_subject: ec_subject || "A message from the Digibizz Program",
-          ec_interview_date: ec_interview_date || null,
-          ec_interview_time: ec_interview_time || null,
-          ec_reporting_time: ec_reporting_time || null,
-          ec_venue: ec_venue || null,
-          ec_contact_person: ec_contact_person || null,
-          ec_contact_phone: ec_contact_phone || null,
-          ec_message: ec_message || null,
-          ec_custom_html: String(ec_custom_html || "").trim() || null,
-          ec_status: startNow ? "running" : "draft",
-          ec_next_run_at: startNow ? new Date() : null,
-          ec_created_by: req.user?.id || req.admin?.id || null,
-        },
-        { transaction }
-      );
-
-      await EmailCampaignRecipient.bulkCreate(
-        cleaned.map((row) => ({
-          ec_id: listCampaign.ec_id,
-          // Neither: these addresses have no record in the database.
-          cand_id: null,
-          std_id: null,
-          ecr_email: row.email,
-          ecr_name: row.name || null,
-          course_id: null,
-          ecr_merge_data: row.merge ? JSON.stringify(row.merge) : null,
-          ecr_status: "pending",
-        })),
-        { transaction }
-      );
-
-      await transaction.commit();
-
-      const withCenterForList = await EmailCampaign.findByPk(listCampaign.ec_id, {
-        include: [{ model: Center, as: "center", attributes: ["center_name"] }],
-      });
-      const listTest = await dispatcher.sendTestCopies(
-        withCenterForList || listCampaign
-      );
-
-      return res.status(201).json({
-        success: true,
-        message: `Campaign created for ${cleaned.length} address(es) from your list`,
-        campaign: listCampaign,
-        skipped: rows.length - cleaned.length,
-        test: listTest,
-      });
-    }
-
-    const { chosen, pool, allocation } = await selectRecipients(
-      tb_id,
-      center_id,
-      target,
-      { kind, audience }
-    );
-
-    if (pool.length === 0) {
+    const recipients = cleanRecipients(recipientList);
+    if (!recipients.length) {
       await transaction.rollback();
       return res.status(400).json({
         success: false,
-        message:
-          kind === "recommendation"
-            ? "There are no recommended candidates left to contact at this center."
-            : audience === "students"
-            ? "Every student at this center has already been contacted for this batch."
-            : "Every candidate at this center has already been contacted for this batch.",
+        message: "Upload a list with at least one valid email address.",
       });
     }
 
-    if (chosen.length === 0) {
-      await transaction.rollback();
-      return res
-        .status(400)
-        .json({ success: false, message: "No candidates matched this campaign" });
-    }
+    // Pacing. Clamped rather than rejected: a nonsensical value from the form
+    // should slow the send down, never fail the whole campaign.
+    const minGap = Math.max(0, Number(ec_min_gap_seconds) || 0);
+    const maxGap = Math.max(minGap, Number(ec_max_gap_seconds) || minGap);
+    const batchSize = Math.min(500, Math.max(1, Number(ec_batch_size) || 25));
+    const intervalMinutes = Math.max(1, Number(ec_interval_minutes) || 15);
 
     const campaign = await EmailCampaign.create(
       {
-        ec_name,
-        tb_id: Number(tb_id),
-        center_id: Number(center_id),
-        ec_kind: kind,
-        ec_audience: audience,
-        ec_target_count: chosen.length,
-        ec_batch_size: Math.max(1, Number(ec_batch_size) || 25),
-        ec_interval_minutes: Math.max(1, Number(ec_interval_minutes) || 15),
+        ec_name: String(ec_name).trim().slice(0, 150),
+        ec_subject: String(ec_subject).trim().slice(0, 200),
+        ec_custom_html,
+        ec_target_count: recipients.length,
+        ec_batch_size: batchSize,
+        ec_interval_minutes: intervalMinutes,
         ec_min_gap_seconds: minGap,
         ec_max_gap_seconds: maxGap,
-        ec_subject: ec_subject || "Interview call | Digibizz Program",
-        ec_interview_date: ec_interview_date || null,
-        ec_interview_time: ec_interview_time || null,
-        ec_reporting_time: ec_reporting_time || null,
-        ec_venue: ec_venue || null,
-        ec_contact_person: ec_contact_person || null,
-        ec_contact_phone: ec_contact_phone || null,
-        ec_message: ec_message || null,
-        // Empty means "use the built-in letter", so normalise blank to NULL
-        // rather than storing whitespace that would count as custom HTML.
-        ec_custom_html: String(ec_custom_html || "").trim() || null,
-        ec_status: startNow ? "running" : "draft",
-        // Due immediately when started; the dispatcher jitters every gap after
-        // the first chunk.
+        // Due immediately when started; every later gap is jittered by the
+        // dispatcher so chunks never land on a predictable rhythm.
         ec_next_run_at: startNow ? new Date() : null,
-        ec_created_by: req.user?.id || req.user?.user_id || null,
+        ec_status: startNow ? "running" : "draft",
+        ec_created_by: req.user?.user_id || null,
+        // Legacy admissions columns. Explicitly NULL so it is obvious in the
+        // data that this campaign was never scoped to a center or batch.
+        tb_id: null,
+        center_id: null,
+        ec_kind: null,
+        ec_audience: null,
       },
       { transaction }
     );
 
     await EmailCampaignRecipient.bulkCreate(
-      chosen.map((person) => ({
+      recipients.map((r) => ({
         ec_id: campaign.ec_id,
-        // Exactly one of these is set; the other stays null and identifies
-        // which table the recipient came from.
-        cand_id: audience === "students" ? null : person.cand_id,
-        std_id: audience === "students" ? person.std_id : null,
-        ecr_email: person.cand_email,
-        ecr_name: person.cand_name,
-        course_id: person.course_id,
+        ecr_email: r.email,
+        ecr_name: r.name,
         ecr_status: "pending",
       })),
-      { transaction }
+      { transaction, ignoreDuplicates: true }
     );
 
     await transaction.commit();
 
-    // Proof copy to the test addresses, using the same render and transport a
-    // real recipient gets. Sent after the commit and never awaited into the
-    // failure path: a mail problem must not roll back a campaign that is
-    // already correctly stored.
-    const withCenter = await EmailCampaign.findByPk(campaign.ec_id, {
-      include: [{ model: Center, as: "center", attributes: ["center_name"] }],
-    });
-    const test = await dispatcher.sendTestCopies(withCenter || campaign);
-
     return res.status(201).json({
       success: true,
-      message: `Campaign created for ${chosen.length} candidate(s)`,
-      campaign,
-      allocation: [...allocation.entries()].map(([course_id, count]) => ({
-        course_id,
-        count,
-      })),
-      test,
+      message: startNow
+        ? `Campaign created. ${recipients.length} email(s) queued and sending has started.`
+        : `Campaign created as a draft with ${recipients.length} email(s) queued.`,
+      campaign: campaign.toJSON(),
+      queued: recipients.length,
     });
   } catch (error) {
-    await transaction.rollback();
+    // Rolling back an already-finished transaction throws and would mask the
+    // real error, so the state is checked first.
+    if (!transaction.finished) await transaction.rollback();
     console.error("Error creating campaign:", error);
-    return res.status(500).json({ success: false, message: "Server error" });
+    return res.status(500).json({
+      success: false,
+      message: "Server error creating the campaign",
+    });
   }
 };
 
-/**
- * Create a reminder campaign from an existing one.
- *
- * Targets only recipients the source campaign actually delivered to and who
- * still have no interview recorded - chasing someone who already attended is
- * exactly the kind of message that gets a sender reported as spam.
- */
-exports.createReminder = async (req, res) => {
-  const transaction = await sequelize.transaction();
+exports.listCampaigns = async (_req, res) => {
   try {
-    const source = await EmailCampaign.findByPk(req.params.id);
-    if (!source) {
-      await transaction.rollback();
-      return res.status(404).json({ success: false, message: "Campaign not found" });
-    }
-
-    const sentRecipients = await EmailCampaignRecipient.findAll({
-      where: { ec_id: source.ec_id, ecr_status: "sent" },
-      attributes: ["cand_id", "ecr_email", "ecr_name", "course_id"],
-      raw: true,
-    });
-
-    if (sentRecipients.length === 0) {
-      await transaction.rollback();
-      return res.status(400).json({
-        success: false,
-        message: "This campaign has not delivered any emails yet",
-      });
-    }
-
-    const stillWaiting = await Candidate.findAll({
-      where: {
-        cand_id: { [Op.in]: sentRecipients.map((r) => r.cand_id) },
-        ...NOT_INTERVIEWED,
-      },
-      attributes: ["cand_id"],
-      raw: true,
-    });
-
-    const waitingIds = new Set(stillWaiting.map((row) => Number(row.cand_id)));
-    const chosen = sentRecipients.filter((row) => waitingIds.has(Number(row.cand_id)));
-
-    if (chosen.length === 0) {
-      await transaction.rollback();
-      return res.status(400).json({
-        success: false,
-        message: "Everyone in this campaign has already been interviewed",
-      });
-    }
-
-    const {
-      ec_name,
-      ec_subject,
-      ec_interview_date,
-      ec_interview_time,
-      ec_reporting_time,
-      ec_venue,
-      ec_contact_person,
-      ec_contact_phone,
-      ec_message,
-      ec_batch_size,
-      ec_interval_minutes,
-      ec_min_gap_seconds,
-      ec_max_gap_seconds,
-      startNow,
-    } = req.body || {};
-
-    const minGap =
-      ec_min_gap_seconds === undefined
-        ? source.ec_min_gap_seconds
-        : Math.max(0, Number(ec_min_gap_seconds) || 0);
-    const maxGap =
-      ec_max_gap_seconds === undefined
-        ? source.ec_max_gap_seconds
-        : Math.max(minGap, Number(ec_max_gap_seconds) || minGap);
-
-    const campaign = await EmailCampaign.create(
-      {
-        ec_name: ec_name || `Reminder - ${source.ec_name}`,
-        tb_id: source.tb_id,
-        center_id: source.center_id,
-        ec_kind: "reminder",
-        ec_source_campaign_id: source.ec_id,
-        ec_target_count: chosen.length,
-        ec_batch_size: Math.max(1, Number(ec_batch_size) || source.ec_batch_size),
-        ec_interval_minutes: Math.max(
-          1,
-          Number(ec_interval_minutes) || source.ec_interval_minutes
-        ),
-        ec_min_gap_seconds: minGap,
-        ec_max_gap_seconds: maxGap,
-        ec_subject: ec_subject || `Reminder: ${source.ec_subject}`,
-        // A reminder is usually sent BECAUSE the sitting was rescheduled, so
-        // the new date, time and venue are asked for and override the
-        // original. Left blank they fall back to the source campaign's, which
-        // is the right behaviour for a simple "you did not attend" chase.
-        ec_interview_date: ec_interview_date || source.ec_interview_date,
-        ec_interview_time: ec_interview_time || source.ec_interview_time,
-        ec_reporting_time: ec_reporting_time || source.ec_reporting_time,
-        ec_venue: ec_venue || source.ec_venue,
-        ec_contact_person: ec_contact_person || source.ec_contact_person,
-        ec_contact_phone: ec_contact_phone || source.ec_contact_phone,
-        ec_message: ec_message ?? source.ec_message,
-        ec_custom_html: source.ec_custom_html,
-        ec_audience: source.ec_audience,
-        ec_status: startNow ? "running" : "draft",
-        ec_next_run_at: startNow ? new Date() : null,
-        ec_created_by: req.user?.id || req.user?.user_id || null,
-      },
-      { transaction }
-    );
-
-    await EmailCampaignRecipient.bulkCreate(
-      chosen.map((row) => ({
-        ec_id: campaign.ec_id,
-        cand_id: row.cand_id,
-        ecr_email: row.ecr_email,
-        ecr_name: row.ecr_name,
-        course_id: row.course_id,
-        ecr_status: "pending",
-      })),
-      { transaction }
-    );
-
-    await transaction.commit();
-
-    const rescheduled = Boolean(
-      ec_interview_date || ec_interview_time || ec_venue
-    );
-
-    return res.status(201).json({
-      success: true,
-      message: rescheduled
-        ? `Reminder created for ${chosen.length} candidate(s) with the new date, time and venue`
-        : `Reminder created for ${chosen.length} candidate(s) who have not been interviewed`,
-      campaign,
-      rescheduled,
-    });
-  } catch (error) {
-    await transaction.rollback();
-    console.error("Error creating reminder campaign:", error);
-    return res.status(500).json({ success: false, message: "Server error" });
-  }
-};
-
-/** Per-campaign counts, used by both the list and the detail screen. */
-const statsFor = async (campaignIds) => {
-  if (campaignIds.length === 0) return {};
-
-  const rows = await EmailCampaignRecipient.findAll({
-    where: { ec_id: { [Op.in]: campaignIds } },
-    attributes: [
-      "ec_id",
-      "ecr_status",
-      [fn("COUNT", col("ecr_id")), "count"],
-    ],
-    group: ["ec_id", "ecr_status"],
-    raw: true,
-  });
-
-  return rows.reduce((acc, row) => {
-    const id = Number(row.ec_id);
-    if (!acc[id]) acc[id] = { pending: 0, sent: 0, failed: 0, skipped: 0, total: 0 };
-    acc[id][row.ecr_status] = Number(row.count) || 0;
-    acc[id].total += Number(row.count) || 0;
-    return acc;
-  }, {});
-};
-
-exports.listCampaigns = async (req, res) => {
-  try {
-    const where = {};
-    if (req.query.tb_id) where.tb_id = Number(req.query.tb_id);
-    if (req.query.center_id) where.center_id = Number(req.query.center_id);
-
     const campaigns = await EmailCampaign.findAll({
-      where,
-      include: [
-        { model: Center, as: "center", attributes: ["center_id", "center_name"] },
-        { model: TrainingBatch, as: "batch", attributes: ["tb_id", "tb_name"] },
-      ],
       order: [["ec_id", "DESC"]],
     });
 
@@ -789,13 +313,7 @@ exports.listCampaigns = async (req, res) => {
       success: true,
       campaigns: campaigns.map((campaign) => ({
         ...campaign.toJSON(),
-        stats: stats[campaign.ec_id] || {
-          pending: 0,
-          sent: 0,
-          failed: 0,
-          skipped: 0,
-          total: 0,
-        },
+        stats: stats[campaign.ec_id] || { ...EMPTY_STATS },
       })),
     });
   } catch (error) {
@@ -806,60 +324,20 @@ exports.listCampaigns = async (req, res) => {
 
 exports.getCampaign = async (req, res) => {
   try {
-    const campaign = await EmailCampaign.findByPk(req.params.id, {
-      include: [
-        { model: Center, as: "center", attributes: ["center_id", "center_name"] },
-        { model: TrainingBatch, as: "batch", attributes: ["tb_id", "tb_name"] },
-      ],
-    });
+    const campaign = await EmailCampaign.findByPk(req.params.id);
 
     if (!campaign) {
-      return res.status(404).json({ success: false, message: "Campaign not found" });
+      return res
+        .status(404)
+        .json({ success: false, message: "Campaign not found" });
     }
 
     const stats = await statsFor([campaign.ec_id]);
 
-    // Per-course split, so the operator can confirm the quota really was
-    // divided evenly rather than trusting the create screen.
-    const perCourse = await EmailCampaignRecipient.findAll({
-      where: { ec_id: campaign.ec_id },
-      attributes: [
-        "course_id",
-        [fn("COUNT", col("ecr_id")), "total"],
-        [
-          fn("SUM", literal("CASE WHEN ecr_status = 'sent' THEN 1 ELSE 0 END")),
-          "sent",
-        ],
-      ],
-      include: [
-        {
-          model: Course,
-          as: "course",
-          attributes: ["course_name", "course_full_name"],
-        },
-      ],
-      group: ["EmailCampaignRecipient.course_id", "course.course_id"],
-      raw: true,
-      nest: true,
-    });
-
     return res.json({
       success: true,
       campaign: campaign.toJSON(),
-      stats: stats[campaign.ec_id] || {
-        pending: 0,
-        sent: 0,
-        failed: 0,
-        skipped: 0,
-        total: 0,
-      },
-      perCourse: perCourse.map((row) => ({
-        course_id: Number(row.course_id),
-        course_name:
-          row.course?.course_full_name || row.course?.course_name || "Unknown",
-        total: Number(row.total) || 0,
-        sent: Number(row.sent) || 0,
-      })),
+      stats: stats[campaign.ec_id] || { ...EMPTY_STATS },
     });
   } catch (error) {
     console.error("Error fetching campaign:", error);
@@ -874,20 +352,23 @@ exports.listRecipients = async (req, res) => {
 
     const where = { ec_id: Number(req.params.id) };
     if (req.query.status) where.ecr_status = String(req.query.status);
+    if (req.query.search) {
+      where.ecr_email = { [Op.like]: `%${String(req.query.search).trim()}%` };
+    }
 
     const { rows, count } = await EmailCampaignRecipient.findAndCountAll({
       where,
-      include: [
-        {
-          model: Candidate,
-          as: "candidate",
-          attributes: ["cand_id", "cand_cnic", "cand_phone", "cand_interview_marks", "interview_date"],
-        },
-        {
-          model: Course,
-          as: "course",
-          attributes: ["course_name", "course_full_name"],
-        },
+      // No joins: a list recipient is an address, with nothing behind it to
+      // include. Including candidate/student here is what produced the
+      // "associated to student using an alias" failure.
+      attributes: [
+        "ecr_id",
+        "ecr_email",
+        "ecr_name",
+        "ecr_status",
+        "ecr_sent_at",
+        "ecr_attempts",
+        "ecr_error",
       ],
       order: [["ecr_id", "ASC"]],
       limit: pageSize,
@@ -907,325 +388,23 @@ exports.listRecipients = async (req, res) => {
   }
 };
 
-/** start | pause | cancel */
-exports.updateStatus = async (req, res) => {
-  try {
-    const action = String(req.params.action || "").toLowerCase();
-    const campaign = await EmailCampaign.findByPk(req.params.id);
-
-    if (!campaign) {
-      return res.status(404).json({ success: false, message: "Campaign not found" });
-    }
-
-    if (campaign.ec_status === "completed" && action !== "cancel") {
-      return res
-        .status(400)
-        .json({ success: false, message: "This campaign has already finished" });
-    }
-
-    if (action === "start") {
-      await campaign.update({
-        ec_status: "running",
-        // Due immediately; every later gap is jittered by the dispatcher.
-        ec_next_run_at: new Date(),
-      });
-    } else if (action === "pause") {
-      await campaign.update({ ec_status: "paused", ec_next_run_at: null });
-    } else if (action === "cancel") {
-      await campaign.update({ ec_status: "cancelled", ec_next_run_at: null });
-      // Anything unsent is dropped rather than left looking merely pending.
-      await EmailCampaignRecipient.update(
-        { ecr_status: "skipped" },
-        { where: { ec_id: campaign.ec_id, ecr_status: "pending" } }
-      );
-    } else {
-      return res.status(400).json({ success: false, message: "Unknown action" });
-    }
-
-    return res.json({ success: true, campaign });
-  } catch (error) {
-    console.error("Error updating campaign status:", error);
-    return res.status(500).json({ success: false, message: "Server error" });
-  }
-};
-
-/**
- * Release one chunk immediately without waiting for the scheduler.
- * Useful for a first smoke test before leaving a campaign to run.
- */
-exports.sendNow = async (req, res) => {
-  try {
-    const campaign = await EmailCampaign.findByPk(req.params.id, {
-      include: [
-        { model: Center, as: "center", attributes: ["center_name"] },
-        { model: TrainingBatch, as: "batch", attributes: ["tb_name"] },
-      ],
-    });
-
-    if (!campaign) {
-      return res.status(404).json({ success: false, message: "Campaign not found" });
-    }
-
-    // The scheduler may already be draining this campaign. Claiming it here
-    // means the two cannot select the same pending recipients and send twice.
-    if (!dispatcher.claim(campaign.ec_id)) {
-      return res.status(409).json({
-        success: false,
-        message: "This campaign is already sending a chunk right now",
-      });
-    }
-
-    try {
-      if (campaign.ec_status !== "running") {
-        await campaign.update({ ec_status: "running" });
-      }
-
-      const sent = await dispatcher.sendChunk(campaign);
-      const finishedAt = new Date();
-      await campaign.update({
-        ec_last_run_at: finishedAt,
-        ec_next_run_at: dispatcher.computeNextRunAt(campaign, finishedAt),
-      });
-
-      return res.json({
-        success: true,
-        message: `Released ${sent} message(s)`,
-        sent,
-        campaign,
-      });
-    } finally {
-      dispatcher.release(campaign.ec_id);
-    }
-  } catch (error) {
-    console.error("Error sending campaign chunk:", error);
-    return res.status(500).json({ success: false, message: "Server error" });
-  }
-};
-
-/** Render the template with a real candidate so it can be checked before sending. */
-exports.previewTemplate = async (req, res) => {
-  try {
-    const {
-      tb_id,
-      center_id,
-      ec_target_count,
-      ec_subject,
-      ec_interview_date,
-      ec_interview_time,
-      ec_reporting_time,
-      ec_venue,
-      ec_contact_person,
-      ec_contact_phone,
-      ec_message,
-      ec_custom_html,
-      isReminder,
-    } = req.body || {};
-
-    // Preview the FIRST person who would actually receive this campaign, not
-    // an arbitrary candidate from the center. Running the same selection the
-    // send path runs means the preview shows a real recipient's data, so a
-    // merge token that comes out blank here will come out blank for them too.
-    let sample = null;
-    if (tb_id && center_id) {
-      const { chosen, pool } = await selectRecipients(
-        tb_id,
-        center_id,
-        Number(ec_target_count) || 1,
-        {
-          kind: String(req.body?.ec_kind || "initial").toLowerCase(),
-          audience:
-            String(req.body?.ec_audience || "").toLowerCase() === "students"
-              ? "students"
-              : "candidates",
-        }
-      );
-      sample = chosen[0] || pool[0] || null;
-    }
-
-    // Fall back to any candidate at all, so the editor still previews before a
-    // center has been picked.
-    if (!sample) {
-      sample = await Candidate.findOne({
-        where: {
-          ...(tb_id ? { tb_id: Number(tb_id) } : {}),
-          ...(center_id ? { center_id: Number(center_id) } : {}),
-        },
-        include: [
-          {
-            model: Course,
-            as: "courses",
-            attributes: ["course_name", "course_full_name"],
-          },
-        ],
-        order: [["cand_id", "ASC"]],
-      });
-    }
-
-    const center = center_id
-      ? await Center.findByPk(Number(center_id), { attributes: ["center_name"] })
-      : null;
-
-    const rendered = renderCampaignEmail({
-      kind: String(req.body?.ec_kind || "initial").toLowerCase(),
-      name: sample?.cand_name || "Applicant Name",
-      fatherName: sample?.cand_fathername || "Father Name",
-      cnic: sample?.cand_cnic || "00000-0000000-0",
-      phone: sample?.cand_phone || "03000000000",
-      courseName:
-        sample?.courses?.course_full_name || sample?.courses?.course_name || "Course",
-      centerName: center?.center_name || sample?.centers?.center_name || "Center",
-      // Must match what the dispatcher actually sends, not the database
-      // tb_name. A preview showing a different batch than the real email is
-      // worse than no preview - see servec/admissionBatch.js.
-      batchName: ADMISSION_BATCH_LABEL,
-      interviewDate: ec_interview_date,
-      interviewTime: ec_interview_time,
-      reportingTime: ec_reporting_time,
-      venue: ec_venue,
-      contactPerson: ec_contact_person,
-      contactPhone: ec_contact_phone,
-      message: ec_message,
-      customHtml: ec_custom_html,
-      isReminder: Boolean(isReminder),
-      subject: ec_subject,
-    });
-
-    return res.json({
-      success: true,
-      usedRealCandidate: Boolean(sample),
-      // Which template actually produced this, so the editor can say so rather
-      // than leaving the reader to guess why it looks unfamiliar.
-      usedCustomHtml: Boolean(String(ec_custom_html || "").trim()),
-      previewOf: sample
-        ? { cand_id: sample.cand_id, name: sample.cand_name }
-        : null,
-      ...rendered,
-    });
-  } catch (error) {
-    console.error("Error rendering campaign preview:", error);
-    return res.status(500).json({ success: false, message: "Server error" });
-  }
-};
-
 /** RFC 4180 escaping: quote the field and double any quote inside it. */
 const csvCell = (value) => {
-  const text = String(value ?? "");
-  return /[",\n\r]/.test(text) ? `"${text.replace(/"/g, '""')}"` : text;
+  const text = value === null || value === undefined ? "" : String(value);
+  return /[",\r\n]/.test(text) ? `"${text.replace(/"/g, '""')}"` : text;
 };
 
-const CSV_COLUMNS = [
-  ["cand_id", "Application ID"],
-  ["name", "Name"],
-  ["father_name", "Father Name"],
-  ["cnic", "CNIC"],
-  ["email", "Email"],
-  ["phone", "Phone"],
-  ["gender", "Gender"],
-  ["course", "Course"],
-];
-
-/**
- * Render rows as CSV.
- *
- * Prefixed with a BOM so Excel reads it as UTF-8. Without it Excel assumes the
- * system codepage and mangles any non-ASCII name, which is most of this list.
- */
-const toCsv = (rows, columns = CSV_COLUMNS) => {
-  const header = columns.map(([, label]) => csvCell(label)).join(",");
-  const body = rows.map((row) =>
-    columns.map(([key]) => csvCell(row[key])).join(",")
-  );
-  return "﻿" + [header, ...body].join("\r\n") + "\r\n";
-};
-
-/** Filename-safe slug, so a center name cannot break the download header. */
-const slug = (value) =>
-  String(value || "list")
+/** Filename-safe slug, so a campaign name cannot break the download header. */
+const slugify = (value) =>
+  String(value || "campaign")
     .replace(/[^a-z0-9]+/gi, "-")
     .replace(/^-+|-+$/g, "")
     .toLowerCase()
-    .slice(0, 60) || "list";
+    .slice(0, 60) || "campaign";
 
-const sendCsv = (res, filename, rows, columns) => {
-  res.setHeader("Content-Type", "text/csv; charset=utf-8");
-  res.setHeader("Content-Disposition", `attachment; filename="${filename}"`);
-  return res.send(toCsv(rows, columns));
-};
-
-/**
- * The exact people a campaign WOULD contact, before it is created.
- *
- * Runs the same selection the real create path runs - the shared
- * selectRecipients - so what the operator downloads and checks is precisely
- * who would be emailed. A separate query here could drift from the real one,
- * which would make the review worthless.
- *
- * Returns JSON by default, or a CSV attachment with ?format=csv.
- */
-exports.previewRecipients = async (req, res) => {
-  try {
-    const tb_id = Number(req.query.tb_id);
-    const center_id = Number(req.query.center_id);
-    const target = Number(req.query.count);
-
-    if (!tb_id || !center_id) {
-      return res
-        .status(400)
-        .json({ success: false, message: "tb_id and center_id are required" });
-    }
-    if (!target || target < 1) {
-      return res.status(400).json({
-        success: false,
-        message: "Enter how many emails to send first",
-      });
-    }
-
-    const { chosen, pool, contacted } = await selectRecipients(
-      tb_id,
-      center_id,
-      target,
-      {
-        kind: String(req.query.kind || "initial").toLowerCase(),
-        audience:
-          String(req.query.audience || "").toLowerCase() === "students"
-            ? "students"
-            : "candidates",
-      }
-    );
-    const rows = chosen.map(toListRow);
-
-    if (String(req.query.format).toLowerCase() === "csv") {
-      const center = await Center.findByPk(center_id, {
-        attributes: ["center_name"],
-      });
-      return sendCsv(
-        res,
-        `campaign-recipients-${slug(center?.center_name)}-${rows.length}.csv`,
-        rows
-      );
-    }
-
-    return res.json({
-      success: true,
-      requested: target,
-      selected: rows.length,
-      available: pool.length,
-      alreadyContacted: contacted,
-      recipients: rows,
-    });
-  } catch (error) {
-    console.error("Error previewing campaign recipients:", error);
-    return res.status(500).json({ success: false, message: "Server error" });
-  }
-};
-
-/** Download the frozen recipient list of a campaign that already exists. */
 exports.exportRecipients = async (req, res) => {
   try {
-    const campaign = await EmailCampaign.findByPk(req.params.id, {
-      include: [{ model: Center, as: "center", attributes: ["center_name"] }],
-    });
-
+    const campaign = await EmailCampaign.findByPk(req.params.id);
     if (!campaign) {
       return res
         .status(404)
@@ -1234,61 +413,82 @@ exports.exportRecipients = async (req, res) => {
 
     const recipients = await EmailCampaignRecipient.findAll({
       where: { ec_id: campaign.ec_id },
-      include: [
-        {
-          model: Candidate,
-          as: "candidate",
-          attributes: [
-            "cand_id",
-            "cand_fathername",
-            "cand_cnic",
-            "cand_gender",
-            "cand_phone",
-          ],
-        },
-        {
-          model: Course,
-          as: "course",
-          attributes: ["course_name", "course_full_name"],
-        },
-      ],
       order: [["ecr_id", "ASC"]],
     });
 
-    // Name and address come from the frozen recipient row, not a live lookup:
-    // the export must show the address this campaign will actually use, even
-    // if the candidate record has been edited since.
-    const rows = recipients.map((row) => ({
-      cand_id: row.cand_id,
-      name: row.ecr_name || "",
-      father_name: row.candidate?.cand_fathername || "",
-      cnic: row.candidate?.cand_cnic || "",
-      email: row.ecr_email || "",
-      phone: row.candidate?.cand_phone || "",
-      gender: row.candidate?.cand_gender || "",
-      course: row.course?.course_full_name || row.course?.course_name || "",
-      status: row.ecr_status,
-      sent_at: row.ecr_sent_at ? new Date(row.ecr_sent_at).toISOString() : "",
-    }));
+    const header = ["Email", "Name", "Status", "Sent at", "Attempts", "Error"];
+    const lines = [header.join(",")];
 
-    return sendCsv(
-      res,
-      `campaign-${campaign.ec_id}-${slug(campaign.ec_name)}.csv`,
-      rows,
-      [...CSV_COLUMNS, ["status", "Status"], ["sent_at", "Sent At"]]
+    for (const r of recipients) {
+      lines.push(
+        [
+          csvCell(r.ecr_email),
+          csvCell(r.ecr_name),
+          csvCell(r.ecr_status),
+          csvCell(r.ecr_sent_at ? new Date(r.ecr_sent_at).toISOString() : ""),
+          csvCell(r.ecr_attempts),
+          csvCell(r.ecr_error),
+        ].join(",")
+      );
+    }
+
+    res.setHeader("Content-Type", "text/csv; charset=utf-8");
+    res.setHeader(
+      "Content-Disposition",
+      `attachment; filename="${slugify(campaign.ec_name)}-recipients.csv"`
     );
+    // BOM so Excel opens it as UTF-8 rather than the system codepage.
+    return res.send("﻿" + lines.join("\r\n") + "\r\n");
   } catch (error) {
-    console.error("Error exporting campaign recipients:", error);
+    console.error("Error exporting recipients:", error);
     return res.status(500).json({ success: false, message: "Server error" });
   }
 };
 
-/** Re-send the dummy proof copy for an existing campaign. */
+/**
+ * Send a proof copy to the configured test addresses.
+ *
+ * Uses the campaign's real subject and body, so what comes back is exactly
+ * what the list will receive.
+ */
 exports.sendTest = async (req, res) => {
   try {
-    const campaign = await EmailCampaign.findByPk(req.params.id, {
-      include: [{ model: Center, as: "center", attributes: ["center_name"] }],
+    if (!isConfigured) {
+      return res.status(503).json({
+        success: false,
+        message: "SMTP is not configured, so no mail can be sent.",
+      });
+    }
+
+    const campaign = await EmailCampaign.findByPk(req.params.id);
+    if (!campaign) {
+      return res
+        .status(404)
+        .json({ success: false, message: "Campaign not found" });
+    }
+
+    const result = await dispatcher.sendTestCopies(campaign);
+
+    return res.json({
+      success: true,
+      message: result.sent.length
+        ? `Test copy sent to ${result.sent.join(", ")}`
+        : "No test recipients are configured.",
+      ...result,
     });
+  } catch (error) {
+    console.error("Error sending test:", error);
+    return res
+      .status(500)
+      .json({ success: false, message: "Server error sending the test copy" });
+  }
+};
+
+/** start | pause | cancel */
+exports.updateStatus = async (req, res) => {
+  try {
+    const action = String(req.params.action || "").toLowerCase();
+    const campaign = await EmailCampaign.findByPk(req.params.id);
 
     if (!campaign) {
       return res
@@ -1296,119 +496,164 @@ exports.sendTest = async (req, res) => {
         .json({ success: false, message: "Campaign not found" });
     }
 
-    const test = await dispatcher.sendTestCopies(campaign);
+    if (campaign.ec_status === "completed" && action !== "cancel") {
+      return res.status(400).json({
+        success: false,
+        message: "That campaign has already finished.",
+      });
+    }
+
+    if (campaign.ec_status === "cancelled") {
+      return res.status(400).json({
+        success: false,
+        message: "That campaign was cancelled and cannot be restarted.",
+      });
+    }
+
+    switch (action) {
+      case "start":
+        // Due immediately. Every later chunk is jittered from here.
+        await campaign.update({
+          ec_status: "running",
+          ec_next_run_at: new Date(),
+        });
+        break;
+      case "pause":
+        // ec_next_run_at is left alone so resuming does not lose the place in
+        // the schedule and fire a chunk early.
+        await campaign.update({ ec_status: "paused" });
+        break;
+      case "cancel":
+        await campaign.update({ ec_status: "cancelled" });
+        break;
+      default:
+        return res.status(400).json({
+          success: false,
+          message: "Unknown action. Use start, pause or cancel.",
+        });
+    }
 
     return res.json({
-      success: test.failed.length === 0,
-      message:
-        test.failed.length === 0
-          ? `Test copy sent to ${test.sent.join(", ")}`
-          : `Sent ${test.sent.length}, failed for ${test.failed
-              .map((entry) => entry.to)
-              .join(", ")}`,
-      ...test,
+      success: true,
+      message: `Campaign ${action}${action === "stop" ? "ped" : action.endsWith("e") ? "d" : "ed"}.`,
+      campaign: campaign.toJSON(),
     });
   } catch (error) {
-    console.error("Error sending campaign test copy:", error);
+    console.error("Error updating campaign status:", error);
     return res.status(500).json({ success: false, message: "Server error" });
   }
 };
 
 /**
- * Starter HTML for the "Custom HTML" editor.
+ * Release one chunk right now, without waiting for the next tick.
  *
- * Served from the file rather than duplicated as a string in the frontend, so
- * there is one copy to keep correct. Read once and cached - it is a static
- * asset that only changes on deploy.
+ * Claimed through the dispatcher so a manual push and the scheduler can never
+ * send the same chunk twice.
  */
-let starterTemplateCache = null;
-
-exports.getStarterTemplate = async (req, res) => {
+exports.sendNow = async (req, res) => {
   try {
-    if (starterTemplateCache === null) {
-      const file = path.join(__dirname, "..", "servec", "templates", "interview-call.html");
-      starterTemplateCache = fs.readFileSync(file, "utf8");
-    }
-    return res.json({ success: true, html: starterTemplateCache });
-  } catch (error) {
-    console.error("Error reading the starter email template:", error);
-    return res
-      .status(500)
-      .json({ success: false, message: "Starter template is unavailable" });
-  }
-};
-
-/**
- * The CSV template operators fill in before uploading.
- *
- * Handed out from the same module that parses it, so the file we ask for and
- * the file we accept cannot drift apart.
- */
-exports.downloadListTemplate = async (req, res) => {
-  try {
-    res.setHeader("Content-Type", "text/csv; charset=utf-8");
-    res.setHeader(
-      "Content-Disposition",
-      'attachment; filename="digibizz-email-list-template.csv"'
-    );
-    return res.send(buildTemplateCsv());
-  } catch (error) {
-    console.error("Error building the list template:", error);
-    return res
-      .status(500)
-      .json({ success: false, message: "Could not build the template" });
-  }
-};
-
-/**
- * Parse an uploaded list and report what it contains.
- *
- * Nothing is stored here. The parsed rows go back to the browser and are
- * posted again with the campaign, so an upload that is never turned into a
- * campaign leaves nothing behind to clean up, and the operator gets to see
- * exactly what was read before committing to send to it.
- */
-exports.uploadRecipientList = async (req, res) => {
-  try {
-    if (!req.file?.buffer) {
-      return res
-        .status(400)
-        .json({ success: false, message: "Please choose a .xlsx or .csv file" });
-    }
-
-    const { recipients, skipped, headers, total } = parseRecipientList(
-      req.file.buffer,
-      req.file.originalname
-    );
-
-    if (recipients.length === 0) {
-      return res.status(400).json({
+    if (!isConfigured) {
+      return res.status(503).json({
         success: false,
-        message: "No usable email addresses were found in that file.",
-        skipped,
-        headers,
+        message: "SMTP is not configured, so no mail can be sent.",
       });
     }
 
-    return res.json({
-      success: true,
-      message: `${recipients.length} address(es) read${
-        skipped.length ? `, ${skipped.length} row(s) skipped` : ""
-      }`,
-      recipients,
-      // Capped: enough for the operator to fix the file without returning a
-      // ten-thousand-row error report they will never scroll through.
-      skipped: skipped.slice(0, 100),
-      skippedTotal: skipped.length,
-      headers,
-      total,
-    });
+    const campaign = await EmailCampaign.findByPk(req.params.id);
+    if (!campaign) {
+      return res
+        .status(404)
+        .json({ success: false, message: "Campaign not found" });
+    }
+
+    if (campaign.ec_status === "cancelled" || campaign.ec_status === "completed") {
+      return res.status(400).json({
+        success: false,
+        message: `That campaign is ${campaign.ec_status}.`,
+      });
+    }
+
+    if (!dispatcher.claim(campaign.ec_id)) {
+      return res.status(409).json({
+        success: false,
+        message: "A chunk of this campaign is already going out.",
+      });
+    }
+
+    try {
+      const sent = await dispatcher.sendChunk(campaign);
+      const finishedAt = new Date();
+
+      const remaining = await EmailCampaignRecipient.count({
+        where: { ec_id: campaign.ec_id, ecr_status: "pending" },
+      });
+
+      await campaign.update({
+        ec_last_run_at: finishedAt,
+        ec_status: remaining === 0 ? "completed" : campaign.ec_status,
+        ec_next_run_at:
+          remaining === 0
+            ? null
+            : dispatcher.computeNextRunAt(campaign, finishedAt),
+      });
+
+      return res.json({
+        success: true,
+        message: `Sent ${sent} email(s). ${remaining} still queued.`,
+        sent,
+        remaining,
+      });
+    } finally {
+      // Released even if the send threw, otherwise the campaign would be
+      // permanently stuck as "in flight" and never picked up again.
+      dispatcher.release(campaign.ec_id);
+    }
   } catch (error) {
-    // parseRecipientList throws only with messages written to be shown.
-    console.error("Error parsing the uploaded list:", error?.message || error);
-    return res.status(400).json({
-      success: false,
-      message: error?.message || "Could not read that file",
+    console.error("Error sending now:", error);
+    return res
+      .status(500)
+      .json({ success: false, message: "Server error sending the chunk" });
+  }
+};
+
+/**
+ * Delete a campaign and its recipient rows.
+ *
+ * Refused while a campaign is running: deleting rows out from under the
+ * dispatcher mid-chunk would leave it sending to records that no longer exist.
+ * Pause or cancel first, which is also a moment to reconsider.
+ */
+exports.deleteCampaign = async (req, res) => {
+  const transaction = await sequelize.transaction();
+  try {
+    const campaign = await EmailCampaign.findByPk(req.params.id);
+
+    if (!campaign) {
+      await transaction.rollback();
+      return res
+        .status(404)
+        .json({ success: false, message: "Campaign not found" });
+    }
+
+    if (campaign.ec_status === "running") {
+      await transaction.rollback();
+      return res.status(400).json({
+        success: false,
+        message: "Pause or cancel the campaign before deleting it.",
+      });
+    }
+
+    await EmailCampaignRecipient.destroy({
+      where: { ec_id: campaign.ec_id },
+      transaction,
     });
+    await campaign.destroy({ transaction });
+    await transaction.commit();
+
+    return res.json({ success: true, message: "Campaign deleted." });
+  } catch (error) {
+    if (!transaction.finished) await transaction.rollback();
+    console.error("Error deleting campaign:", error);
+    return res.status(500).json({ success: false, message: "Server error" });
   }
 };

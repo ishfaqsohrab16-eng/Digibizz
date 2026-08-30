@@ -6,15 +6,17 @@ const Student = require("./studentModel");
 const Course = require("./course");
 
 /**
- * One row per candidate per campaign - the frozen send list.
+ * One row per address per campaign - the frozen send list.
  *
- * This table is also the "who has already been contacted" ledger: a new
- * `initial` campaign for a center excludes every candidate that appears here
- * for that center and batch, which is what makes "send to the next 200" work
- * without re-mailing the first 200.
+ * A recipient is an email address and whatever else its spreadsheet row
+ * carried. It is not required to correspond to anybody in this database:
+ * cand_id and std_id are legacy columns from when campaigns were resolved out
+ * of the candidates and students tables, and are NULL for every list campaign.
  *
- * The unique (ec_id, cand_id) index means a retry or a double-click on Create
- * can never queue the same person twice inside one campaign.
+ * Duplicates are removed twice before a row reaches here - once by the parser
+ * while reading the file, once on insert - because a unique index on
+ * (ec_id, ecr_email) could not be built: two different candidates in an old
+ * campaign can legitimately share one address.
  */
 const EmailCampaignRecipient = sequelize.define(
   "EmailCampaignRecipient",
@@ -30,10 +32,9 @@ const EmailCampaignRecipient = sequelize.define(
       references: { model: EmailCampaign, key: "ec_id" },
     },
     /**
-     * Exactly one of cand_id / std_id is set, depending on the campaign's
-     * audience. Candidates and students live in different tables with
-     * different keys, and a single "recipient_id" column would lose which
-     * table it pointed at - so both are kept, both nullable.
+     * LEGACY, both nullable and both NULL for list campaigns. Recipients used
+     * to be a candidate or an enrolled student; these recorded which. Kept so
+     * historical campaigns still join to the person they were sent to.
      */
     cand_id: {
       type: DataTypes.INTEGER,
@@ -45,16 +46,17 @@ const EmailCampaignRecipient = sequelize.define(
       allowNull: true,
       references: { model: Student, key: "std_id" },
     },
-    /** Snapshotted so a later edit to the candidate cannot silently redirect mail. */
+    /** The address the message goes to. The whole identity of a list recipient. */
     ecr_email: {
       type: DataTypes.STRING(150),
       allowNull: false,
     },
+    /** Optional display name from the sheet's Name column, used for {{name}}. */
     ecr_name: {
       type: DataTypes.STRING(150),
       allowNull: true,
     },
-    /** Kept for the per-course quota reporting on the campaign detail screen. */
+    /** LEGACY, nullable. Per-course quota reporting on old admissions runs. */
     course_id: {
       type: DataTypes.INTEGER,
       allowNull: true,
@@ -75,12 +77,12 @@ const EmailCampaignRecipient = sequelize.define(
       defaultValue: 0,
     },
     /**
-     * Merge values from the uploaded spreadsheet, as JSON.
+     * Every other column from the recipient's spreadsheet row, as JSON.
      *
-     * A list campaign's recipients have no database record to read {{course}}
-     * or {{center}} from, so whatever columns the file carried are stored here
-     * and offered to the template as tokens. Null for candidate and student
-     * campaigns, which read those fields from the record itself.
+     * A list recipient has no database record behind it, so anything the
+     * message wants to say about them - {{course}}, {{city}}, {{amount}} -
+     * comes from here. Whatever headings the file carried become tokens, so a
+     * campaign can use fields this code has never heard of.
      */
     ecr_merge_data: {
       type: DataTypes.TEXT,
@@ -96,12 +98,16 @@ const EmailCampaignRecipient = sequelize.define(
     tableName: "email_campaign_recipients",
     timestamps: true,
     indexes: [
-      // One row per person per campaign, whichever kind of person they are.
-      // MySQL allows repeated NULLs in a unique index, so a student-audience
-      // campaign (every cand_id NULL) does not collide with itself.
+      // Legacy uniqueness, retained for old rows. MySQL allows repeated NULLs
+      // in a unique index, so list campaigns - where both are NULL on every
+      // row - do not collide with themselves.
       { unique: true, fields: ["ec_id", "cand_id"] },
       { unique: true, fields: ["ec_id", "std_id"] },
+      // Drives the dispatcher's "next pending for this campaign" query.
       { fields: ["ec_id", "ecr_status"] },
+      // De-duplicating an upload against what is already queued. NOT unique:
+      // two candidates in an old campaign may share an address.
+      { fields: ["ec_id", "ecr_email"] },
       { fields: ["cand_id"] },
       { fields: ["std_id"] },
     ],

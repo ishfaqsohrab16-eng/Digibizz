@@ -4,16 +4,22 @@ const TrainingBatch = require("./trainingBatcheModel");
 const Center = require("./center");
 
 /**
- * A bulk email run aimed at the candidates of one center.
+ * A bulk email run addressed to an uploaded list of addresses.
+ *
+ * This module is standalone: a campaign is a subject, a body, and a list of
+ * addresses read from a spreadsheet. It used to be an admissions feature that
+ * resolved its recipients out of the candidates or students tables for one
+ * center and batch; those columns are kept NULLABLE below so historical
+ * campaigns still read correctly, but nothing writes them any more.
  *
  * Sending is deliberately spread over time rather than fired in one burst: a
  * few hundred messages leaving the same IP in one minute is what gets a domain
  * blocklisted. `ec_batch_size` messages go out per `ec_interval_minutes` tick,
  * driven by utils/emailCampaignDispatcher.js.
  *
- * The recipient list is resolved and frozen when the campaign is created (see
- * email_campaign_recipients), so a campaign always sends to exactly the people
- * it was created for even if new applications arrive afterwards.
+ * The recipient list is frozen when the campaign is created (see
+ * email_campaign_recipients), so a campaign always sends to exactly the list it
+ * was created from.
  */
 const EmailCampaign = sequelize.define(
   "EmailCampaign",
@@ -27,56 +33,48 @@ const EmailCampaign = sequelize.define(
       type: DataTypes.STRING(150),
       allowNull: false,
     },
+    /**
+     * LEGACY, nullable. The batch and center a campaign was scoped to back when
+     * recipients were resolved from the candidates table. New campaigns leave
+     * both NULL - an uploaded list is addressed to itself, not to a center.
+     * Kept so campaigns sent before this change still show where they went.
+     */
     tb_id: {
       type: DataTypes.INTEGER,
-      allowNull: false,
+      allowNull: true,
       references: { model: TrainingBatch, key: "tb_id" },
     },
     center_id: {
       type: DataTypes.INTEGER,
-      allowNull: false,
+      allowNull: true,
       references: { model: Center, key: "center_id" },
     },
     /**
-     * What this campaign is for. The date/time/venue columns below mean
-     * different things per kind, which is why they are named generically:
-     *
-     *   initial        - interview call-up. Candidates never emailed before
-     *                    for this center+batch.
-     *   reminder       - chases an earlier campaign's recipients who still
-     *                    have no interview recorded. Can carry a rescheduled
-     *                    date, time and venue.
-     *   recommendation - tells recommended candidates they are through, with
-     *                    the class start date, timing and venue.
-     *   general        - any other announcement, to candidates or students.
+     * LEGACY, nullable. There was once an interview call-up, a reminder, a
+     * recommendation letter and a general announcement, each rendering a
+     * different built-in template. There is one kind now - the operator writes
+     * the email - so new rows leave this NULL.
      */
     ec_kind: {
       type: DataTypes.ENUM("initial", "reminder", "recommendation", "general"),
-      allowNull: false,
-      defaultValue: "initial",
+      allowNull: true,
+      defaultValue: null,
     },
     /**
-     * Who the campaign targets.
-     *
-     * The module started as an admissions tool, so it only knew candidates.
-     * Enrolled students are a different table with a different key, which is
-     * why email_campaign_recipients now carries both cand_id and std_id and
-     * exactly one of them is set per row.
+     * LEGACY, nullable. Recipients used to be candidates or enrolled students
+     * looked up in the database. Every campaign is now an uploaded list.
      */
     ec_audience: {
-      // "list" is an uploaded spreadsheet of addresses, which belong to nobody
-      // in the database - so those recipient rows carry neither cand_id nor
-      // std_id, only the address and whatever the file supplied.
       type: DataTypes.ENUM("candidates", "students", "list"),
-      allowNull: false,
-      defaultValue: "candidates",
+      allowNull: true,
+      defaultValue: null,
     },
-    /** Set on reminders: the campaign whose recipients are being chased. */
+    /** LEGACY, nullable. Reminders chased an earlier campaign's recipients. */
     ec_source_campaign_id: {
       type: DataTypes.INTEGER,
       allowNull: true,
     },
-    /** How many candidates this run was created for. */
+    /** How many addresses this run was created for. */
     ec_target_count: {
       type: DataTypes.INTEGER,
       allowNull: false,
@@ -125,11 +123,11 @@ const EmailCampaign = sequelize.define(
       allowNull: false,
     },
     /**
-     * Event logistics rendered into the template.
-     *
-     * Named for the interview because that was the first use, but they are the
-     * generic date/time/venue of whatever the campaign is about: the interview
-     * for a call-up, the first class for a recommendation letter.
+     * LEGACY, all nullable. Event logistics that the built-in interview and
+     * recommendation letters rendered into a details table. Nothing writes them
+     * now: a campaign body is authored in full by the operator, and anything
+     * like a date or venue is simply typed into it. Retained so an old
+     * campaign's detail screen is not left with blank fields.
      */
     ec_interview_date: {
       type: DataTypes.STRING(30),
@@ -161,14 +159,16 @@ const EmailCampaign = sequelize.define(
       allowNull: true,
     },
     /**
-     * Author your own email instead of using the built-in letter.
+     * The email body. This HTML IS the message.
      *
-     * When set, this HTML IS the message - the built-in template is bypassed
-     * entirely. Merge tokens ({{name}}, {{venue}}, ...) are substituted per
-     * recipient and HTML-escaped on the way in, so a candidate whose name
-     * contains an angle bracket cannot break the markup.
+     * Required in practice - the controller refuses to create a campaign
+     * without it - but left nullable at the column level because campaigns
+     * created before this change used a built-in template and legitimately have
+     * none.
      *
-     * NULL means "use the built-in interview letter".
+     * Merge tokens ({{name}}, or any column name from the uploaded sheet) are
+     * substituted per recipient and HTML-escaped on the way in, so an address
+     * list containing an angle bracket cannot break the markup.
      */
     ec_custom_html: {
       type: DataTypes.TEXT("long"),

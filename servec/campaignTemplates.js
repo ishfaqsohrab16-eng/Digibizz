@@ -1,3 +1,5 @@
+const fs = require("fs");
+const path = require("path");
 const { escapeHtml } = require("./emailConfig");
 const {
   documentShell,
@@ -5,6 +7,41 @@ const {
   formatDate,
   maskCnic,
 } = require("./emailTemplates");
+
+/**
+ * Starting HTML offered by the campaign compose screen.
+ *
+ * Served from a file rather than duplicated as a string in the frontend, so
+ * there is one copy to keep correct. Read lazily and cached: it is a static
+ * asset that only changes on deploy.
+ *
+ * Deliberately token-free. Campaign email is static - every recipient gets
+ * identical markup - so a starter containing {{name}} would suggest a
+ * personalisation that does not exist and would ship literal braces to the
+ * whole list.
+ */
+const STARTER_TEMPLATE_PATH = path.join(
+  __dirname,
+  "templates",
+  "campaign-starter.html"
+);
+
+let starterHtmlCache = null;
+
+const readStarterHtml = () => {
+  if (starterHtmlCache !== null) return starterHtmlCache;
+  try {
+    starterHtmlCache = fs.readFileSync(STARTER_TEMPLATE_PATH, "utf8");
+  } catch (error) {
+    // A missing starter must not break the compose screen - the operator can
+    // still write their own HTML, which is the actual requirement.
+    console.error(
+      `[campaign] could not read ${STARTER_TEMPLATE_PATH}: ${error.message}`
+    );
+    starterHtmlCache = "";
+  }
+  return starterHtmlCache;
+};
 
 const BRAND = "#4CAF50";
 const SUPPORT_EMAIL = process.env.SUPPORT_EMAIL || "info@digibizz.gob.pk";
@@ -577,4 +614,10 @@ module.exports = {
   applyMergeTokens,
   customHtmlToText,
   MERGE_TOKENS,
+  // Campaign compose screen. `STARTER_HTML` is a getter so the file is read on
+  // first use rather than at require time, which keeps a missing or unreadable
+  // template from failing module load for every consumer of this file.
+  get STARTER_HTML() {
+    return readStarterHtml();
+  },
 };

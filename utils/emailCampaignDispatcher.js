@@ -1,15 +1,11 @@
 const { Op } = require("sequelize");
 const EmailCampaign = require("../models/emailCampaignModel");
 const EmailCampaignRecipient = require("../models/emailCampaignRecipientModel");
-const Candidate = require("../models/CandidateModel");
-const Course = require("../models/course");
-const Center = require("../models/center");
-const TrainingBatch = require("../models/trainingBatcheModel");
 const { sendEmail, isConfigured } = require("../servec/emailConfig");
-const { interviewCall, renderCampaignEmail } = require("../servec/campaignTemplates");
-const Student = require("../models/studentModel");
-const User = require("../models/userModel");
-const { ADMISSION_BATCH_LABEL } = require("../servec/admissionBatch");
+// Candidate, Student, Course, Center, TrainingBatch and the campaign template
+// renderers are deliberately NOT imported any more. A campaign no longer
+// resolves people out of the database or picks a built-in letter: it sends one
+// static, operator-written body to a list of addresses.
 
 /**
  * Paces campaign email out over time.
@@ -71,15 +67,6 @@ const TEST_RECIPIENTS = (
   .map((address) => address.trim())
   .filter(Boolean);
 
-/** Stand-in applicant used for the test copy. Obviously fake on sight. */
-const TEST_CANDIDATE = {
-  name: "TEST — Sample Applicant",
-  fatherName: "TEST — Sample Father Name",
-  cnic: "00000-0000000-0",
-  phone: "0300-0000000",
-  courseName: "TEST — Sample Course",
-};
-
 let timer = null;
 
 /**
@@ -131,55 +118,24 @@ const perMessageDelayMs = (campaign) => {
 };
 
 /**
- * Build the personalised message for one recipient row.
+ * The message a campaign sends.
  *
- * A recipient is either a candidate or a student depending on the campaign's
- * audience, so the personal fields are read from whichever one is attached.
+ * Static, and identical for every recipient. Campaign email used to be
+ * rendered per person - a built-in letter chosen by kind, with merge tokens
+ * filled in from the candidate or student behind each row - which is why this
+ * once needed the recipient and its joins. It no longer does: the operator
+ * writes the HTML, and that HTML is what every address receives.
+ *
+ * Built once per chunk rather than per message, since the result cannot vary.
+ *
+ * `text` is left to sendEmail, which derives a plain-text alternative from the
+ * HTML and wraps a fragment in the branded layout. A message with no text part
+ * is itself a spam signal, so it must not be skipped.
  */
-const renderForRecipient = (campaign, recipient) => {
-  const candidate = recipient.candidate || {};
-  const student = recipient.student || {};
-  const person = recipient.std_id ? student : candidate;
-
-  // Columns the uploaded spreadsheet carried, offered to the template as
-  // extra merge tokens. Corrupt JSON is ignored rather than failing the send -
-  // the message is still worth delivering without one optional value.
-  let merge = null;
-  if (recipient.ecr_merge_data) {
-    try {
-      merge = JSON.parse(recipient.ecr_merge_data);
-    } catch {
-      merge = null;
-    }
-  }
-
-  return renderCampaignEmail({
-    kind: campaign.ec_kind,
-    merge,
-    name: recipient.ecr_name || person.cand_name || person.user?.user_name,
-    fatherName: person.cand_fathername || person.std_fathername,
-    cnic: person.cand_cnic || person.std_cnic,
-    phone: person.cand_phone || person.std_phone,
-    courseName:
-      recipient.course?.course_full_name ||
-      candidate.courses?.course_full_name ||
-      candidate.courses?.course_name,
-    centerName: campaign.center?.center_name || candidate.centers?.center_name,
-    // Label, not tb_name - see servec/admissionBatch.js. Intake is for
-    // Batch 10 while the database batch still reads "Batch-9".
-    batchName: ADMISSION_BATCH_LABEL,
-    interviewDate: campaign.ec_interview_date,
-    interviewTime: campaign.ec_interview_time,
-    reportingTime: campaign.ec_reporting_time,
-    venue: campaign.ec_venue,
-    contactPerson: campaign.ec_contact_person,
-    contactPhone: campaign.ec_contact_phone,
-    message: campaign.ec_message,
-    customHtml: campaign.ec_custom_html,
-    isReminder: campaign.ec_kind === "reminder",
-    subject: campaign.ec_subject,
-  });
-};
+const renderCampaign = (campaign) => ({
+  subject: campaign.ec_subject,
+  html: campaign.ec_custom_html,
+});
 
 /**
  * Send a dummy copy of a campaign to the test addresses.
@@ -207,26 +163,13 @@ const sendTestCopies = async (campaign) => {
     return result;
   }
 
-  const rendered = renderCampaignEmail({
-    kind: campaign.ec_kind,
-    ...TEST_CANDIDATE,
-    centerName: campaign.center?.center_name || "TEST — Sample Center",
-    batchName: ADMISSION_BATCH_LABEL,
-    interviewDate: campaign.ec_interview_date,
-    interviewTime: campaign.ec_interview_time,
-    reportingTime: campaign.ec_reporting_time,
-    venue: campaign.ec_venue,
-    contactPerson: campaign.ec_contact_person,
-    contactPhone: campaign.ec_contact_phone,
-    message: campaign.ec_message,
-    // The proof must exercise the same branch a real send takes, custom HTML
-    // included - otherwise the test passes on a template nobody will receive.
-    customHtml: campaign.ec_custom_html,
-    isReminder: campaign.ec_kind === "reminder",
+  const rendered = {
+    ...renderCampaign(campaign),
     // Prefixed so a test copy can never be mistaken for the real thing in an
-    // inbox that also receives genuine campaign mail.
+    // inbox that also receives genuine campaign mail. The body is untouched:
+    // the proof has to be the real message, or it proves nothing.
     subject: `[TEST] ${campaign.ec_subject}`,
-  });
+  };
 
   for (const to of TEST_RECIPIENTS) {
     try {
@@ -255,44 +198,18 @@ const sendChunk = async (campaign) => {
       ecr_status: { [Op.in]: ["pending", "failed"] },
       ecr_attempts: { [Op.lt]: MAX_ATTEMPTS },
     },
-    include: [
-      {
-        model: Candidate,
-        as: "candidate",
-        required: false,
-        include: [
-          {
-            model: Course,
-            as: "courses",
-            attributes: ["course_name", "course_full_name"],
-          },
-          { model: Center, as: "centers", attributes: ["center_name"] },
-        ],
-      },
-      {
-        model: Student,
-        as: "student",
-        required: false,
-        attributes: ["std_id", "std_cnic", "std_phone", "std_fathername"],
-        // studentModel declares this as StudentModel.belongsTo(User, { as: "user" }),
-        // and Sequelize refuses an aliased association included without its
-        // alias - which failed every student-audience chunk with "user is
-        // associated to student using an alias". Line ~159 already reads
-        // person.user?.user_name, so "user" is the name it must carry.
-        include: [{ model: User, as: "user", attributes: ["user_name"] }],
-      },
-      {
-        model: Course,
-        as: "course",
-        required: false,
-        attributes: ["course_name", "course_full_name"],
-      },
-    ],
+    // No joins. A recipient is an address; there is nothing behind it to load,
+    // and the message does not vary by person. The old candidate/student
+    // includes were not just unnecessary work - the student one failed every
+    // chunk with "user is associated to student using an alias".
     order: [["ecr_id", "ASC"]],
     limit: Math.max(1, Number(campaign.ec_batch_size) || 25),
   });
 
   if (recipients.length === 0) return 0;
+
+  // Rendered once: identical for every address in this chunk.
+  const { subject, html } = renderCampaign(campaign);
 
   let sent = 0;
 
@@ -306,8 +223,7 @@ const sendChunk = async (campaign) => {
     if (campaign.ec_status !== "running") break;
 
     try {
-      const { subject, text, html } = renderForRecipient(campaign, recipient);
-      await sendEmail({ to: recipient.ecr_email, subject, text, html });
+      await sendEmail({ to: recipient.ecr_email, subject, html });
 
       await recipient.update({
         ecr_status: "sent",
@@ -424,10 +340,8 @@ const tick = async () => {
           { ec_next_run_at: { [Op.lte]: now } },
         ],
       },
-      include: [
-        { model: Center, as: "center", attributes: ["center_name"] },
-        { model: TrainingBatch, as: "batch", attributes: ["tb_name"] },
-      ],
+      // No center/batch join: the message no longer mentions either, so
+      // loading them was work whose result was never read.
       // Oldest due first, so a campaign cannot be starved by newer ones
       // repeatedly winning the free slots.
       order: [["ec_next_run_at", "ASC"], ["ec_id", "ASC"]],

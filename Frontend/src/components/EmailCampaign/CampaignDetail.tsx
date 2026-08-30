@@ -5,17 +5,15 @@ import {
   Pause,
   Play,
   Send,
-  BellRing,
   XCircle,
   Download,
   FlaskConical,
 } from "lucide-react";
 import { toast } from "sonner";
-import ReminderDialog from "./ReminderDialog";
 import {
+  CampaignRecipientRow,
   CampaignStats,
   EmailCampaign,
-  createCampaignReminder,
   downloadCampaignRecipients,
   getCampaignRecipients,
   getEmailCampaign,
@@ -64,23 +62,18 @@ const Stat: React.FC<{ label: string; value: React.ReactNode; tone?: string }> =
 /**
  * Progress and controls for one campaign.
  *
- * The reminder button is the important one: it creates a second campaign
- * targeting only the people this one actually delivered to who still have no
- * interview recorded, so nobody who already attended is chased again.
+ * Start, pause and cancel, a live count of what has gone out, and the frozen
+ * recipient list. The reminder button that used to live here is gone with the
+ * admissions features: it built a follow-up campaign for candidates with no
+ * interview recorded, which has no meaning for a list of addresses.
  */
 const CampaignDetail: React.FC<Props> = ({ campaignId, onBack }) => {
   const [campaign, setCampaign] = useState<EmailCampaign | null>(null);
   const [stats, setStats] = useState<CampaignStats | null>(null);
-  const [perCourse, setPerCourse] = useState<
-    Array<{ course_id: number; course_name: string; total: number; sent: number }>
-  >([]);
-  const [recipients, setRecipients] = useState<any[]>([]);
+  const [recipients, setRecipients] = useState<CampaignRecipientRow[]>([]);
   const [statusFilter, setStatusFilter] = useState("");
   const [loading, setLoading] = useState(true);
   const [busy, setBusy] = useState(false);
-  // A reminder asks for the rescheduled date/time/venue first - see
-  // ReminderDialog for why silently reusing the original is dangerous.
-  const [remindOpen, setRemindOpen] = useState(false);
 
   const load = useCallback(async () => {
     try {
@@ -93,7 +86,8 @@ const CampaignDetail: React.FC<Props> = ({ campaignId, onBack }) => {
       ]);
       setCampaign(detail.campaign);
       setStats(detail.stats);
-      setPerCourse(detail.perCourse || []);
+      // No per-course breakdown: recipients are addresses from a spreadsheet
+      // and are not attached to a course.
       setRecipients(recipientPage.recipients || []);
     } catch (error) {
       toast.error(
@@ -162,15 +156,6 @@ const CampaignDetail: React.FC<Props> = ({ campaignId, onBack }) => {
 
   return (
     <div className="space-y-6">
-      <ReminderDialog
-        campaign={remindOpen ? campaign : null}
-        onCancel={() => setRemindOpen(false)}
-        onConfirm={async (payload) => {
-          await act(() => createCampaignReminder(campaign.ec_id, payload));
-          setRemindOpen(false);
-        }}
-      />
-
       <div className="flex flex-wrap items-start justify-between gap-4">
         <div>
           <button
@@ -181,7 +166,8 @@ const CampaignDetail: React.FC<Props> = ({ campaignId, onBack }) => {
           </button>
           <h2 className="text-xl font-bold text-slate-900">{campaign.ec_name}</h2>
           <p className="mt-1 text-sm text-slate-600">
-            {campaign.center?.center_name} · {campaign.batch?.tb_name} ·{" "}
+            {campaign.ec_target_count} recipient
+            {campaign.ec_target_count === 1 ? "" : "s"} ·{" "}
             <span
               className={`rounded-full px-2 py-0.5 text-xs font-semibold ${
                 STATUS_STYLES[campaign.ec_status] || "bg-slate-100"
@@ -189,11 +175,6 @@ const CampaignDetail: React.FC<Props> = ({ campaignId, onBack }) => {
             >
               {campaign.ec_status}
             </span>
-            {campaign.ec_kind === "reminder" && (
-              <span className="ml-2 rounded-full bg-violet-100 px-2 py-0.5 text-xs font-semibold text-violet-800">
-                reminder
-              </span>
-            )}
           </p>
         </div>
 
@@ -270,15 +251,6 @@ const CampaignDetail: React.FC<Props> = ({ campaignId, onBack }) => {
                 </button>
               </>
             )}
-          {campaign.ec_kind !== "reminder" && (stats?.sent || 0) > 0 && (
-            <button
-              onClick={() => setRemindOpen(true)}
-              disabled={busy}
-              className="inline-flex items-center gap-1.5 rounded-md bg-violet-600 px-3 py-2 text-sm font-semibold text-white hover:bg-violet-700 disabled:opacity-50"
-            >
-              <BellRing className="h-4 w-4" /> Remind those not interviewed
-            </button>
-          )}
         </div>
       </div>
 
@@ -335,33 +307,8 @@ const CampaignDetail: React.FC<Props> = ({ campaignId, onBack }) => {
         </dl>
       </div>
 
-      {perCourse.length > 0 && (
-        <div className="rounded-lg border border-slate-200 bg-white p-5">
-          <h3 className="mb-3 text-base font-semibold text-slate-900">
-            Split by course
-          </h3>
-          <table className="w-full text-sm">
-            <thead>
-              <tr className="text-left text-xs uppercase tracking-wide text-slate-500">
-                <th className="py-1">Course</th>
-                <th className="py-1">Queued</th>
-                <th className="py-1">Sent</th>
-              </tr>
-            </thead>
-            <tbody>
-              {perCourse.map((row) => (
-                <tr key={row.course_id} className="border-t border-slate-200">
-                  <td className="py-1.5 text-slate-800">{row.course_name}</td>
-                  <td className="py-1.5 text-slate-600">{row.total}</td>
-                  <td className="py-1.5 font-semibold text-emerald-700">
-                    {row.sent}
-                  </td>
-                </tr>
-              ))}
-            </tbody>
-          </table>
-        </div>
-      )}
+      {/* The "split by course" table is gone with the admissions features -
+          an uploaded address has no course to be split by. */}
 
       <div className="rounded-lg border border-slate-200 bg-white p-5">
         <div className="mb-3 flex flex-wrap items-center justify-between gap-3">
@@ -383,53 +330,40 @@ const CampaignDetail: React.FC<Props> = ({ campaignId, onBack }) => {
           <table className="w-full text-sm">
             <thead>
               <tr className="text-left text-xs uppercase tracking-wide text-slate-500">
-                <th className="py-1.5">Name</th>
                 <th className="py-1.5">Email</th>
-                <th className="py-1.5">Course</th>
+                <th className="py-1.5">Name</th>
                 <th className="py-1.5">Status</th>
                 <th className="py-1.5">Sent at</th>
-                <th className="py-1.5">Interviewed</th>
+                <th className="py-1.5">Attempts</th>
               </tr>
             </thead>
             <tbody>
-              {recipients.map((row) => {
-                const marks = row.candidate?.cand_interview_marks;
-                const interviewed =
-                  (marks && marks !== "TBD" && marks !== "") ||
-                  (row.candidate?.interview_date &&
-                    row.candidate.interview_date !== "");
-                return (
-                  <tr key={row.ecr_id} className="border-t border-slate-200">
-                    <td className="py-1.5 text-slate-800">{row.ecr_name || "—"}</td>
-                    <td className="py-1.5 text-slate-600">{row.ecr_email}</td>
-                    <td className="py-1.5 text-slate-600">
-                      {row.course?.course_full_name || row.course?.course_name || "—"}
-                    </td>
-                    <td
-                      className={`py-1.5 font-medium ${
-                        RECIPIENT_STATUS_STYLES[row.ecr_status] || ""
-                      }`}
-                      title={row.ecr_error || ""}
-                    >
-                      {row.ecr_status}
-                      {row.ecr_status === "failed" && row.ecr_error ? " ⚠" : ""}
-                    </td>
-                    <td className="py-1.5 text-slate-500">
-                      {formatDateTime(row.ecr_sent_at)}
-                    </td>
-                    <td className="py-1.5">
-                      {interviewed ? (
-                        <span className="text-emerald-700">Yes</span>
-                      ) : (
-                        <span className="text-slate-400">No</span>
-                      )}
-                    </td>
-                  </tr>
-                );
-              })}
+              {recipients.map((row) => (
+                <tr key={row.ecr_id} className="border-t border-slate-200">
+                  <td className="py-1.5 font-mono text-xs text-slate-700">
+                    {row.ecr_email}
+                  </td>
+                  <td className="py-1.5 text-slate-600">{row.ecr_name || "—"}</td>
+                  <td
+                    className={`py-1.5 font-medium ${
+                      RECIPIENT_STATUS_STYLES[row.ecr_status] || ""
+                    }`}
+                    // The SMTP reason is the only way to tell a bad address
+                    // from a refusal, so it is surfaced rather than hidden.
+                    title={row.ecr_error || ""}
+                  >
+                    {row.ecr_status}
+                    {row.ecr_status === "failed" && row.ecr_error ? " ⚠" : ""}
+                  </td>
+                  <td className="py-1.5 text-slate-500">
+                    {formatDateTime(row.ecr_sent_at)}
+                  </td>
+                  <td className="py-1.5 text-slate-500">{row.ecr_attempts}</td>
+                </tr>
+              ))}
               {recipients.length === 0 && (
                 <tr>
-                  <td colSpan={6} className="py-6 text-center text-slate-500">
+                  <td colSpan={5} className="py-6 text-center text-slate-500">
                     No recipients match this filter.
                   </td>
                 </tr>

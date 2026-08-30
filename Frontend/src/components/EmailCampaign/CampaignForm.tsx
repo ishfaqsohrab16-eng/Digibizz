@@ -4,23 +4,18 @@ import {
   Mail,
   Eye,
   Info,
-  Download,
   Monitor,
   Smartphone,
   FileCode,
+  RotateCcw,
 } from "lucide-react";
 import { toast } from "sonner";
 import {
-  CampaignEligibility,
   UploadedRecipient,
   createEmailCampaign,
-  downloadCampaignRecipientPreview,
-  getCampaignEligibility,
   getCampaignStarterTemplate,
   previewCampaignEmail,
 } from "../../services/api";
-import { useBatch } from "../../context/BatchContext";
-import { useReferenceData } from "../../hooks/useReferenceData";
 import RecipientListUpload from "./RecipientListUpload";
 
 interface Props {
@@ -44,70 +39,37 @@ const inputClass =
   "mt-1.5 w-full rounded-md border border-slate-300 px-3 py-2 text-sm outline-none focus:border-emerald-500";
 
 /**
- * Where a campaign's recipients come from.
- *
- * This is the only choice left on the screen. There used to be a "what are you
- * sending?" selector offering three built-in letters (interview call-up,
- * selection letter, general announcement), each with its own block of
- * interview date/time/venue fields. All of that is gone: every campaign is now
- * the admin's own HTML, sent unchanged to everyone, so the only thing left to
- * decide is who receives it.
- */
-type Source = "candidates" | "students" | "list";
-
-const SOURCES: Array<{ value: Source; title: string; note: string }> = [
-  {
-    value: "candidates",
-    title: "Candidates at a center",
-    note: "Applicants for this batch who have not been emailed yet.",
-  },
-  {
-    value: "students",
-    title: "Enrolled students at a center",
-    note: "Students already enrolled at the center for this batch.",
-  },
-  {
-    value: "list",
-    title: "Uploaded email list",
-    note: "A spreadsheet of addresses you provide.",
-  },
-];
-
-/**
  * Create one campaign.
  *
- * The body is always custom HTML. An example template loads on open so the
- * editor is never empty and the preview always shows a real message. For the
- * center-based sources the quota is split evenly across that center's courses
- * and anyone already contacted is skipped; for an uploaded list, the file is
- * the list.
+ * A campaign is four things: a name, a subject, one piece of HTML, and a list
+ * of addresses from a spreadsheet. There is nothing else to choose.
+ *
+ * It used to be an admissions tool - pick a center and a batch, pick whether
+ * you are mailing candidates or enrolled students, pick one of three built-in
+ * letters, fill in interview date/time/venue fields, and the server would
+ * resolve who to send to and personalise each copy with merge tokens. All of
+ * that is gone. The operator writes the email, uploads the addresses, and every
+ * recipient receives byte-identical markup.
+ *
+ * That last point is why there is no "preview as" control: with nothing
+ * substituted per person, the preview IS the message, for everyone.
  */
 const CampaignForm: React.FC<Props> = ({ onCreated, onCancel }) => {
-  const { selectedBatchId, selectedBatchName } = useBatch();
-  const { centers } = useReferenceData();
-
-  const [source, setSource] = useState<Source>("candidates");
-  const isList = source === "list";
-
-  const [centerId, setCenterId] = useState<number>(0);
-  const [eligibility, setEligibility] = useState<CampaignEligibility | null>(null);
-  const [loadingEligibility, setLoadingEligibility] = useState(false);
   const [saving, setSaving] = useState(false);
   const [previewHtml, setPreviewHtml] = useState<string | null>(null);
   const [previewing, setPreviewing] = useState(false);
-  const [downloading, setDownloading] = useState(false);
   const [device, setDevice] = useState<"desktop" | "mobile">("desktop");
-  const [listRecipients, setListRecipients] = useState<UploadedRecipient[]>([]);
+  const [recipients, setRecipients] = useState<UploadedRecipient[]>([]);
+  const [starterHtml, setStarterHtml] = useState("");
 
   const [form, setForm] = useState({
     ec_name: "",
-    ec_target_count: 200,
+    ec_subject: "A message from the Digibizz Program",
+    ec_custom_html: "",
     ec_batch_size: 25,
     ec_interval_minutes: 15,
     ec_min_gap_seconds: 8,
     ec_max_gap_seconds: 30,
-    ec_subject: "A message from the Digibizz Program",
-    ec_custom_html: "",
     startNow: false,
   });
 
@@ -121,15 +83,16 @@ const CampaignForm: React.FC<Props> = ({ onCreated, onCancel }) => {
     getCampaignStarterTemplate()
       .then((result) => {
         if (cancelled) return;
+        setStarterHtml(result.html || "");
         setForm((prev) =>
           prev.ec_custom_html.trim()
             ? prev
-            : { ...prev, ec_custom_html: result.html }
+            : { ...prev, ec_custom_html: result.html || "" }
         );
       })
       .catch(() => {
         if (!cancelled) {
-          toast.error("Could not load the example - write your own HTML");
+          toast.error("Could not load the example — write your own HTML");
         }
       });
     return () => {
@@ -137,248 +100,96 @@ const CampaignForm: React.FC<Props> = ({ onCreated, onCancel }) => {
     };
   }, []);
 
-  useEffect(() => {
-    // An uploaded list has no pool in the database to count against.
-    if (isList || !centerId || !selectedBatchId) {
-      setEligibility(null);
-      return;
-    }
-
-    let cancelled = false;
-    setLoadingEligibility(true);
-    getCampaignEligibility(selectedBatchId, centerId, "general", source)
-      .then((data) => {
-        if (!cancelled) setEligibility(data);
-      })
-      .catch(() => {
-        if (!cancelled) setEligibility(null);
-      })
-      .finally(() => {
-        if (!cancelled) setLoadingEligibility(false);
-      });
-
-    return () => {
-      cancelled = true;
-    };
-  }, [centerId, selectedBatchId, source, isList]);
-
-  const centerName = useMemo(
-    () => centers.find((c) => c.center_id === centerId)?.center_name || "",
-    [centers, centerId]
-  );
-
   /**
-   * Mirror of the server's split, purely so the operator can see the plan
-   * before committing. The server recomputes it authoritatively on create.
-   */
-  const projectedSplit = useMemo(() => {
-    if (!eligibility) return [];
-    const target = Math.max(0, Number(form.ec_target_count) || 0);
-    const buckets = eligibility.courses.map((course) => ({
-      ...course,
-      allocated: 0,
-    }));
-
-    let remaining = target;
-    let open = buckets.filter((b) => b.available > 0);
-
-    while (remaining > 0 && open.length > 0) {
-      const share = Math.floor(remaining / open.length);
-      if (share === 0) {
-        const ordered = [...open].sort(
-          (a, b) => b.available - b.allocated - (a.available - a.allocated)
-        );
-        for (const bucket of ordered) {
-          if (remaining === 0) break;
-          if (bucket.allocated >= bucket.available) continue;
-          bucket.allocated += 1;
-          remaining -= 1;
-        }
-        break;
-      }
-      for (const bucket of open) {
-        const take = Math.min(share, bucket.available - bucket.allocated);
-        bucket.allocated += take;
-        remaining -= take;
-      }
-      open = open.filter((b) => b.available - b.allocated > 0);
-    }
-
-    return buckets;
-  }, [eligibility, form.ec_target_count]);
-
-  /**
-   * How many this campaign will actually email.
+   * Roughly how long the whole send will take.
    *
-   * For an uploaded list that is the file's row count, NOT the per-course
-   * projection - which is always zero for a list, because a list has no
-   * eligibility lookup. Deriving this from the projection alone is exactly why
-   * "Create campaign" stayed disabled after a list was uploaded.
+   * Chunks are `ec_batch_size` messages `ec_interval_minutes` apart, and inside
+   * a chunk each message waits a random gap. Shown because the pacing numbers
+   * are otherwise abstract - "25 every 15 minutes" does not obviously mean six
+   * hours for a list of six hundred.
    */
-  const willSend = isList
-    ? listRecipients.length
-    : projectedSplit.reduce((sum, b) => sum + b.allocated, 0);
-
-  /** Rough wall-clock estimate, using the midpoint of the random gap range. */
   const estimate = useMemo(() => {
-    if (willSend === 0) return "";
-    const batchSize = Math.max(1, Number(form.ec_batch_size) || 1);
-    const chunks = Math.ceil(willSend / batchSize);
-    const avgGap =
-      (Number(form.ec_min_gap_seconds) + Number(form.ec_max_gap_seconds)) / 2;
-    const withinChunk = (batchSize - 1) * avgGap;
-    const betweenChunks = (chunks - 1) * Number(form.ec_interval_minutes) * 60;
-    const totalMinutes = Math.round((chunks * withinChunk + betweenChunks) / 60);
+    const total = recipients.length;
+    if (!total) return "";
 
-    if (totalMinutes < 60) return `about ${totalMinutes} min`;
-    const hours = Math.floor(totalMinutes / 60);
-    const mins = totalMinutes % 60;
-    return `about ${hours}h ${mins}m`;
+    const batchSize = Math.max(1, Number(form.ec_batch_size) || 1);
+    const chunks = Math.ceil(total / batchSize);
+    const avgGap =
+      (Number(form.ec_min_gap_seconds) + Number(form.ec_max_gap_seconds)) / 2 ||
+      0;
+    const withinChunk = (batchSize - 1) * avgGap;
+    const betweenChunks =
+      (chunks - 1) * Math.max(1, Number(form.ec_interval_minutes) || 1) * 60;
+    const seconds = chunks * withinChunk + betweenChunks;
+
+    if (seconds < 90) return "under 2 min";
+    const minutes = Math.round(seconds / 60);
+    if (minutes < 60) return `about ${minutes} min`;
+    const hours = Math.floor(minutes / 60);
+    const rest = minutes % 60;
+    return rest ? `about ${hours} hr ${rest} min` : `about ${hours} hr`;
   }, [
-    willSend,
+    recipients.length,
     form.ec_batch_size,
     form.ec_interval_minutes,
     form.ec_min_gap_seconds,
     form.ec_max_gap_seconds,
   ]);
 
-  const emailPayload = useMemo(
-    () => ({ ...form, ec_kind: "general", ec_audience: source }),
-    [form, source]
-  );
-
   const handlePreview = async () => {
+    if (!form.ec_custom_html.trim()) {
+      toast.error("Write the email body first");
+      return;
+    }
     setPreviewing(true);
     try {
       const result = await previewCampaignEmail({
-        tb_id: selectedBatchId,
-        center_id: centerId || undefined,
-        ...emailPayload,
+        ec_subject: form.ec_subject,
+        ec_custom_html: form.ec_custom_html,
       });
       setPreviewHtml(result.html);
-    } catch (error) {
+    } catch (error: any) {
       toast.error(
-        error instanceof Error ? error.message : "Could not render the preview"
+        error?.response?.data?.message || "Could not render the preview"
       );
     } finally {
       setPreviewing(false);
     }
   };
 
-  // Live preview, debounced so typing HTML does not fire a request per
-  // keystroke. Rendered server-side so what is shown is what is sent.
-  useEffect(() => {
-    const timer = window.setTimeout(() => {
-      previewCampaignEmail({
-        tb_id: selectedBatchId,
-        center_id: centerId || undefined,
-        ...emailPayload,
-      })
-        .then((result) => setPreviewHtml(result.html))
-        .catch(() => {
-          /* keep the last good preview rather than blanking the pane */
-        });
-    }, 600);
-
-    return () => window.clearTimeout(timer);
-  }, [emailPayload, selectedBatchId, centerId]);
-
-  /** Download exactly who this campaign would contact, before creating it. */
-  const handleDownloadList = async () => {
-    if (!centerId) {
-      toast.error("Choose a center first");
-      return;
-    }
-    if (willSend === 0) {
-      toast.error("Nobody is available to contact with these settings");
-      return;
-    }
-
-    setDownloading(true);
-    try {
-      await downloadCampaignRecipientPreview(
-        selectedBatchId,
-        centerId,
-        Number(form.ec_target_count) || 0,
-        "general",
-        source
-      );
-      toast.success("Recipient list downloaded");
-    } catch (error: any) {
-      toast.error(
-        error?.response?.data?.message ||
-          (error instanceof Error ? error.message : "Could not build the list")
-      );
-    } finally {
-      setDownloading(false);
-    }
-  };
-
-  /**
-   * Why Create is disabled, in words.
-   *
-   * Shown beside the button rather than left for the operator to work out. A
-   * greyed-out control with no explanation is precisely why this screen was
-   * reported as broken.
-   */
-  const blockedReason = useMemo(() => {
-    if (!form.ec_name.trim()) return "Give the campaign a name";
-    if (!centerId) return "Choose a center";
-    if (!form.ec_subject.trim()) return "Enter a subject";
+  /** Why the Create button is disabled, or "" when it is not. */
+  const blocker = useMemo(() => {
+    if (!form.ec_name.trim()) return "Name the campaign";
+    if (!form.ec_subject.trim()) return "Write a subject";
     if (!form.ec_custom_html.trim()) return "Write the email body";
-    if (isList && listRecipients.length === 0) return "Upload an email list";
-    if (!isList && loadingEligibility) return "Checking who is available…";
-    if (willSend === 0) return "Nobody is available to contact";
-    if (Number(form.ec_min_gap_seconds) > Number(form.ec_max_gap_seconds)) {
-      return "Minimum gap cannot be greater than the maximum";
-    }
-    return null;
-  }, [
-    form.ec_name,
-    form.ec_subject,
-    form.ec_custom_html,
-    form.ec_min_gap_seconds,
-    form.ec_max_gap_seconds,
-    centerId,
-    isList,
-    listRecipients.length,
-    loadingEligibility,
-    willSend,
-  ]);
+    if (recipients.length === 0) return "Upload an email list";
+    return "";
+  }, [form.ec_name, form.ec_subject, form.ec_custom_html, recipients.length]);
 
-  const handleSubmit = async (event: React.FormEvent) => {
-    event.preventDefault();
-
-    if (blockedReason) {
-      toast.error(blockedReason);
+  const handleSubmit = async () => {
+    if (blocker) {
+      toast.error(blocker);
       return;
     }
 
     setSaving(true);
     try {
-      const response = await createEmailCampaign({
-        ...emailPayload,
-        tb_id: selectedBatchId,
-        center_id: centerId,
-        ...(isList ? { recipientList: listRecipients } : {}),
+      const result = await createEmailCampaign({
+        ec_name: form.ec_name.trim(),
+        ec_subject: form.ec_subject.trim(),
+        ec_custom_html: form.ec_custom_html,
+        ec_batch_size: Number(form.ec_batch_size),
+        ec_interval_minutes: Number(form.ec_interval_minutes),
+        ec_min_gap_seconds: Number(form.ec_min_gap_seconds),
+        ec_max_gap_seconds: Number(form.ec_max_gap_seconds),
+        recipientList: recipients,
+        startNow: form.startNow,
       });
-
-      if (response?.success) {
-        const test = response.test;
-        const testNote = test?.sent?.length
-          ? ` A test copy went to ${test.sent.join(" and ")}.`
-          : test?.failed?.length
-          ? " The test copy could not be sent - check SMTP."
-          : "";
-        toast.success((response.message || "Campaign created") + testNote);
-        onCreated();
-      } else {
-        toast.error(response?.message || "Could not create the campaign");
-      }
+      toast.success(result.message || "Campaign created");
+      onCreated();
     } catch (error: any) {
       toast.error(
-        error?.response?.data?.message ||
-          (error instanceof Error ? error.message : "Could not create the campaign")
+        error?.response?.data?.message || "Could not create the campaign"
       );
     } finally {
       setSaving(false);
@@ -386,333 +197,161 @@ const CampaignForm: React.FC<Props> = ({ onCreated, onCancel }) => {
   };
 
   return (
-    <form onSubmit={handleSubmit} className="space-y-6">
-      <div className="rounded-lg border border-slate-200 bg-white p-5">
-        <h3 className="text-base font-semibold text-slate-900">Send to</h3>
-        <div className="mt-3 grid grid-cols-1 gap-3 md:grid-cols-3">
-          {SOURCES.map((option) => (
-            <button
-              key={option.value}
-              type="button"
-              onClick={() => setSource(option.value)}
-              className={`rounded-md border p-3 text-left transition-colors ${
-                source === option.value
-                  ? "border-emerald-500 bg-emerald-50"
-                  : "border-slate-200 hover:bg-slate-50"
-              }`}
-            >
-              <span className="block text-sm font-semibold text-slate-900">
-                {option.title}
-              </span>
-              <span className="mt-1 block text-xs text-slate-600">
-                {option.note}
-              </span>
-            </button>
-          ))}
-        </div>
-      </div>
-
-      {isList ? (
-        <div className="space-y-4">
-          {/*
-            A list campaign still belongs to a center: email_campaigns.center_id
-            is NOT NULL with a foreign key, and the server rejects a create
-            without it. This selector used to render only in the branch below,
-            so for an uploaded list there was no way to set a center - centerId
-            stayed 0, "Choose a center" never cleared, and Create campaign was
-            permanently disabled with no visible field to fix it.
-          */}
-          <div className="rounded-lg border border-slate-200 bg-white p-5">
-            <h3 className="text-base font-semibold text-slate-900">Center</h3>
-            <p className="mt-1 text-xs text-slate-500">
-              Recipients come from the file you upload below. The center is what
-              this campaign is filed under for reporting.
-            </p>
-            <div className="mt-4 md:w-1/2">
-              <Field label="Center">
-                <select
-                  value={centerId}
-                  onChange={(e) => setCenterId(Number(e.target.value))}
-                  className={inputClass}
-                >
-                  <option value={0}>Select a center</option>
-                  {centers.map((center) => (
-                    <option key={center.center_id} value={center.center_id}>
-                      {center.center_name}
-                    </option>
-                  ))}
-                </select>
-              </Field>
-            </div>
-          </div>
-
-          <RecipientListUpload
-            recipients={listRecipients}
-            onChange={setListRecipients}
-          />
-        </div>
-      ) : (
-        <div className="rounded-lg border border-slate-200 bg-white p-5">
-          <h3 className="text-base font-semibold text-slate-900">
-            Who to contact
-          </h3>
-          <p className="mt-1 text-xs text-slate-500">
-            {source === "students" ? "Enrolled students" : "Applications"} for{" "}
-            <strong>{selectedBatchName || "the selected batch"}</strong>. Anyone
-            already emailed by an earlier campaign for this center is skipped
-            automatically.
-          </p>
-
-          <div className="mt-4 grid grid-cols-1 gap-4 md:grid-cols-2">
-            <Field label="Center">
-              <select
-                value={centerId}
-                onChange={(e) => setCenterId(Number(e.target.value))}
-                className={inputClass}
-              >
-                <option value={0}>Select a center</option>
-                {centers.map((center) => (
-                  <option key={center.center_id} value={center.center_id}>
-                    {center.center_name}
-                  </option>
-                ))}
-              </select>
-            </Field>
-
-            <Field
-              label="How many emails"
-              hint="Divided evenly across this center's courses."
-            >
-              <input
-                type="number"
-                min={1}
-                value={form.ec_target_count}
-                onChange={(e) => set("ec_target_count", Number(e.target.value))}
-                className={inputClass}
-              />
-            </Field>
-          </div>
-
-          {loadingEligibility && (
-            <p className="mt-4 flex items-center gap-2 text-sm text-slate-500">
-              <Loader2 className="h-4 w-4 animate-spin" /> Checking who is still
-              reachable…
-            </p>
-          )}
-
-          {eligibility && !loadingEligibility && (
-            <div className="mt-4 rounded-md border border-slate-200 bg-slate-50 p-4">
-              <div className="flex flex-wrap items-center gap-x-6 gap-y-1 text-sm">
-                <span className="text-slate-700">
-                  <strong>{eligibility.totalAvailable}</strong> not yet contacted
-                </span>
-                <span className="text-slate-500">
-                  {eligibility.alreadyContacted} already contacted
-                </span>
-                <span className="font-semibold text-emerald-700">
-                  this campaign will queue {willSend}
-                </span>
-              </div>
-
-              {projectedSplit.length > 0 && (
-                <table className="mt-3 w-full text-sm">
-                  <thead>
-                    <tr className="text-left text-xs uppercase tracking-wide text-slate-500">
-                      <th className="py-1">Course</th>
-                      <th className="py-1">Available</th>
-                      <th className="py-1">Will receive</th>
-                    </tr>
-                  </thead>
-                  <tbody>
-                    {projectedSplit.map((row) => (
-                      <tr
-                        key={row.course_id}
-                        className="border-t border-slate-200"
-                      >
-                        <td className="py-1.5 text-slate-800">
-                          {row.course_full_name || row.course_name}
-                        </td>
-                        <td className="py-1.5 text-slate-600">
-                          {row.available}
-                        </td>
-                        <td className="py-1.5 font-semibold text-slate-900">
-                          {row.allocated}
-                        </td>
-                      </tr>
-                    ))}
-                  </tbody>
-                </table>
-              )}
-
-              {willSend < Number(form.ec_target_count) && (
-                <p className="mt-2 flex items-start gap-1.5 text-xs text-amber-700">
-                  <Info className="mt-0.5 h-3.5 w-3.5 shrink-0" />
-                  Only {willSend} are still available, so that is what will be
-                  queued.
-                </p>
-              )}
-
-              <button
-                type="button"
-                onClick={handleDownloadList}
-                disabled={downloading || willSend === 0}
-                className="mt-4 inline-flex items-center gap-2 rounded-md border border-slate-300 bg-white px-3 py-2 text-sm font-medium text-slate-700 hover:bg-slate-50 disabled:cursor-not-allowed disabled:opacity-40"
-              >
-                {downloading ? (
-                  <Loader2 className="h-4 w-4 animate-spin" />
-                ) : (
-                  <Download className="h-4 w-4" />
-                )}
-                Download these {willSend} recipients (CSV)
-              </button>
-            </div>
-          )}
-        </div>
-      )}
-
+    <div className="space-y-5">
+      {/* ---------------------------------------------------------------- */}
+      {/* Basics                                                            */}
+      {/* ---------------------------------------------------------------- */}
       <div className="rounded-lg border border-slate-200 bg-white p-5">
         <h3 className="text-base font-semibold text-slate-900">Campaign</h3>
-        <div className="mt-4 grid grid-cols-1 gap-4 md:grid-cols-2">
-          <Field
-            label="Campaign name"
-            hint="Shown only to staff, so you can find it later."
-          >
+        <p className="mt-1 text-xs text-slate-500">
+          The name is for your own reference and is never shown to recipients.
+        </p>
+
+        <div className="mt-4 grid gap-4 sm:grid-cols-2">
+          <Field label="Campaign name">
             <input
-              type="text"
+              className={inputClass}
               value={form.ec_name}
               onChange={(e) => set("ec_name", e.target.value)}
-              placeholder={
-                centerName ? `${centerName} announcement` : "Campaign name"
-              }
-              className={inputClass}
+              placeholder="e.g. Orientation announcement — March"
             />
           </Field>
-          <Field label="Subject" hint="The subject line recipients see.">
+          <Field label="Subject" hint="What recipients see in their inbox.">
             <input
-              type="text"
+              className={inputClass}
               value={form.ec_subject}
               onChange={(e) => set("ec_subject", e.target.value)}
-              className={inputClass}
             />
           </Field>
         </div>
       </div>
 
-      {/* Preview left, editor right. The preview is what gets checked, so it
-          gets the space; the editor only needs to be readable. */}
+      {/* ---------------------------------------------------------------- */}
+      {/* Recipients                                                        */}
+      {/* ---------------------------------------------------------------- */}
+      <RecipientListUpload recipients={recipients} onChange={setRecipients} />
+
+      {/* ---------------------------------------------------------------- */}
+      {/* Body                                                              */}
+      {/* ---------------------------------------------------------------- */}
       <div className="rounded-lg border border-slate-200 bg-white p-5">
-        <div className="flex flex-wrap items-start justify-between gap-4">
+        <div className="flex flex-wrap items-start justify-between gap-3">
           <div>
             <h3 className="text-base font-semibold text-slate-900">
               Email body
             </h3>
             <p className="mt-1 text-xs text-slate-500">
-              Your HTML is sent exactly as written — the same message to every
-              recipient.
+              Paste or write the HTML. Everyone on the list receives exactly
+              this — nothing is filled in per person.
             </p>
           </div>
-          <button
-            type="button"
-            onClick={async () => {
-              if (
-                form.ec_custom_html.trim() &&
-                !window.confirm("Replace what you have written?")
-              ) {
-                return;
-              }
-              try {
-                const result = await getCampaignStarterTemplate();
-                set("ec_custom_html", result.html);
-                toast.success("Example template loaded");
-              } catch {
-                toast.error("Could not load the example");
-              }
-            }}
-            className="inline-flex items-center gap-1.5 rounded-md border border-slate-300 px-2.5 py-1 text-xs font-medium text-slate-700 hover:bg-slate-50"
-          >
-            <FileCode className="h-3.5 w-3.5" /> Load example
-          </button>
+          <div className="flex items-center gap-2">
+            {starterHtml && (
+              <button
+                type="button"
+                onClick={() => {
+                  set("ec_custom_html", starterHtml);
+                  setPreviewHtml(null);
+                  toast.success("Example template restored");
+                }}
+                className="inline-flex items-center gap-1.5 rounded-md border border-slate-300 px-3 py-1.5 text-xs font-medium text-slate-700 hover:bg-slate-50"
+              >
+                <RotateCcw className="h-3.5 w-3.5" /> Reset to example
+              </button>
+            )}
+            <button
+              type="button"
+              onClick={handlePreview}
+              disabled={previewing}
+              className="inline-flex items-center gap-1.5 rounded-md border border-slate-300 px-3 py-1.5 text-xs font-medium text-slate-700 hover:bg-slate-50 disabled:opacity-60"
+            >
+              {previewing ? (
+                <Loader2 className="h-3.5 w-3.5 animate-spin" />
+              ) : (
+                <Eye className="h-3.5 w-3.5" />
+              )}
+              Preview
+            </button>
+          </div>
         </div>
 
-        <div className="mt-5 grid grid-cols-1 gap-5 lg:grid-cols-[minmax(0,1fr)_minmax(0,1fr)]">
-          <div className="order-1">
-            <div className="mb-2 flex items-center justify-between">
-              <span className="text-xs font-semibold uppercase tracking-wide text-slate-500">
-                Live preview
+        <div className="mt-4">
+          <textarea
+            className="h-72 w-full rounded-md border border-slate-300 px-3 py-2 font-mono text-xs outline-none focus:border-emerald-500"
+            value={form.ec_custom_html}
+            onChange={(e) => {
+              set("ec_custom_html", e.target.value);
+              // The preview is stale the moment the body changes; leaving it on
+              // screen would invite sending against a stale render.
+              setPreviewHtml(null);
+            }}
+            spellCheck={false}
+            placeholder="<div>Your email…</div>"
+          />
+        </div>
+
+        <p className="mt-2 flex items-start gap-1.5 text-xs text-slate-500">
+          <FileCode className="mt-0.5 h-3.5 w-3.5 shrink-0" />
+          <span>
+            Use tables and inline styles — Outlook ignores{" "}
+            <code className="rounded bg-slate-100 px-1">&lt;style&gt;</code>{" "}
+            blocks. Avoid images, scripts and tracking pixels; they push mail
+            into spam.
+          </span>
+        </p>
+
+        {previewHtml && (
+          <div className="mt-4 rounded-md border border-slate-200">
+            <div className="flex items-center justify-between border-b border-slate-200 bg-slate-50 px-3 py-2">
+              <span className="text-xs font-medium text-slate-600">
+                Preview — this is what every recipient receives
               </span>
-              <div className="inline-flex rounded-md border border-slate-300 p-0.5">
+              <div className="flex items-center gap-1">
                 <button
                   type="button"
                   onClick={() => setDevice("desktop")}
-                  aria-pressed={device === "desktop"}
-                  className={`inline-flex items-center gap-1.5 rounded px-2.5 py-1 text-xs font-medium transition-colors ${
+                  className={`rounded p-1.5 ${
                     device === "desktop"
-                      ? "bg-slate-800 text-white"
-                      : "text-slate-600 hover:bg-slate-50"
+                      ? "bg-white text-emerald-600 shadow-sm"
+                      : "text-slate-400 hover:text-slate-600"
                   }`}
+                  title="Desktop width"
                 >
-                  <Monitor className="h-3.5 w-3.5" /> Desktop
+                  <Monitor className="h-3.5 w-3.5" />
                 </button>
                 <button
                   type="button"
                   onClick={() => setDevice("mobile")}
-                  aria-pressed={device === "mobile"}
-                  className={`inline-flex items-center gap-1.5 rounded px-2.5 py-1 text-xs font-medium transition-colors ${
+                  className={`rounded p-1.5 ${
                     device === "mobile"
-                      ? "bg-slate-800 text-white"
-                      : "text-slate-600 hover:bg-slate-50"
+                      ? "bg-white text-emerald-600 shadow-sm"
+                      : "text-slate-400 hover:text-slate-600"
                   }`}
+                  title="Mobile width"
                 >
-                  <Smartphone className="h-3.5 w-3.5" /> Mobile
+                  <Smartphone className="h-3.5 w-3.5" />
                 </button>
               </div>
             </div>
-
-            <div className="flex justify-center rounded-md border border-slate-200 bg-slate-100 p-3">
-              {!form.ec_custom_html.trim() ? (
-                <div className="flex h-[560px] w-full items-center justify-center px-6 text-center text-sm text-slate-500">
-                  The body is empty. Write some HTML, or load the example.
-                </div>
-              ) : previewHtml ? (
-                <iframe
-                  title="Email preview"
-                  srcDoc={previewHtml}
-                  // No allow-* flags: nothing in pasted markup should be able
-                  // to run inside the admin console.
-                  sandbox=""
-                  style={{ width: device === "mobile" ? 390 : "100%" }}
-                  className="h-[560px] max-w-full rounded border border-slate-300 bg-white transition-[width] duration-200"
-                />
-              ) : (
-                <div className="flex h-[560px] w-full items-center justify-center text-sm text-slate-500">
-                  <Loader2 className="mr-2 h-4 w-4 animate-spin" /> Rendering
-                  preview…
-                </div>
-              )}
+            <div className="flex justify-center bg-slate-100 p-3">
+              {/* Sandboxed: campaign HTML is author-written and trusted enough
+                  to render, but it must not be able to run script or navigate
+                  the admin panel it is previewed inside. */}
+              <iframe
+                title="Email preview"
+                srcDoc={previewHtml}
+                sandbox=""
+                className="h-[26rem] rounded border border-slate-300 bg-white"
+                style={{ width: device === "mobile" ? "375px" : "100%" }}
+              />
             </div>
-            <p className="mt-2 text-xs text-slate-500">
-              Rendered by the server, so this is exactly what a recipient
-              receives.
-            </p>
           </div>
-
-          <div className="order-2">
-            <label className="block text-xs font-semibold uppercase tracking-wide text-slate-500">
-              Your HTML
-            </label>
-            <textarea
-              value={form.ec_custom_html}
-              onChange={(e) => set("ec_custom_html", e.target.value)}
-              spellCheck={false}
-              placeholder={
-                '<div style="font-family:Arial,sans-serif">\n  <h2>Dear Applicant,</h2>\n  <p>Your message here.</p>\n</div>'
-              }
-              className="mt-1.5 h-[520px] w-full rounded-md border border-slate-300 p-3 font-mono text-xs leading-relaxed outline-none focus:border-emerald-500"
-            />
-          </div>
-        </div>
+        )}
       </div>
 
+      {/* ---------------------------------------------------------------- */}
+      {/* Pacing                                                            */}
+      {/* ---------------------------------------------------------------- */}
       <div className="rounded-lg border border-slate-200 bg-white p-5">
         <h3 className="text-base font-semibold text-slate-900">Sending pace</h3>
         <p className="mt-1 text-xs text-slate-500">
@@ -721,55 +360,51 @@ const CampaignForm: React.FC<Props> = ({ onCreated, onCancel }) => {
           leaving at a steady cadence is what gets a sending domain blocklisted.
         </p>
 
-        <div className="mt-4 grid grid-cols-1 gap-4 md:grid-cols-4">
+        <div className="mt-4 grid gap-4 sm:grid-cols-2 lg:grid-cols-4">
           <Field label="Emails per chunk">
             <input
               type="number"
               min={1}
-              value={form.ec_batch_size}
-              onChange={(e) => set("ec_batch_size", Number(e.target.value))}
+              max={500}
               className={inputClass}
+              value={form.ec_batch_size}
+              onChange={(e) => set("ec_batch_size", e.target.value)}
             />
           </Field>
           <Field label="Minutes between chunks">
             <input
               type="number"
               min={1}
-              value={form.ec_interval_minutes}
-              onChange={(e) =>
-                set("ec_interval_minutes", Number(e.target.value))
-              }
               className={inputClass}
+              value={form.ec_interval_minutes}
+              onChange={(e) => set("ec_interval_minutes", e.target.value)}
             />
           </Field>
           <Field label="Min gap (seconds)">
             <input
               type="number"
               min={0}
-              value={form.ec_min_gap_seconds}
-              onChange={(e) =>
-                set("ec_min_gap_seconds", Number(e.target.value))
-              }
               className={inputClass}
+              value={form.ec_min_gap_seconds}
+              onChange={(e) => set("ec_min_gap_seconds", e.target.value)}
             />
           </Field>
           <Field label="Max gap (seconds)">
             <input
               type="number"
               min={0}
-              value={form.ec_max_gap_seconds}
-              onChange={(e) =>
-                set("ec_max_gap_seconds", Number(e.target.value))
-              }
               className={inputClass}
+              value={form.ec_max_gap_seconds}
+              onChange={(e) => set("ec_max_gap_seconds", e.target.value)}
             />
           </Field>
         </div>
 
-        {estimate && (
-          <p className="mt-3 text-sm text-slate-600">
-            {willSend} emails will take <strong>{estimate}</strong> to go out,
-            with each chunk landing at a slightly different time.
+        {recipients.length > 0 && (
+          <p className="mt-3 text-xs text-slate-600">
+            {recipients.length} email{recipients.length === 1 ? "" : "s"} will
+            take <strong>{estimate}</strong> to go out, with each chunk landing
+            at a slightly different time.
           </p>
         )}
 
@@ -782,49 +417,56 @@ const CampaignForm: React.FC<Props> = ({ onCreated, onCancel }) => {
           />
           Start sending as soon as the campaign is created
         </label>
+        {!form.startNow && (
+          <p className="mt-1.5 flex items-center gap-1.5 text-xs text-slate-500">
+            <Info className="h-3.5 w-3.5" />
+            Otherwise it is saved as a draft — you can send a test copy first,
+            then start it.
+          </p>
+        )}
       </div>
 
-      <div className="flex flex-wrap items-center justify-end gap-3">
-        {blockedReason && (
-          <span className="mr-auto flex items-center gap-1.5 text-xs text-amber-700">
-            <Info className="h-3.5 w-3.5 shrink-0" />
-            {blockedReason}
-          </span>
-        )}
-        <button
-          type="button"
-          onClick={onCancel}
-          className="rounded-md border border-slate-300 px-4 py-2 text-sm font-medium text-slate-700 hover:bg-slate-50"
-        >
-          Cancel
-        </button>
-        <button
-          type="button"
-          onClick={handlePreview}
-          disabled={previewing}
-          className="inline-flex items-center gap-2 rounded-md border border-slate-300 px-4 py-2 text-sm font-medium text-slate-700 hover:bg-slate-50 disabled:opacity-50"
-        >
-          {previewing ? (
-            <Loader2 className="h-4 w-4 animate-spin" />
+      {/* ---------------------------------------------------------------- */}
+      {/* Actions                                                           */}
+      {/* ---------------------------------------------------------------- */}
+      <div className="flex flex-wrap items-center justify-between gap-3 border-t border-slate-200 pt-4">
+        {/* The reason is stated rather than leaving a dead button, which is
+            the whole complaint about a disabled control that never says why. */}
+        <p className="text-xs text-slate-500">
+          {blocker ? (
+            <span className="flex items-center gap-1.5 text-amber-700">
+              <Info className="h-3.5 w-3.5" /> {blocker}
+            </span>
           ) : (
-            <Eye className="h-4 w-4" />
+            <span className="text-emerald-700">Ready to create.</span>
           )}
-          Preview email
-        </button>
-        <button
-          type="submit"
-          disabled={saving || Boolean(blockedReason)}
-          className="inline-flex items-center gap-2 rounded-md bg-emerald-600 px-4 py-2 text-sm font-semibold text-white hover:bg-emerald-700 disabled:cursor-not-allowed disabled:opacity-40"
-        >
-          {saving ? (
-            <Loader2 className="h-4 w-4 animate-spin" />
-          ) : (
-            <Mail className="h-4 w-4" />
-          )}
-          Create campaign
-        </button>
+        </p>
+
+        <div className="flex items-center gap-2">
+          <button
+            type="button"
+            onClick={onCancel}
+            className="rounded-md border border-slate-300 px-4 py-2 text-sm font-medium text-slate-700 hover:bg-slate-50"
+          >
+            Cancel
+          </button>
+          <button
+            type="button"
+            onClick={handleSubmit}
+            disabled={saving || Boolean(blocker)}
+            className="inline-flex items-center gap-2 rounded-md bg-emerald-600 px-4 py-2 text-sm font-semibold text-white hover:bg-emerald-700 disabled:cursor-not-allowed disabled:opacity-50"
+            title={blocker || "Create the campaign"}
+          >
+            {saving ? (
+              <Loader2 className="h-4 w-4 animate-spin" />
+            ) : (
+              <Mail className="h-4 w-4" />
+            )}
+            Create campaign
+          </button>
+        </div>
       </div>
-    </form>
+    </div>
   );
 };
 

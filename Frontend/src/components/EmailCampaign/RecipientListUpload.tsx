@@ -55,14 +55,19 @@ const RecipientListUpload: React.FC<Props> = ({ recipients, onChange }) => {
     setFileName(file.name);
     try {
       const result = await uploadCampaignRecipientList(file);
-      onChange(result.recipients || []);
+      const accepted = result.recipients || [];
+      onChange(accepted);
       setSkipped(result.skipped || []);
-      setSkippedTotal(result.skippedTotal || 0);
-      toast.success(result.message);
+      // The server reports every skipped row, so the count is the list length.
+      setSkippedTotal((result.skipped || []).length);
+      toast.success(
+        `${result.accepted ?? accepted.length} address(es) ready` +
+          (result.skipped?.length ? `, ${result.skipped.length} skipped` : "")
+      );
     } catch (error: any) {
       onChange([]);
       setSkipped(error?.response?.data?.skipped || []);
-      setSkippedTotal(error?.response?.data?.skippedTotal || 0);
+      setSkippedTotal((error?.response?.data?.skipped || []).length);
       toast.error(
         error?.response?.data?.message ||
           (error instanceof Error ? error.message : "Could not read that file")

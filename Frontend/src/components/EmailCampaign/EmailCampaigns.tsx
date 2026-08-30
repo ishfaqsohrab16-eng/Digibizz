@@ -24,7 +24,7 @@ const STATUS_STYLES: Record<string, string> = {
  * security boundary.
  */
 const EmailCampaigns: React.FC = () => {
-  const { userType, selectedBatchId } = useBatch();
+  const { userType } = useBatch();
   const canManage = isRole(userType, ROLE.SUPER_ADMIN);
 
   const [campaigns, setCampaigns] = useState<EmailCampaign[]>([]);
@@ -116,7 +116,9 @@ const EmailCampaigns: React.FC = () => {
           <div className="mt-4 flex justify-end">
             <button
               onClick={() => setView("create")}
-              disabled={!selectedBatchId || selectedBatchId < 0}
+              // No longer gated on a selected batch: a campaign is an uploaded
+              // list of addresses and is not scoped to one.
+
               className="inline-flex items-center gap-2 rounded-md bg-emerald-600 px-4 py-2 text-sm font-semibold text-white hover:bg-emerald-700 disabled:cursor-not-allowed disabled:opacity-40"
             >
               <Plus className="h-4 w-4" /> New campaign
@@ -146,8 +148,11 @@ const EmailCampaigns: React.FC = () => {
                 <thead className="bg-slate-50">
                   <tr className="text-left text-xs uppercase tracking-wide text-slate-500">
                     <th className="px-4 py-2.5">Campaign</th>
-                    <th className="px-4 py-2.5">Center</th>
-                    <th className="px-4 py-2.5">Batch</th>
+                    {/* Center and Batch columns are gone: a campaign is a list
+                        of addresses and belongs to neither. Recipients and
+                        Subject are what an operator actually scans for. */}
+                    <th className="px-4 py-2.5">Subject</th>
+                    <th className="px-4 py-2.5">Recipients</th>
                     <th className="px-4 py-2.5">Status</th>
                     <th className="px-4 py-2.5">Progress</th>
                     <th className="px-4 py-2.5">Failed</th>
@@ -170,17 +175,15 @@ const EmailCampaigns: React.FC = () => {
                           <span className="font-medium text-slate-900">
                             {campaign.ec_name}
                           </span>
-                          {campaign.ec_kind === "reminder" && (
-                            <span className="ml-2 rounded-full bg-violet-100 px-2 py-0.5 text-xs font-semibold text-violet-800">
-                              reminder
-                            </span>
-                          )}
+                        </td>
+                        <td
+                          className="max-w-xs truncate px-4 py-3 text-slate-600"
+                          title={campaign.ec_subject}
+                        >
+                          {campaign.ec_subject || "—"}
                         </td>
                         <td className="px-4 py-3 text-slate-600">
-                          {campaign.center?.center_name || "—"}
-                        </td>
-                        <td className="px-4 py-3 text-slate-600">
-                          {campaign.batch?.tb_name || "—"}
+                          {campaign.ec_target_count ?? total}
                         </td>
                         <td className="px-4 py-3">
                           <span

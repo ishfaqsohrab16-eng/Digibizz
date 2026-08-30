@@ -121,6 +121,183 @@ const REQUIRED_COLUMNS = [
   },
 ];
 
+/**
+ * ENUM columns whose allowed values have grown since the table was created.
+ *
+ * Adding a column is not the only additive change a deploy can need. When a new
+ * value is introduced - ec_kind gaining 'general', ec_audience gaining 'list' -
+ * MySQL does not reject the INSERT with a readable message; in non-strict mode
+ * it fails with "Data truncated for column 'ec_kind' at row 1", which reads
+ * like a length problem and says nothing about the missing value. That is
+ * exactly what blocked every "general" campaign from being created.
+ *
+ * migration/017 and migration/018 carry these same statements, but both note
+ * that ensureSchema does not apply ENUM changes - so on any deployment that has
+ * never had the migration files run by hand, the column silently lags the
+ * model. Widening an ENUM is additive and safe: existing rows keep their
+ * values, nothing is dropped or retyped.
+ *
+ * Only widened when the column really is an ENUM and is really missing a value.
+ * A permissive type (VARCHAR, say) already accepts everything and is left
+ * alone, so this never narrows a column.
+ */
+const REQUIRED_ENUM_VALUES = [
+  {
+    table: "email_campaigns",
+    column: "ec_kind",
+    values: ["initial", "reminder", "recommendation", "general"],
+    definition:
+      "ENUM('initial','reminder','recommendation','general') NOT NULL DEFAULT 'initial'",
+    migration: "migration/017_campaign_kinds_and_audiences.sql",
+  },
+  {
+    table: "email_campaigns",
+    column: "ec_audience",
+    values: ["candidates", "students", "list"],
+    definition:
+      "ENUM('candidates','students','list') NOT NULL DEFAULT 'candidates' COMMENT 'candidates | students | list (uploaded spreadsheet)'",
+    migration: "migration/018_campaign_uploaded_lists.sql",
+  },
+];
+
+/**
+ * Columns that must accept NULL.
+ *
+ * The email module was admissions-only: a campaign required a center and a
+ * batch, and a recipient required a candidate. It is now a standalone mailing
+ * tool whose recipients are addresses from a spreadsheet, so all of those are
+ * optional. Until they are, creating a list campaign fails - either on
+ * email_campaigns.center_id or, one step later and far more confusingly, on
+ * email_campaign_recipients.cand_id.
+ *
+ * Relaxing NOT NULL is additive in the same sense as adding a column: no
+ * existing row changes, and nothing that was valid before becomes invalid.
+ * Narrowing is never done here.
+ *
+ * migration/019_email_module_list_only.sql is the same change written out.
+ */
+const REQUIRED_NULLABLE_COLUMNS = [
+  {
+    table: "email_campaigns",
+    column: "tb_id",
+    definition:
+      "INT NULL DEFAULT NULL COMMENT 'Legacy: batch a campaign was scoped to. NULL for list campaigns.'",
+  },
+  {
+    table: "email_campaigns",
+    column: "center_id",
+    definition:
+      "INT NULL DEFAULT NULL COMMENT 'Legacy: center a campaign was scoped to. NULL for list campaigns.'",
+  },
+  {
+    table: "email_campaigns",
+    column: "ec_kind",
+    definition:
+      "ENUM('initial','reminder','recommendation','general') NULL DEFAULT NULL COMMENT 'Legacy campaign kind. NULL for list campaigns.'",
+  },
+  {
+    table: "email_campaigns",
+    column: "ec_audience",
+    definition:
+      "ENUM('candidates','students','list') NULL DEFAULT NULL COMMENT 'Legacy audience. NULL for list campaigns.'",
+  },
+  {
+    table: "email_campaign_recipients",
+    column: "cand_id",
+    definition:
+      "INT NULL DEFAULT NULL COMMENT 'Legacy: candidate behind this address. NULL for list recipients.'",
+  },
+  {
+    table: "email_campaign_recipients",
+    column: "course_id",
+    definition:
+      "INT NULL DEFAULT NULL COMMENT 'Legacy: course used for per-course quota reporting.'",
+  },
+];
+
+const isNullable = async (table, column) => {
+  const [rows] = await sequelize.query(
+    `SELECT IS_NULLABLE AS nullable
+       FROM information_schema.COLUMNS
+      WHERE TABLE_SCHEMA = DATABASE()
+        AND TABLE_NAME = :table
+        AND COLUMN_NAME = :column`,
+    { replacements: { table, column } }
+  );
+  if (!rows?.length) return null; // column absent
+  return String(rows[0].nullable).toUpperCase() === "YES";
+};
+
+const ensureNullableColumns = async () => {
+  for (const item of REQUIRED_NULLABLE_COLUMNS) {
+    try {
+      const nullable = await isNullable(item.table, item.column);
+
+      // Absent entirely, or already nullable - nothing to do. Checking first
+      // keeps startup quiet on a database that is already correct.
+      if (nullable === null || nullable === true) continue;
+
+      await sequelize.query(
+        `ALTER TABLE \`${item.table}\` MODIFY COLUMN \`${item.column}\` ${item.definition}`
+      );
+      console.log(`[schema] ${item.table}.${item.column} now accepts NULL`);
+    } catch (error) {
+      console.error(
+        `[schema] COULD NOT RELAX ${item.table}.${item.column}: ${error.message}\n` +
+          `[schema] Creating a list campaign will fail until this runs:\n` +
+          `[schema]   ALTER TABLE \`${item.table}\` MODIFY COLUMN \`${item.column}\` ${item.definition};\n` +
+          `[schema] (or apply migration/019_email_module_list_only.sql)`
+      );
+    }
+  }
+};
+
+const getColumnType = async (table, column) => {
+  const [rows] = await sequelize.query(
+    `SELECT COLUMN_TYPE AS type
+       FROM information_schema.COLUMNS
+      WHERE TABLE_SCHEMA = DATABASE()
+        AND TABLE_NAME = :table
+        AND COLUMN_NAME = :column`,
+    { replacements: { table, column } }
+  );
+  return rows?.[0]?.type || null;
+};
+
+const ensureEnumValues = async () => {
+  for (const item of REQUIRED_ENUM_VALUES) {
+    try {
+      const columnType = await getColumnType(item.table, item.column);
+
+      // Column missing entirely: REQUIRED_COLUMNS above owns creating it.
+      if (!columnType) continue;
+
+      // Not an ENUM, so it does not constrain values. Leave it be - replacing a
+      // VARCHAR with an ENUM could truncate a value already stored there.
+      if (!/^enum\(/i.test(columnType)) continue;
+
+      const missing = item.values.filter(
+        (value) => !columnType.includes(`'${value}'`)
+      );
+      if (!missing.length) continue;
+
+      await sequelize.query(
+        `ALTER TABLE \`${item.table}\` MODIFY COLUMN \`${item.column}\` ${item.definition}`
+      );
+      console.log(
+        `[schema] widened ${item.table}.${item.column} to allow ${missing.join(", ")}`
+      );
+    } catch (error) {
+      console.error(
+        `[schema] COULD NOT WIDEN ${item.table}.${item.column}: ${error.message}\n` +
+          `[schema] Creating a campaign will fail with "Data truncated for column '${item.column}'" until this runs:\n` +
+          `[schema]   ALTER TABLE \`${item.table}\` MODIFY COLUMN \`${item.column}\` ${item.definition};\n` +
+          `[schema] (or apply ${item.migration})`
+      );
+    }
+  }
+};
+
 const columnExists = async (table, column) => {
   const [rows] = await sequelize.query(
     `SELECT COUNT(*) AS total
@@ -154,6 +331,17 @@ const ensureSchema = async () => {
       );
     }
   }
+
+  // Order matters. Columns must exist before their type can be reconciled, and
+  // the ENUMs are widened before NOT NULL is relaxed so the second MODIFY
+  // carries the full value list rather than re-narrowing what the first fixed.
+  await ensureEnumValues();
+  await ensureNullableColumns();
 };
 
-module.exports = { ensureSchema, REQUIRED_COLUMNS };
+module.exports = {
+  ensureSchema,
+  REQUIRED_COLUMNS,
+  REQUIRED_ENUM_VALUES,
+  REQUIRED_NULLABLE_COLUMNS,
+};

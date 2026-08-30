@@ -3600,20 +3600,38 @@ export const markTopicCompleted = async (data: {
 // Email campaigns (SuperAdmin only - the server enforces the same)
 // ---------------------------------------------------------------------------
 
+/**
+ * A campaign: a name, a subject, one piece of static HTML, and a list of
+ * addresses uploaded from a spreadsheet.
+ *
+ * The `ec_*` fields marked LEGACY belong to the admissions-era module, when a
+ * campaign was scoped to a center and batch and rendered a built-in letter per
+ * candidate. They are still returned for campaigns sent before that changed,
+ * and are null on every new one.
+ */
 export interface EmailCampaign {
   ec_id: number;
   ec_name: string;
-  tb_id: number;
-  center_id: number;
-  ec_kind: "initial" | "reminder" | "recommendation" | "general";
-  ec_audience?: "candidates" | "students";
-  ec_source_campaign_id?: number | null;
+  ec_subject: string;
+  /** The email body. Static - every recipient receives this exact markup. */
+  ec_custom_html?: string | null;
   ec_target_count: number;
   ec_batch_size: number;
   ec_interval_minutes: number;
   ec_min_gap_seconds: number;
   ec_max_gap_seconds: number;
-  ec_subject: string;
+  ec_status: "draft" | "running" | "paused" | "completed" | "cancelled";
+  ec_last_run_at?: string | null;
+  ec_next_run_at?: string | null;
+  createdAt?: string;
+  stats?: CampaignStats;
+
+  // LEGACY - historical campaigns only.
+  tb_id?: number | null;
+  center_id?: number | null;
+  ec_kind?: "initial" | "reminder" | "recommendation" | "general" | null;
+  ec_audience?: "candidates" | "students" | "list" | null;
+  ec_source_campaign_id?: number | null;
   ec_interview_date?: string | null;
   ec_interview_time?: string | null;
   ec_reporting_time?: string | null;
@@ -3621,14 +3639,6 @@ export interface EmailCampaign {
   ec_contact_person?: string | null;
   ec_contact_phone?: string | null;
   ec_message?: string | null;
-  /** Author-written HTML replacing the built-in letter; null = built-in. */
-  ec_custom_html?: string | null;
-  ec_status: "draft" | "running" | "paused" | "completed" | "cancelled";
-  ec_last_run_at?: string | null;
-  ec_next_run_at?: string | null;
-  center?: { center_id: number; center_name: string };
-  batch?: { tb_id: number; tb_name: string };
-  stats?: CampaignStats;
 }
 
 export interface CampaignStats {
@@ -3639,42 +3649,13 @@ export interface CampaignStats {
   total: number;
 }
 
-export interface CampaignEligibility {
-  success: boolean;
-  alreadyContacted: number;
-  totalAvailable: number;
-  courses: Array<{
-    course_id: number;
-    course_name: string;
-    course_full_name: string;
-    available: number;
-  }>;
-}
-
 const campaignHeaders = () => ({
   Authorization: `Bearer ${getCurrentUserToken()}`,
   "Content-Type": "application/json",
 });
 
-export const getCampaignEligibility = async (
-  tb_id: number,
-  center_id: number,
-  kind = "initial",
-  audience = "candidates"
-) => {
-  const response = await axios.get(`${API_URL}/email-campaigns/eligibility`, {
-    params: { tb_id, center_id, kind, audience },
-    headers: campaignHeaders(),
-  });
-  return response.data as CampaignEligibility;
-};
-
-export const getEmailCampaigns = async (params?: {
-  tb_id?: number;
-  center_id?: number;
-}) => {
+export const getEmailCampaigns = async () => {
   const response = await axios.get(`${API_URL}/email-campaigns`, {
-    params,
     headers: campaignHeaders(),
   });
   return response.data as { success: boolean; campaigns: EmailCampaign[] };
@@ -3688,18 +3669,28 @@ export const getEmailCampaign = async (id: number) => {
     success: boolean;
     campaign: EmailCampaign;
     stats: CampaignStats;
-    perCourse: Array<{
-      course_id: number;
-      course_name: string;
-      total: number;
-      sent: number;
-    }>;
   };
 };
 
+/** One row per address on a campaign's frozen send list. */
+export interface CampaignRecipientRow {
+  ecr_id: number;
+  ecr_email: string;
+  ecr_name: string | null;
+  ecr_status: "pending" | "sent" | "failed" | "skipped";
+  ecr_sent_at: string | null;
+  ecr_attempts: number;
+  ecr_error: string | null;
+}
+
 export const getCampaignRecipients = async (
   id: number,
-  params?: { page?: number; pageSize?: number; status?: string }
+  params?: {
+    page?: number;
+    pageSize?: number;
+    status?: string;
+    search?: string;
+  }
 ) => {
   const response = await axios.get(
     `${API_URL}/email-campaigns/${id}/recipients`,
@@ -3710,27 +3701,41 @@ export const getCampaignRecipients = async (
     total: number;
     page: number;
     pageSize: number;
-    recipients: any[];
+    recipients: CampaignRecipientRow[];
   };
 };
 
-export const createEmailCampaign = async (payload: Record<string, unknown>) => {
+export interface CreateCampaignPayload {
+  ec_name: string;
+  ec_subject: string;
+  /** The email body. Sent to every address exactly as written. */
+  ec_custom_html: string;
+  ec_batch_size: number;
+  ec_interval_minutes: number;
+  ec_min_gap_seconds: number;
+  ec_max_gap_seconds: number;
+  recipientList: UploadedRecipient[];
+  startNow: boolean;
+}
+
+export const createEmailCampaign = async (payload: CreateCampaignPayload) => {
   const response = await axios.post(`${API_URL}/email-campaigns`, payload, {
     headers: campaignHeaders(),
   });
-  return response.data;
+  return response.data as {
+    success: boolean;
+    message: string;
+    campaign: EmailCampaign;
+    queued: number;
+  };
 };
 
-export const createCampaignReminder = async (
-  id: number,
-  payload: Record<string, unknown>
-) => {
-  const response = await axios.post(
-    `${API_URL}/email-campaigns/${id}/reminder`,
-    payload,
-    { headers: campaignHeaders() }
-  );
-  return response.data;
+/** Refused by the server while a campaign is running - pause or cancel first. */
+export const deleteEmailCampaign = async (id: number) => {
+  const response = await axios.delete(`${API_URL}/email-campaigns/${id}`, {
+    headers: campaignHeaders(),
+  });
+  return response.data as { success: boolean; message: string };
 };
 
 export const setCampaignStatus = async (
@@ -3760,47 +3765,12 @@ export const previewCampaignEmail = async (payload: Record<string, unknown>) => 
     payload,
     { headers: campaignHeaders() }
   );
+  // No "rendered for" metadata: the body is static, so the preview is the
+  // message every single recipient receives, not a sample personalised for one.
   return response.data as {
     success: boolean;
-    usedRealCandidate: boolean;
-    /** True when the campaign's own HTML produced this, not the built-in letter. */
-    usedCustomHtml: boolean;
-    /** The recipient this was rendered for - first on the campaign list. */
-    previewOf: { cand_id: number; name: string } | null;
     subject: string;
-    text: string;
     html: string;
-  };
-};
-
-export interface CampaignRecipientRow {
-  cand_id: number;
-  name: string;
-  father_name: string;
-  cnic: string;
-  email: string;
-  phone: string;
-  gender: string;
-  course: string;
-}
-
-/** The exact people a campaign would contact, before it is created. */
-export const previewCampaignRecipients = async (
-  tb_id: number,
-  center_id: number,
-  count: number
-) => {
-  const response = await axios.get(
-    `${API_URL}/email-campaigns/recipients/preview`,
-    { params: { tb_id, center_id, count }, headers: campaignHeaders() }
-  );
-  return response.data as {
-    success: boolean;
-    requested: number;
-    selected: number;
-    available: number;
-    alreadyContacted: number;
-    recipients: CampaignRecipientRow[];
   };
 };
 
@@ -3832,23 +3802,6 @@ const downloadBlob = async (url: string, params: Record<string, unknown>) => {
   // Revoking immediately can cancel the download in some browsers.
   window.setTimeout(() => window.URL.revokeObjectURL(href), 1000);
 };
-
-/** Download the list a campaign WOULD contact, before creating it. */
-export const downloadCampaignRecipientPreview = (
-  tb_id: number,
-  center_id: number,
-  count: number,
-  kind = "initial",
-  audience = "candidates"
-) =>
-  downloadBlob(`${API_URL}/email-campaigns/recipients/preview`, {
-    tb_id,
-    center_id,
-    count,
-    kind,
-    audience,
-    format: "csv",
-  });
 
 /** Download the frozen recipient list of an existing campaign. */
 export const downloadCampaignRecipients = (id: number) =>
@@ -3918,10 +3871,15 @@ export const getEmailVerificationStatus = async (email: string) => {
   return response.data as { success: boolean; verified: boolean };
 };
 
+/**
+ * One address from an uploaded sheet.
+ *
+ * `name` is carried only so the recipient table and CSV export are readable.
+ * It is NOT merged into the email - the body is static.
+ */
 export interface UploadedRecipient {
   email: string;
   name?: string;
-  merge?: Record<string, string>;
   line?: number;
 }
 
@@ -3952,11 +3910,13 @@ export const uploadCampaignRecipientList = async (file: File) => {
 
   return response.data as {
     success: boolean;
-    message: string;
+    message?: string;
+    /** Rows in the file, including any that were skipped. */
+    total: number;
+    /** Usable addresses, after dropping blanks, malformed rows and duplicates. */
+    accepted: number;
     recipients: UploadedRecipient[];
     skipped: Array<{ line: number; email: string; reason: string }>;
-    skippedTotal: number;
-    headers: string[];
-    total: number;
+    maxRows: number;
   };
 };

@@ -117,21 +117,14 @@ const parseRecipientList = (buffer, originalName = "the file") => {
     }
     seen.add(email);
 
-    // Every other column becomes a merge token, so a sheet can carry whatever
-    // the message needs without this parser knowing about it in advance.
-    const merge = {};
-    for (const header of headers) {
-      if (header === emailHeader) continue;
-      const key = normaliseHeader(header);
-      const value = row[header];
-      if (String(value ?? "").trim() === "") continue;
-      merge[key] = String(value).trim();
-    }
-
+    // Only the address and an optional name are kept. Other columns are
+    // ignored rather than collected: the campaign body is static HTML with no
+    // merge tokens, so there is nothing a spreadsheet value could be
+    // substituted into. Extra columns in a file are harmless and do not fail
+    // the upload - operators reuse sheets that carry them.
     recipients.push({
       email,
       name: nameHeader ? String(row[nameHeader] ?? "").trim() : "",
-      merge,
       line,
     });
   });
@@ -142,12 +135,10 @@ const parseRecipientList = (buffer, originalName = "the file") => {
 /**
  * The CSV handed to operators so they know the expected shape.
  *
- * One column. The list is a plain set of addresses and every one of them
- * receives the same message, so nothing else is required.
- *
- * Extra columns are still read if a file happens to carry them - they become
- * merge tokens for a custom template - but nobody has to supply any, and the
- * template deliberately does not suggest otherwise.
+ * One column. Every address receives the same message, so an address is all
+ * that is needed. A "Name" column is read if present, but only so the
+ * recipient table and the CSV export are readable - it never appears in the
+ * email.
  */
 const TEMPLATE_HEADERS = ["Email"];
 
