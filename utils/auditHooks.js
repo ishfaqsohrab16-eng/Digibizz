@@ -35,6 +35,13 @@ const EXCLUDED_MODELS = new Set([
   "ActivityLog",
   "LoginLog",
   "EmailCampaignRecipient",
+  // Bookkeeping written by the mail path itself, not by a person: a daily
+  // send counter and the cleanup list of addresses awaiting contact
+  // deletion. Logging them would fill the change log with machine noise and,
+  // worse, copy every applicant's address into activity_log - which is the
+  // opposite of what the cleanup list exists to do.
+  "EmailSendQuota",
+  "BrevoContact",
 ]);
 
 /** Never written into the change log, whatever the model. */

@@ -10,14 +10,16 @@
 /**
  * The bulk email campaign module.
  *
- * OFF for now, at the program's request. The sidebar entry is hidden and the
- * screen refuses to render.
+ * ON, now that Brevo carries the mail. It was switched off while campaigns
+ * went through the deployment's own SMTP server, which could not be relied on
+ * to deliver anything.
  *
- * To bring it back, set this to true AND set EMAIL_CAMPAIGNS_ENABLED=true in
- * the server environment. Turning on only one of the two gives either a visible
- * screen whose every request fails with 503, or live endpoints nothing calls.
+ * Setting this to false hides the sidebar entry and makes the screen refuse to
+ * render. Do it together with EMAIL_CAMPAIGNS_ENABLED=false on the server:
+ * changing only one gives either a visible screen whose every request fails
+ * with 503, or live endpoints nothing calls.
  *
  * Registration codes, password resets and notification email are unaffected:
  * that is transactional mail and was never part of this module.
  */
-export const EMAIL_CAMPAIGNS_ENABLED = false;
+export const EMAIL_CAMPAIGNS_ENABLED = true;

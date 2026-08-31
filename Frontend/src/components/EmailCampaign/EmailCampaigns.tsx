@@ -1,7 +1,11 @@
 import React, { useCallback, useEffect, useState } from "react";
 import { Loader2, Mail, Plus, ShieldAlert } from "lucide-react";
 import { toast } from "sonner";
-import { EmailCampaign, getEmailCampaigns } from "../../services/api";
+import {
+  EmailCampaign,
+  SendingAllowance,
+  getEmailCampaigns,
+} from "../../services/api";
 import { useBatch } from "../../context/BatchContext";
 import { isRole, ROLE } from "../../utils/roles";
 import SettingsHeader from "../Settings/SettingsHeader";
@@ -28,6 +32,7 @@ const EmailCampaigns: React.FC = () => {
   const canManage = isRole(userType, ROLE.SUPER_ADMIN);
 
   const [campaigns, setCampaigns] = useState<EmailCampaign[]>([]);
+  const [allowance, setAllowance] = useState<SendingAllowance | null>(null);
   const [loading, setLoading] = useState(true);
   const [view, setView] = useState<"list" | "create">("list");
   const [openCampaignId, setOpenCampaignId] = useState<number | null>(null);
@@ -41,6 +46,7 @@ const EmailCampaigns: React.FC = () => {
     try {
       const response = await getEmailCampaigns();
       setCampaigns(response.campaigns || []);
+      setAllowance(response.allowance || null);
     } catch (error: any) {
       toast.error(
         error?.response?.data?.message ||
@@ -100,6 +106,28 @@ const EmailCampaigns: React.FC = () => {
         SettingsHeader="Email Campaigns"
         SettingDescription="Your own HTML, sent to a center's candidates, its students, or an uploaded list"
       />
+
+      {/* Only meaningful on a metered provider. On plain SMTP there is no
+          daily allowance to report, and inventing one would be misleading. */}
+      {allowance && allowance.provider === "brevo" && (
+        <div className="mt-4 flex flex-wrap items-center gap-x-6 gap-y-1 rounded-md border border-slate-200 bg-slate-50 px-4 py-2.5 text-xs text-slate-600">
+          <span>
+            <strong className="text-slate-900">
+              {allowance.remainingForCampaigns}
+            </strong>{" "}
+            campaign email(s) left today
+          </span>
+          <span>
+            {allowance.total} of {allowance.dailyLimit} sent
+          </span>
+          <span>
+            {allowance.reserve} held back for registration codes
+          </span>
+          <span className="text-slate-500">
+            A campaign larger than this continues tomorrow.
+          </span>
+        </div>
+      )}
 
       {view === "create" ? (
         <div className="mt-6">

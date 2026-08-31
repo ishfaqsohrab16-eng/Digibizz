@@ -51,6 +51,12 @@ const emailCampaignRoutes = require("./routes/emailCampaignRoutes");
 const emailVerificationRoutes = require("./routes/emailVerificationRoutes");
 
 require("./models/courseModuleAssociation");
+// Registered explicitly so sync() creates their tables on first boot.
+// Nothing requires them before sync otherwise - only the dispatcher and the
+// contact sweeper do, and both load later - which would leave them writing
+// to tables that do not exist yet.
+require("./models/emailSendQuotaModel");
+require("./models/brevoContactModel");
 const app = express();
 
 // Security Middleware
@@ -236,6 +242,12 @@ verifyTransport();
 // restart mid-campaign picks up exactly where it stopped without re-sending.
 const emailCampaignDispatcher = require("./utils/emailCampaignDispatcher");
 emailCampaignDispatcher.start();
+
+// Remove the Brevo contact for every address mailed, a day after mailing it,
+// so the provider account does not accumulate a copy of everyone who ever
+// applied. No-op unless Brevo is the provider.
+const brevoContactCleanup = require("./utils/brevoContactCleanup");
+brevoContactCleanup.start();
 
 const PORT = process.env.PORT || 5000;
 

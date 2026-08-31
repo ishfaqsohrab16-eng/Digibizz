@@ -1,8 +1,13 @@
 const { Op } = require("sequelize");
 const EmailCampaign = require("../models/emailCampaignModel");
 const EmailCampaignRecipient = require("../models/emailCampaignRecipientModel");
-const { sendEmail, isConfigured } = require("../servec/emailConfig");
+const {
+  sendEmail,
+  isConfigured,
+  provider,
+} = require("../servec/emailConfig");
 const { EMAIL_CAMPAIGNS_ENABLED } = require("../config/features");
+const quota = require("./emailQuota");
 // Candidate, Student, Course, Center, TrainingBatch and the campaign template
 // renderers are deliberately NOT imported any more. A campaign no longer
 // resolves people out of the database or picks a built-in letter: it sends one
@@ -110,6 +115,30 @@ const computeNextRunAt = (campaign, from = new Date()) => {
   return new Date(from.getTime() + Math.max(30000, Math.round(jittered)));
 };
 
+/**
+ * The next moment the daily allowance could possibly have refilled.
+ *
+ * Used when a chunk stops because the day's sending is spent. Retrying in
+ * fifteen minutes would just fail again, fifty times before midnight, and
+ * fill the log with it. Ten past midnight in the program's own timezone -
+ * ten minutes of slack because the provider's reset and ours are not
+ * guaranteed to agree to the second.
+ */
+const nextAllowanceReset = (from = new Date()) => {
+  // Where midnight falls depends on the timezone the quota is counted in,
+  // so the offset is measured rather than assumed.
+  const local = new Date(
+    from.toLocaleString("en-US", { timeZone: quota.TIMEZONE })
+  );
+  const offsetMs = from.getTime() - local.getTime();
+
+  const tomorrow = new Date(local);
+  tomorrow.setDate(tomorrow.getDate() + 1);
+  tomorrow.setHours(0, 10, 0, 0);
+
+  return new Date(tomorrow.getTime() + offsetMs);
+};
+
 /** Random pause between two individual messages, in milliseconds. */
 const perMessageDelayMs = (campaign) => {
   const min = Math.max(0, Number(campaign.ec_min_gap_seconds) || 0);
@@ -213,6 +242,7 @@ const sendChunk = async (campaign) => {
   const { subject, html } = renderCampaign(campaign);
 
   let sent = 0;
+  let stoppedForQuota = false;
 
   for (let index = 0; index < recipients.length; index += 1) {
     const recipient = recipients[index];
@@ -222,6 +252,14 @@ const sendChunk = async (campaign) => {
     // the whole chunk.
     await campaign.reload();
     if (campaign.ec_status !== "running") break;
+
+    // Checked per message, not once per chunk: several campaigns can be
+    // draining at the same time, and registration codes are being sent
+    // alongside them, so the budget moves underneath a long chunk.
+    if (provider === "brevo" && (await quota.campaignBudget()) <= 0) {
+      stoppedForQuota = true;
+      break;
+    }
 
     try {
       await sendEmail({ to: recipient.ecr_email, subject, html });
@@ -253,7 +291,18 @@ const sendChunk = async (campaign) => {
     }
   }
 
-  return sent;
+  if (stoppedForQuota) {
+    const usage = await quota.describe();
+    console.log(
+      `[campaign ${campaign.ec_id}] stopped after ${sent} message(s): today's allowance is spent ` +
+        `(${usage.total}/${usage.dailyLimit}, ${usage.reserve} held back for registration codes). ` +
+        "The rest of this campaign goes out tomorrow."
+    );
+  }
+
+  // The flag rides back on the count so runCampaign can reschedule for
+  // tomorrow rather than for the usual interval.
+  return { sent, stoppedForQuota };
 };
 
 /** Mark a campaign completed once nothing is left that could still be sent. */
@@ -281,7 +330,7 @@ const runCampaign = async (campaign) => {
 
     if (!isConfigured) {
       console.error(
-        `[campaign ${campaign.ec_id}] SMTP is not configured - pausing instead of failing every recipient`
+        `[campaign ${campaign.ec_id}] no email provider is configured - pausing instead of failing every recipient`
       );
       await campaign.update({ ec_status: "paused" });
       return;
@@ -289,7 +338,7 @@ const runCampaign = async (campaign) => {
 
     // Claim the slot before any awaiting work so the next poll, which may fire
     // while this chunk is still draining, skips this campaign.
-    const sent = await sendChunk(campaign);
+    const { sent, stoppedForQuota } = await sendChunk(campaign);
     const finishedAt = new Date();
 
     await campaign.reload();
@@ -297,7 +346,9 @@ const runCampaign = async (campaign) => {
 
     await campaign.update({
       ec_last_run_at: finishedAt,
-      ec_next_run_at: computeNextRunAt(campaign, finishedAt),
+      ec_next_run_at: stoppedForQuota
+        ? nextAllowanceReset(finishedAt)
+        : computeNextRunAt(campaign, finishedAt),
     });
 
     console.log(
@@ -402,6 +453,7 @@ module.exports = {
   sendTestCopies,
   TEST_RECIPIENTS,
   computeNextRunAt,
+  nextAllowanceReset,
   perMessageDelayMs,
   MAX_ATTEMPTS,
   MAX_CONCURRENT_CAMPAIGNS,

@@ -3654,11 +3654,35 @@ const campaignHeaders = () => ({
   "Content-Type": "application/json",
 });
 
+/**
+ * What is left of today's sending allowance.
+ *
+ * Brevo's free plan is 300 emails a day across everything, and part of it is
+ * held back for registration codes - so a campaign larger than what remains
+ * finishes tomorrow. Shown on the screen because an operator who is not told
+ * reads that pause as a fault.
+ */
+export interface SendingAllowance {
+  provider: string;
+  date: string;
+  total: number;
+  transactional: number;
+  campaign: number;
+  dailyLimit: number;
+  reserve: number;
+  remainingForCampaigns: number;
+  remainingTotal: number;
+}
+
 export const getEmailCampaigns = async () => {
   const response = await axios.get(`${API_URL}/email-campaigns`, {
     headers: campaignHeaders(),
   });
-  return response.data as { success: boolean; campaigns: EmailCampaign[] };
+  return response.data as {
+    success: boolean;
+    campaigns: EmailCampaign[];
+    allowance?: SendingAllowance;
+  };
 };
 
 export const getEmailCampaign = async (id: number) => {

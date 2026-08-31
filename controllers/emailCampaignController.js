@@ -9,7 +9,8 @@ const {
   MAX_ROWS,
 } = require("../utils/recipientListParser");
 const { STARTER_HTML } = require("../servec/campaignTemplates");
-const { isConfigured } = require("../servec/emailConfig");
+const { isConfigured, provider } = require("../servec/emailConfig");
+const quota = require("../utils/emailQuota");
 
 /**
  * Email campaigns: upload a list of addresses, write an email, send it slowly.
@@ -309,12 +310,22 @@ exports.listCampaigns = async (_req, res) => {
 
     const stats = await statsFor(campaigns.map((c) => c.ec_id));
 
+    // The day's remaining allowance travels with the list because it is the
+    // number that decides whether a campaign created now goes out today. On
+    // Brevo's free plan a 500-address campaign is two days of sending, and an
+    // operator who is not told that reads the pause as a fault.
+    const allowance = await quota.describe();
+
     return res.json({
       success: true,
       campaigns: campaigns.map((campaign) => ({
         ...campaign.toJSON(),
         stats: stats[campaign.ec_id] || { ...EMPTY_STATS },
       })),
+      allowance: {
+        provider,
+        ...allowance,
+      },
     });
   } catch (error) {
     console.error("Error listing campaigns:", error);

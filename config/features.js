@@ -35,7 +35,11 @@ const envFlag = (name, fallback) => {
 /**
  * The bulk email campaign module.
  *
- * OFF for now, at the program's request. While it is off:
+ * ON, now that Brevo carries the mail. It was switched off while campaigns
+ * went through this deployment's own SMTP server, which could not be relied
+ * on to deliver anything.
+ *
+ * While it is off:
  *   - the sidebar entry is hidden and the screen refuses to render,
  *   - every /api/email-campaigns endpoint answers 503,
  *   - the dispatcher does not start, so nothing queued goes out.
@@ -47,6 +51,6 @@ const envFlag = (name, fallback) => {
  * Transactional mail (registration codes, password resets, notifications) is
  * NOT affected by this switch. It never was part of this module.
  */
-const EMAIL_CAMPAIGNS_ENABLED = envFlag("EMAIL_CAMPAIGNS_ENABLED", false);
+const EMAIL_CAMPAIGNS_ENABLED = envFlag("EMAIL_CAMPAIGNS_ENABLED", true);
 
 module.exports = { EMAIL_CAMPAIGNS_ENABLED, envFlag };

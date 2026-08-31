@@ -1,5 +1,34 @@
 require("dotenv").config();
 const nodemailer = require("nodemailer");
+const {
+  sendViaBrevo,
+  verifyBrevo,
+  isBrevoConfigured,
+  SENDER_EMAIL: BREVO_SENDER,
+} = require("./providers/brevo");
+
+/**
+ * Required lazily. This file is loaded by standalone scripts that have no
+ * database, and the quota counter is only consulted when Brevo is carrying
+ * the mail - so nothing here should pull in a model at require time.
+ */
+let quotaModule = null;
+const quota = () => {
+  if (!quotaModule) {
+    // eslint-disable-next-line global-require
+    quotaModule = require("../utils/emailQuota");
+  }
+  return quotaModule;
+};
+
+let cleanupModule = null;
+const contactCleanup = () => {
+  if (!cleanupModule) {
+    // eslint-disable-next-line global-require
+    cleanupModule = require("../utils/brevoContactCleanup");
+  }
+  return cleanupModule;
+};
 
 /**
  * SMTP configuration.
@@ -33,20 +62,77 @@ const SMTP_FROM_ADDRESS = process.env.SMTP_FROM || SMTP_USER;
 const SMTP_FROM_NAME = process.env.SMTP_FROM_NAME || "Digibizz Program";
 const SMTP_DEBUG = String(process.env.SMTP_DEBUG).toLowerCase() === "true";
 
-const isConfigured = Boolean(SMTP_HOST && SMTP_USER && SMTP_PASS);
+const isSmtpConfigured = Boolean(SMTP_HOST && SMTP_USER && SMTP_PASS);
+
+/**
+ * Which service actually carries the mail.
+ *
+ * "auto" (the default) uses Brevo when a key is present and falls back to
+ * this deployment's own SMTP server otherwise, so adding BREVO_API_KEY to the
+ * environment is the whole of the switchover and removing it is the whole of
+ * the rollback. Force one or the other with EMAIL_PROVIDER=brevo | smtp.
+ *
+ * Brevo is preferred where available because it is an HTTPS request to a
+ * public host, which an application container can always make - unlike SMTP
+ * to a mail server sitting behind the same NAT, which is where this
+ * deployment's undelivered registration codes came from.
+ */
+const EMAIL_PROVIDER = String(process.env.EMAIL_PROVIDER || "auto")
+  .trim()
+  .toLowerCase();
+
+const provider =
+  EMAIL_PROVIDER === "brevo"
+    ? "brevo"
+    : EMAIL_PROVIDER === "smtp"
+    ? "smtp"
+    : isBrevoConfigured
+    ? "brevo"
+    : "smtp";
+
+/**
+ * Fall back to SMTP for mail somebody is waiting on.
+ *
+ * Only for transactional mail, and only after Brevo has definitively
+ * failed - most usefully when the free plan's daily allowance is spent, which
+ * would otherwise stop applicants registering for the rest of the day. Never
+ * for campaign mail: a fallback there could mail a real applicant twice.
+ */
+const FALLBACK_TO_SMTP =
+  String(process.env.EMAIL_FALLBACK_TO_SMTP || "true").toLowerCase() !== "false" &&
+  isSmtpConfigured;
+
+/** True when SOMETHING can send. Callers use this to refuse work early. */
+const isConfigured = provider === "brevo" ? isBrevoConfigured : isSmtpConfigured;
 
 if (!isConfigured) {
-  console.error(
-    "[email] SMTP is not configured. Missing:",
-    [
-      !SMTP_HOST && "SMTP_HOST",
-      !SMTP_USER && "SMTP_USER",
-      !SMTP_PASS && "SMTP_PASS",
-    ]
-      .filter(Boolean)
-      .join(", "),
-    "- no emails will be sent."
-  );
+  if (provider === "brevo") {
+    console.error(
+      "[email] Brevo is selected but not configured. Missing:",
+      [
+        !process.env.BREVO_API_KEY && "BREVO_API_KEY",
+        !(process.env.BREVO_SENDER_EMAIL || SMTP_FROM_ADDRESS) &&
+          "BREVO_SENDER_EMAIL (or SMTP_FROM)",
+      ]
+        .filter(Boolean)
+        .join(", "),
+      "- no emails will be sent."
+    );
+  } else {
+    console.error(
+      "[email] SMTP is not configured. Missing:",
+      [
+        !SMTP_HOST && "SMTP_HOST",
+        !SMTP_USER && "SMTP_USER",
+        !SMTP_PASS && "SMTP_PASS",
+      ]
+        .filter(Boolean)
+        .join(", "),
+      "- no emails will be sent."
+    );
+  }
+} else {
+  console.log(`[email] sending through ${provider}`);
 }
 
 const baseTransportOptions = {
@@ -215,6 +301,102 @@ const renderLayout = (subject, bodyHtml) => `
  * sections. The previous implementation rendered both, so recipients saw every
  * message twice. `html` wins when it has content; otherwise `text` is used.
  */
+/**
+ * Whether a failed Brevo send may be tried again.
+ *
+ * 429 is Brevo asking us to slow down - it did not take the message, so a
+ * retry cannot duplicate it, and that holds for campaign mail too. Any other
+ * transient failure might have been accepted before the connection broke, so
+ * only mail where a duplicate is harmless (a code, which is the same code
+ * either way) is retried.
+ */
+const mayRetryBrevo = (error, attempt, options) => {
+  if (attempt >= 2) return false;
+  if (!error?.retryable) return false;
+  if (error.status === 429) return true;
+  return Boolean(options.priority);
+};
+
+/** Send through Brevo, counting it against the day's allowance. */
+const sendThroughBrevo = async (options, bodyHtml, bodyText) => {
+  const kind = options.priority ? "transactional" : "campaign";
+
+  // A campaign must not spend the allowance registration codes depend on.
+  // Checked before the request so the refusal explains itself, rather than
+  // arriving as Brevo's generic credit error several hundred sends later.
+  if (kind === "campaign") {
+    const budget = await quota().campaignBudget();
+    if (budget <= 0) {
+      const usage = await quota().describe();
+      const error = new Error(
+        `Today's campaign allowance is used up: ${usage.total} of ${usage.dailyLimit} sent, ` +
+          `with ${usage.reserve} held back for registration codes. Sending resumes tomorrow.`
+      );
+      error.code = "EQUOTA";
+      error.quotaExceeded = true;
+      throw error;
+    }
+  }
+
+  let lastError = null;
+
+  for (let attempt = 1; attempt <= 2; attempt += 1) {
+    const startedAt = Date.now();
+    try {
+      const info = await sendViaBrevo({
+        to: options.to,
+        subject: options.subject,
+        html: bodyHtml,
+        text: bodyText,
+        replyTo: options.replyTo || process.env.SMTP_REPLY_TO || undefined,
+        cc: options.cc,
+        bcc: options.bcc,
+        attachments: options.attachments,
+        tags: [kind],
+      });
+
+      console.log(
+        `[email] sent "${options.subject}" to ${options.to}`,
+        "| via=brevo",
+        `| id=${info.messageId}`,
+        `| ms=${Date.now() - startedAt}`,
+        `| attempt=${attempt}`
+      );
+
+      // After the send, never before: a counter that ran ahead of reality
+      // would refuse sends that the day still had room for.
+      await quota().record(kind);
+
+      // Note the address so its Brevo contact, if one was created, is
+      // removed a day from now. Best-effort inside: a bookkeeping failure
+      // must not turn a delivered email into an error.
+      for (const address of info.accepted || []) {
+        await contactCleanup().remember(address);
+      }
+
+      return info;
+    } catch (error) {
+      lastError = error;
+      console.error(
+        `[email] FAILED to send "${options.subject}" to ${options.to} via brevo:`,
+        `status=${error.status || "-"}`,
+        `code=${error.code || "-"}`,
+        `ms=${Date.now() - startedAt}`,
+        `attempt=${attempt}`,
+        error.message
+      );
+
+      if (mayRetryBrevo(error, attempt, options)) {
+        await new Promise((resolve) => setTimeout(resolve, 750));
+        continue;
+      }
+      throw error;
+    }
+  }
+
+  throw lastError || new Error("sendThroughBrevo: no attempt was made");
+};
+
 const sendEmail = async (to, subject, text, html) => {
   const options =
     to && typeof to === "object" && !Array.isArray(to)
@@ -223,7 +405,9 @@ const sendEmail = async (to, subject, text, html) => {
 
   if (!isConfigured) {
     throw new Error(
-      "SMTP is not configured (SMTP_HOST / SMTP_USER / SMTP_PASS missing)"
+      provider === "brevo"
+        ? "Brevo is not configured (BREVO_API_KEY / BREVO_SENDER_EMAIL missing)"
+        : "SMTP is not configured (SMTP_HOST / SMTP_USER / SMTP_PASS missing)"
     );
   }
 
@@ -242,6 +426,21 @@ const sendEmail = async (to, subject, text, html) => {
     options.text && String(options.text).trim()
       ? options.text
       : htmlToText(options.html);
+
+  if (provider === "brevo") {
+    try {
+      return await sendThroughBrevo(options, bodyHtml, bodyText);
+    } catch (error) {
+      // Only mail somebody is sitting in front of a form waiting for falls
+      // back, and only when there is an SMTP server to fall back to. The
+      // case this exists for is the free plan's daily allowance running out,
+      // which would otherwise stop applicants registering until midnight.
+      if (!(options.priority && FALLBACK_TO_SMTP)) throw error;
+      console.warn(
+        `[email] brevo failed for "${options.subject}" (${error.message}); falling back to SMTP`
+      );
+    }
+  }
 
   const activeTransport = options.priority ? priorityTransporter : transporter;
 
@@ -347,8 +546,7 @@ const sendPriorityEmail = async (to, subject, text, html) => {
 };
 
 /** Check host reachability + credentials without sending a message. */
-const verifyTransport = async () => {
-  if (!isConfigured) return false;
+const verifySmtp = async () => {
   try {
     // Both transports. The transactional one is unpooled, so this leaves no
     // warm connection behind - it proves the host, TLS and credentials work
@@ -366,6 +564,46 @@ const verifyTransport = async () => {
   }
 };
 
+/** Check host reachability + credentials without sending a message. */
+const verifyTransport = async () => {
+  if (!isConfigured) return false;
+
+  if (provider === "brevo") {
+    try {
+      const account = await verifyBrevo();
+      console.log(
+        `[email] Brevo ready: ${account.email}`,
+        `| plan=${account.planType || "-"}`,
+        `| remaining today=${account.credits ?? "-"}`,
+        `| from=${BREVO_SENDER}`
+      );
+
+      // Checked but not required: the fallback is a convenience, and a
+      // broken SMTP server must not make a working Brevo look unhealthy.
+      if (FALLBACK_TO_SMTP) {
+        verifySmtp().then((ok) => {
+          if (!ok) {
+            console.warn(
+              "[email] the SMTP fallback is not usable; if Brevo runs out of",
+              "allowance, registration codes will fail until tomorrow"
+            );
+          }
+        });
+      }
+      return true;
+    } catch (error) {
+      console.error(
+        "[email] Brevo verification failed:",
+        `status=${error.status || "-"}`,
+        error.message
+      );
+      return false;
+    }
+  }
+
+  return verifySmtp();
+};
+
 module.exports = sendEmail;
 module.exports.sendEmail = sendEmail;
 module.exports.sendEmailSafe = sendEmailSafe;
@@ -377,3 +615,7 @@ module.exports.escapeHtml = escapeHtml;
 // Exported for the retry tests in ./emailConfig.test.js.
 module.exports.isRetryable = isRetryable;
 module.exports.isConfigured = isConfigured;
+/** "brevo" or "smtp" - which service is actually carrying the mail. */
+module.exports.provider = provider;
+module.exports.isBrevoConfigured = isBrevoConfigured;
+module.exports.isSmtpConfigured = isSmtpConfigured;
