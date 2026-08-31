@@ -110,12 +110,13 @@ exports.registerStudent = async (req, res) => {
     await transaction.commit();
     // Welcome email is best-effort: the student is already committed, so a mail
     // failure here must not roll back (impossible) or return an error.
-    sendEmailSafe(
-      user_email,
-      "Welcome to DigiBizz LMS",
-      `Dear ${user_name},\n\nYou are part of the DIGIBIZZ training. Kindly create your account in the DIGIBIZZ LMS and start your learning journey together.`,
-      `<p>Dear <strong>${escapeHtml(user_name)}</strong>,</p><p>You are part of the DIGIBIZZ training. Kindly create your account in the DIGIBIZZ LMS and start your learning journey together.</p>`
-    );
+    sendEmailSafe({
+      to: user_email,
+      subject: "Welcome to DigiBizz LMS",
+      text: `Dear ${user_name},\n\nYou are part of the DIGIBIZZ training. Kindly create your account in the DIGIBIZZ LMS and start your learning journey together.`,
+      html: `<p>Dear <strong>${escapeHtml(user_name)}</strong>,</p><p>You are part of the DIGIBIZZ training. Kindly create your account in the DIGIBIZZ LMS and start your learning journey together.</p>`,
+      priority: true,
+    });
     // Send success response
     res.status(201).json({
       status: "success",

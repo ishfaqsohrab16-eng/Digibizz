@@ -92,7 +92,7 @@ const sendApplicationReceivedEmail = async (candidate) => {
       appliedOn: candidate.cand_apply_date,
     });
 
-    await sendEmailSafe({ to: candidate.cand_email, subject, text, html });
+    await sendEmailSafe({ to: candidate.cand_email, subject, text, html, priority: true });
   } catch (error) {
     // Confirmation mail is best-effort; the application itself is already saved.
     console.error(

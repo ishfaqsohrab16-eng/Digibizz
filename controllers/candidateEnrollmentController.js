@@ -315,7 +315,10 @@ const sendWelcomeEmail = async (
       note: schedule.cs_note,
     });
 
-    sendEmailSafe({ to: email, subject, text, html });
+    // These are transactional emails a student is actively waiting on, so if
+    // Brevo has hit its allowance the app should fall back to the local SMTP
+    // server rather than silently dropping the welcome message.
+    sendEmailSafe({ to: email, subject, text, html, priority: true });
   } catch (error) {
     console.error(
       `[enroll] could not build the welcome email for ${email}:`,
