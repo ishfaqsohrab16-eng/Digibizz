@@ -10,6 +10,31 @@ const {
   ADMIN_ROLES,
 } = require("../middleware/authMiddleware");
 const upload = require("../middleware/uploadCandidates");
+const multer = require("multer");
+
+/**
+ * The CNIC list is parsed and thrown away, never stored, so it is kept in
+ * memory rather than written to disk - an uploaded list of national ID
+ * numbers left lying in uploads/ is a liability nobody would remember to
+ * clear.
+ */
+const cnicUpload = multer({
+  storage: multer.memoryStorage(),
+  limits: { fileSize: 2 * 1024 * 1024 },
+  fileFilter: (req, file, cb) => {
+    // Browsers disagree about the MIME type of a .csv, so the extension is
+    // accepted as well - otherwise a perfectly good file is refused.
+    const allowed = [
+      "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+      "application/vnd.ms-excel",
+      "text/csv",
+      "application/csv",
+      "text/plain",
+    ];
+    const byExtension = /.(xlsx|xls|csv)$/i.test(file.originalname || "");
+    cb(null, allowed.includes(file.mimetype) || byExtension);
+  },
+});
 const {
   checkCandidateByCnic,
   updateTestMarks,
@@ -61,6 +86,34 @@ router.post(
   isAdminAuthenticated,
   requireRoles(ADMIN_ROLES),
   candidateEnrollmentController.enrollCandidate
+);
+
+// --- Bulk enrolment from an uploaded CNIC list ------------------------------
+//
+// Same guard as the single enrolment above: these create real LMS accounts,
+// in bulk, so they are not a step down in privilege from doing it by hand.
+router.get(
+  "/bulk-enroll/template",
+  isAdminAuthenticated,
+  requireRoles(ADMIN_ROLES),
+  candidateEnrollmentController.downloadCnicTemplate
+);
+
+// Dry run. Writes nothing; says who would be enrolled and who would not.
+router.post(
+  "/bulk-enroll/preview",
+  isAdminAuthenticated,
+  requireRoles(ADMIN_ROLES),
+  cnicUpload.single("file"),
+  candidateEnrollmentController.previewBulkEnrollment
+);
+
+router.post(
+  "/bulk-enroll",
+  isAdminAuthenticated,
+  requireRoles(ADMIN_ROLES),
+  cnicUpload.single("file"),
+  candidateEnrollmentController.bulkEnrollByCnic
 );
 
 // --- Center / domain change (SuperAdmin only, pre-enrollment) ----------------

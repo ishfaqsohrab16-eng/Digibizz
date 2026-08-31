@@ -7,6 +7,7 @@ import {
   Ban,
   UserPlus,
   ChevronDown,
+  Upload,
 } from "lucide-react";
 import {
   getCandidateProfile,
@@ -26,6 +27,7 @@ import { DivisionsSummary } from "./DivisionsSummary";
 import AddmitionSummary from "./AddmitionSummary";
 import CenterDomainChange from "./CenterDomainChange";
 import EnrollCandidateDialog from "./EnrollCandidateDialog";
+import BulkEnrollDialog from "./BulkEnrollDialog";
 import { isAdmin } from "../../utils/roles";
 
 interface AdmissionPortalProps {
@@ -167,6 +169,7 @@ function AdmissionPortal() {
   const [columns, setColumns] = useState<Column[]>(DEFAULT_COLUMNS);
   const [filterBy, setFilterBy] = useState<FilterBy[]>(DEFAULT_FILTER_BY);
   const [candidateToEnroll, setCandidateToEnroll] = useState<number | null>(null);
+  const [bulkEnrollOpen, setBulkEnrollOpen] = useState(false);
 
   // Enrolling creates a real student and LMS account, so it is limited to the
   // admin-style roles. The server enforces the same list.
@@ -476,6 +479,26 @@ function AdmissionPortal() {
         {/* Add conditional rendering for other tabs */}
         {activeTab === "admissionsSummary" && <AddmitionSummary />}
         {activeTab === "allCandidates" && (
+          <>
+            {/* An interview panel finishes with a list of CNICs, not with
+                somebody sitting at this table clicking Enroll two hundred
+                times. The button sits above the list it acts on. */}
+            {canEnroll && (
+              <div className="mb-3 flex justify-end">
+                <button
+                  onClick={() => setBulkEnrollOpen(true)}
+                  disabled={!selectedBatchId}
+                  title={
+                    selectedBatchId
+                      ? undefined
+                      : "Select a training batch first"
+                  }
+                  className="inline-flex items-center gap-2 rounded-md bg-emerald-600 px-4 py-2 text-sm font-semibold text-white hover:bg-emerald-700 disabled:cursor-not-allowed disabled:opacity-40"
+                >
+                  <Upload className="h-4 w-4" /> Enrol from CNIC list
+                </button>
+              </div>
+            )}
           <DataTable
             data={candidateData.candidates}
             columns={columns}
@@ -501,6 +524,7 @@ function AdmissionPortal() {
                 : undefined
             }
           />
+          </>
         )}
         {/* This tab had a button but no render branch, so it showed a blank page. */}
         {activeTab === "centerDomainChange" && <CenterDomainChange />}
@@ -509,6 +533,14 @@ function AdmissionPortal() {
         <EnrollCandidateDialog
           candId={candidateToEnroll}
           onClose={() => setCandidateToEnroll(null)}
+          onEnrolled={() => fetchCandidateProfile()}
+        />
+
+        <BulkEnrollDialog
+          open={bulkEnrollOpen}
+          tbId={selectedBatchId}
+          batchName={selectedBatchName}
+          onClose={() => setBulkEnrollOpen(false)}
           onEnrolled={() => fetchCandidateProfile()}
         />
       </main>

@@ -2885,6 +2885,138 @@ export const getEnrollmentPreview = async (
   }
 };
 
+
+// ---------------------------------------------------------------------------
+// Bulk enrolment from an uploaded CNIC list
+// ---------------------------------------------------------------------------
+
+/** What the server says will happen - or did happen - to one row of the file. */
+export type BulkEnrollStatus =
+  | "ready"
+  | "enrolled"
+  | "already_enrolled"
+  | "not_recommended"
+  | "not_found"
+  | "no_email"
+  | "email_taken"
+  | "failed";
+
+export interface BulkEnrollRow {
+  cnic: string;
+  /** The CNIC in the form printed on the card, for showing back. */
+  formatted: string;
+  /** The spreadsheet row it came from, so a problem can be found and fixed. */
+  line: number;
+  status: BulkEnrollStatus;
+  message: string;
+  cand_id?: number;
+  name?: string;
+  email?: string;
+  std_rollno?: string;
+  /** True when this person was not marked recommended but is enrolled anyway. */
+  unrecommended?: boolean;
+}
+
+/** A row that could not be read as a CNIC at all. */
+export interface BulkEnrollSkippedRow {
+  line: number;
+  raw: string;
+  reason: string;
+}
+
+export interface BulkEnrollSummary {
+  readable: number;
+  ready: number;
+  already_enrolled: number;
+  /** Only the single-enrolment path produces this; a bulk upload never does. */
+  not_recommended: number;
+  /** Being enrolled despite no recommendation, so the count is visible. */
+  unrecommended_included: number;
+  not_found: number;
+  no_email: number;
+  email_taken: number;
+  unreadable: number;
+}
+
+export interface BulkEnrollPreview {
+  success: boolean;
+  rowsInFile: number;
+  summary: BulkEnrollSummary;
+  plan: BulkEnrollRow[];
+  skipped: BulkEnrollSkippedRow[];
+}
+
+export interface BulkEnrollResult {
+  success: boolean;
+  message: string;
+  rowsInFile: number;
+  enrolled: number;
+  failed: number;
+  results: BulkEnrollRow[];
+  skipped: BulkEnrollSkippedRow[];
+  note?: string;
+}
+
+/**
+ * Download the CSV template.
+ *
+ * Fetched as a blob rather than linked to directly: the endpoint needs the
+ * Authorization header, which a plain <a href> cannot send.
+ */
+export const downloadEnrollmentCnicTemplate = async () => {
+  const response = await axios.get(
+    `${API_URL}/candidateRoutes/bulk-enroll/template`,
+    {
+      headers: { Authorization: `Bearer ${getCurrentUserToken()}` },
+      responseType: "blob",
+    }
+  );
+
+  const url = window.URL.createObjectURL(new Blob([response.data]));
+  const link = document.createElement("a");
+  link.href = url;
+  link.setAttribute("download", "enrollment-cnic-template.csv");
+  document.body.appendChild(link);
+  link.click();
+  link.remove();
+  window.URL.revokeObjectURL(url);
+};
+
+/** Dry run: says who would be enrolled, without writing anything. */
+export const previewBulkEnrollment = async (file: File, tbId: number | string) => {
+  const form = new FormData();
+  form.append("file", file);
+  form.append("tb_id", String(tbId));
+
+  const response = await axios.post(
+    `${API_URL}/candidateRoutes/bulk-enroll/preview`,
+    form,
+    { headers: { Authorization: `Bearer ${getCurrentUserToken()}` } }
+  );
+  return response.data as BulkEnrollPreview;
+};
+
+/**
+ * Enrol everyone in the file who is eligible.
+ *
+ * The file is sent again rather than a list of ids from the preview: the
+ * server re-checks against the database as it is now, so a candidate enrolled
+ * by hand in the meantime is not enrolled twice.
+ */
+export const bulkEnrollByCnic = async (file: File, tbId: number | string) => {
+  const form = new FormData();
+  form.append("file", file);
+  form.append("tb_id", String(tbId));
+
+  const response = await axios.post(`${API_URL}/candidateRoutes/bulk-enroll`, form, {
+    headers: { Authorization: `Bearer ${getCurrentUserToken()}` },
+    // Hundreds of enrolments, each its own transaction. The default timeout
+    // would abandon a run that is still succeeding.
+    timeout: 300000,
+  });
+  return response.data as BulkEnrollResult;
+};
+
 /** Enrol a recommended candidate as a student. */
 export const enrollCandidate = async (
   candId: number,

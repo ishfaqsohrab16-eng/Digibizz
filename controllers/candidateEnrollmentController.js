@@ -5,7 +5,15 @@ const User = require("../models/userModel");
 const Center = require("../models/center");
 const Course = require("../models/course");
 const TrainingBatch = require("../models/trainingBatcheModel");
+const { Op } = require("sequelize");
 const { sendEmailSafe, escapeHtml } = require("../servec/emailConfig");
+const {
+  parseCnicList,
+  buildCnicTemplateCsv,
+  normaliseCnic,
+  formatCnic,
+  cnicVariants,
+} = require("../utils/cnicListParser");
 
 /**
  * Enrol a recommended candidate as a student.
@@ -126,6 +134,153 @@ exports.getEnrollmentPreview = async (req, res) => {
  * Enrol the candidate.
  * POST /api/candidateRoutes/enroll/:cand_id
  */
+/**
+ * Why a candidate cannot be enrolled right now.
+ *
+ * One definition, shared by the single enrolment endpoint and the bulk
+ * upload, so the two cannot drift apart on who is eligible.
+ *
+ * `requireRecommendation` is the one deliberate difference between them.
+ * The Enroll button acts on a row in a table, where the recommendation is
+ * the only evidence the panel has decided anything - so it is enforced.
+ * An uploaded CNIC list IS that decision, written down by the panel after
+ * the fact, and refusing a name on it because the interview screen was
+ * never updated would be the tool arguing with the people using it.
+ *
+ * Everything else below stays enforced either way. Those are not policy
+ * about who deserves a place; they are facts about whether the records can
+ * be created at all.
+ *
+ * Returns null when the candidate can be enrolled.
+ */
+const findBlocker = async (
+  candidate,
+  transaction,
+  { requireRecommendation = true } = {}
+) => {
+  if (requireRecommendation && candidate.recommended !== "Yes") {
+    return {
+      status: "not_recommended",
+      message: "Only candidates recommended at interview can be enrolled",
+    };
+  }
+
+  // Guard against double enrolment from a double-click, a stale list, or the
+  // same CNIC appearing in two uploaded files.
+  const existingStudent = await Student.findOne({
+    where: { std_cnic: candidate.cand_cnic, tb_id: candidate.tb_id },
+    attributes: ["std_id", "std_rollno"],
+    transaction,
+  });
+  if (existingStudent) {
+    return {
+      status: "already_enrolled",
+      message: `Already enrolled (roll no ${existingStudent.std_rollno})`,
+      rollNumber: existingStudent.std_rollno,
+    };
+  }
+
+  const email = String(candidate.cand_email || "").trim().toLowerCase();
+  if (!email) {
+    return { status: "no_email", message: "Candidate has no email address" };
+  }
+
+  const existingUser = await User.findOne({
+    where: { user_email: email },
+    attributes: ["user_id"],
+    transaction,
+  });
+  if (existingUser) {
+    return {
+      status: "email_taken",
+      message: `A user account already exists with ${email}`,
+    };
+  }
+
+  return null;
+};
+
+/**
+ * Create the user and student rows for one candidate.
+ *
+ * Assumes findBlocker has already passed. Does NOT commit - the caller owns
+ * the transaction, because the bulk path gives each candidate its own so one
+ * bad record cannot roll back two hundred good ones.
+ */
+const createStudentFromCandidate = async (candidate, overrides, transaction) => {
+  const centerId = overrides.center_id || candidate.center_id;
+  const courseId = overrides.course_id || candidate.course_id;
+  const batchId = overrides.tb_id || candidate.tb_id;
+  const email = String(candidate.cand_email || "").trim().toLowerCase();
+
+  const rollNumber =
+    String(overrides.std_rollno || "").trim() ||
+    (await generateUniqueRollNumber(batchId, transaction));
+
+  // Password is left blank on purpose: students set their own on first
+  // login, exactly as the existing student registration flow does.
+  const newUser = await User.create(
+    {
+      user_name: String(candidate.cand_name || "").trim(),
+      user_email: email,
+      user_password: "",
+      user_username: buildUsername(email),
+      user_profile_photo: candidate.cand_photo || null,
+      user_type: "student",
+      user_status: 1,
+    },
+    { transaction }
+  );
+
+  const newStudent = await Student.create(
+    {
+      user_id: newUser.user_id,
+      std_rollno: rollNumber,
+      std_cnic: candidate.cand_cnic,
+      std_fathername: candidate.cand_fathername,
+      std_gender: candidate.cand_gender,
+      std_qualification: candidate.cand_degree_level,
+      std_district: candidate.cand_local_domicile,
+      std_phone: candidate.cand_phone,
+      course_id: courseId,
+      center_id: centerId,
+      tb_id: batchId,
+      dark_mode: 0,
+      special_case: 0,
+      special_case_comments: "",
+      std_added_on: new Date().toISOString().split("T")[0],
+      std_lms_status: 1,
+      std_forum_status: 1,
+    },
+    { transaction }
+  );
+
+  return { newUser, newStudent, rollNumber, centerId, courseId, batchId, email };
+};
+
+/** The welcome email. Fire-and-forget: mail must never undo an enrolment. */
+const sendWelcomeEmail = async (candidate, rollNumber, centerId, courseId, email) => {
+  const [center, course] = await Promise.all([
+    Center.findByPk(centerId, { attributes: ["center_name"] }),
+    Course.findByPk(courseId, { attributes: ["course_name", "course_full_name"] }),
+  ]);
+
+  const courseName = course?.course_full_name || course?.course_name || "";
+  sendEmailSafe(
+    email,
+    "You are enrolled - Digibizz Program",
+    `Dear ${candidate.cand_name},\n\nCongratulations! You have been enrolled in the Digibizz Program.\n\nRoll Number: ${rollNumber}\nCourse: ${courseName}\nCenter: ${
+      center?.center_name || ""
+    }\n\nPlease visit the Digibizz LMS and set your password to start learning.`,
+    `<p>Dear <strong>${escapeHtml(candidate.cand_name)}</strong>,</p>
+     <p>Congratulations! You have been enrolled in the Digibizz Program.</p>
+     <p><strong>Roll Number:</strong> ${escapeHtml(rollNumber)}<br/>
+        <strong>Course:</strong> ${escapeHtml(courseName)}<br/>
+        <strong>Center:</strong> ${escapeHtml(center?.center_name || "")}</p>
+     <p>Please visit the Digibizz LMS and set your password to start learning.</p>`
+  );
+};
+
 exports.enrollCandidate = async (req, res) => {
   const transaction = await sequelize.transaction();
 
@@ -139,119 +294,26 @@ exports.enrollCandidate = async (req, res) => {
       return res.status(404).json({ success: false, message: "Candidate not found" });
     }
 
-    // Only recommended candidates may be enrolled.
-    if (candidate.recommended !== "Yes") {
+    const blocker = await findBlocker(candidate, transaction);
+    if (blocker) {
       await transaction.rollback();
-      return res.status(400).json({
-        success: false,
-        message: "Only candidates recommended at interview can be enrolled",
-      });
-    }
-
-    // Guard against double enrolment from a double-click or a stale list.
-    const existingStudent = await Student.findOne({
-      where: { std_cnic: candidate.cand_cnic, tb_id: candidate.tb_id },
-      attributes: ["std_id", "std_rollno"],
-      transaction,
-    });
-
-    if (existingStudent) {
-      await transaction.rollback();
-      return res.status(409).json({
-        success: false,
-        message: `This candidate is already enrolled (roll no ${existingStudent.std_rollno})`,
-      });
-    }
-
-    const email = String(candidate.cand_email || "").trim().toLowerCase();
-    if (!email) {
-      await transaction.rollback();
+      // 409 for a clash with something that already exists, 400 for a
+      // candidate record that is not ready to be enrolled.
+      const conflict =
+        blocker.status === "already_enrolled" || blocker.status === "email_taken";
       return res
-        .status(400)
-        .json({ success: false, message: "Candidate has no email address" });
-    }
-
-    const existingUser = await User.findOne({
-      where: { user_email: email },
-      attributes: ["user_id"],
-      transaction,
-    });
-
-    if (existingUser) {
-      await transaction.rollback();
-      return res.status(409).json({
-        success: false,
-        message: "A user account already exists with this email address",
-      });
+        .status(conflict ? 409 : 400)
+        .json({ success: false, message: blocker.message });
     }
 
     // Admins may override the center/course in the confirmation popup.
-    const centerId = req.body.center_id || candidate.center_id;
-    const courseId = req.body.course_id || candidate.course_id;
-    const batchId = req.body.tb_id || candidate.tb_id;
-
-    const rollNumber =
-      String(req.body.std_rollno || "").trim() ||
-      (await generateUniqueRollNumber(batchId, transaction));
-
-    // Password is left blank on purpose: students set their own on first
-    // login, exactly as the existing student registration flow does.
-    const newUser = await User.create(
-      {
-        user_name: String(candidate.cand_name || "").trim(),
-        user_email: email,
-        user_password: "",
-        user_username: buildUsername(email),
-        user_profile_photo: candidate.cand_photo || null,
-        user_type: "student",
-        user_status: 1,
-      },
-      { transaction }
-    );
-
-    const newStudent = await Student.create(
-      {
-        user_id: newUser.user_id,
-        std_rollno: rollNumber,
-        std_cnic: candidate.cand_cnic,
-        std_fathername: candidate.cand_fathername,
-        std_gender: candidate.cand_gender,
-        std_qualification: candidate.cand_degree_level,
-        std_district: candidate.cand_local_domicile,
-        std_phone: candidate.cand_phone,
-        course_id: courseId,
-        center_id: centerId,
-        tb_id: batchId,
-        dark_mode: 0,
-        special_case: 0,
-        special_case_comments: "",
-        std_added_on: new Date().toISOString().split("T")[0],
-        std_lms_status: 1,
-        std_forum_status: 1,
-      },
-      { transaction }
-    );
+    const { newUser, newStudent, rollNumber, centerId, courseId, batchId, email } =
+      await createStudentFromCandidate(candidate, req.body, transaction);
 
     await transaction.commit();
 
     // Best-effort: never let a mail problem undo a committed enrolment.
-    const [center, course] = await Promise.all([
-      Center.findByPk(centerId, { attributes: ["center_name"] }),
-      Course.findByPk(courseId, { attributes: ["course_name", "course_full_name"] }),
-    ]);
-
-    const courseName = course?.course_full_name || course?.course_name || "";
-    sendEmailSafe(
-      email,
-      "You are enrolled - Digibizz Program",
-      `Dear ${candidate.cand_name},\n\nCongratulations! You have been enrolled in the Digibizz Program.\n\nRoll Number: ${rollNumber}\nCourse: ${courseName}\nCenter: ${center?.center_name || ""}\n\nPlease visit the Digibizz LMS and set your password to start learning.`,
-      `<p>Dear <strong>${escapeHtml(candidate.cand_name)}</strong>,</p>
-       <p>Congratulations! You have been enrolled in the Digibizz Program.</p>
-       <p><strong>Roll Number:</strong> ${escapeHtml(rollNumber)}<br/>
-          <strong>Course:</strong> ${escapeHtml(courseName)}<br/>
-          <strong>Center:</strong> ${escapeHtml(center?.center_name || "")}</p>
-       <p>Please visit the Digibizz LMS and set your password to start learning.</p>`
-    );
+    sendWelcomeEmail(candidate, rollNumber, centerId, courseId, email);
 
     console.log(
       `[enroll] candidate ${candidate.cand_id} enrolled as ${rollNumber} by user ${req.user.id} (${req.user.username})`
@@ -300,5 +362,336 @@ exports.enrollCandidate = async (req, res) => {
       message: "Server error while enrolling candidate",
       error: process.env.NODE_ENV === "development" ? error.message : undefined,
     });
+  }
+};
+
+// ---------------------------------------------------------------------------
+// Bulk enrolment from an uploaded CNIC list
+// ---------------------------------------------------------------------------
+//
+// An interview panel works from paper and ends with a list of CNIC numbers.
+// Enrolling them one row at a time through the table is hundreds of clicks, and
+// the mistakes it produces - a row missed, a row done twice - are exactly the
+// ones nobody notices until a student cannot log in.
+//
+// The upload carries CNIC numbers and nothing else. Every other detail comes
+// from the candidate record the panel already interviewed, because a
+// spreadsheet typed by hand is not a source of truth about somebody's name,
+// course or centre - the database is. That also means an operator cannot
+// accidentally enrol someone into the wrong course by mistyping a column.
+
+/**
+ * Work out what would happen to each CNIC, touching nothing.
+ *
+ * Scoped to one batch on purpose. The same person may have applied in more than
+ * one batch, and "enrol this CNIC" would otherwise be ambiguous in exactly the
+ * situation where getting it wrong matters. The admission portal always has a
+ * batch selected, so there is nothing extra to ask for.
+ */
+const planBulkEnrollment = async (entries, tb_id) => {
+  if (entries.length === 0) return [];
+
+  // Every spelling of every CNIC, in one query rather than one query per row.
+  const lookups = new Map();
+  for (const entry of entries) {
+    for (const variant of cnicVariants(entry.cnic)) {
+      lookups.set(variant, entry.cnic);
+    }
+  }
+
+  const candidates = await Candidate.findAll({
+    where: {
+      cand_cnic: { [Op.in]: [...lookups.keys()] },
+      tb_id,
+    },
+  });
+
+  // Candidates in OTHER batches, purely so "not found" can say something more
+  // useful than "not found" when the person is plainly in the system.
+  const elsewhere = await Candidate.findAll({
+    where: {
+      cand_cnic: { [Op.in]: [...lookups.keys()] },
+      tb_id: { [Op.ne]: tb_id },
+    },
+    attributes: ["cand_cnic", "tb_id"],
+  });
+
+  const byCnic = new Map();
+  for (const candidate of candidates) {
+    byCnic.set(normaliseCnic(candidate.cand_cnic), candidate);
+  }
+
+  const otherBatches = new Map();
+  for (const row of elsewhere) {
+    const key = normaliseCnic(row.cand_cnic);
+    if (!otherBatches.has(key)) otherBatches.set(key, []);
+    otherBatches.get(key).push(row.tb_id);
+  }
+
+  const plan = [];
+
+  for (const entry of entries) {
+    const candidate = byCnic.get(entry.cnic);
+
+    if (!candidate) {
+      const others = otherBatches.get(entry.cnic);
+      plan.push({
+        ...entry,
+        status: "not_found",
+        message: others?.length
+          ? `No candidate in this batch. This CNIC applied in batch ${[...new Set(others)].join(", ")}.`
+          : "No candidate with this CNIC has applied",
+      });
+      continue;
+    }
+
+    const blocker = await findBlocker(candidate, undefined, {
+      requireRecommendation: false,
+    });
+
+    // Enrolled regardless, but never silently. Somebody the panel did not
+    // mark as recommended is still going in - that is what the list says to
+    // do - and the operator should be able to see which rows those are
+    // before confirming, in case a CNIC was typed wrong.
+    const unrecommended = candidate.recommended !== "Yes";
+
+    plan.push({
+      ...entry,
+      cand_id: candidate.cand_id,
+      name: candidate.cand_name,
+      email: candidate.cand_email,
+      center_id: candidate.center_id,
+      course_id: candidate.course_id,
+      status: blocker ? blocker.status : "ready",
+      message: blocker
+        ? blocker.message
+        : unrecommended
+        ? "Will be enrolled (not marked recommended at interview)"
+        : "Will be enrolled",
+      unrecommended: blocker ? undefined : unrecommended,
+    });
+  }
+
+  return plan;
+};
+
+/** Counts per status, so the screen can lead with the number that matters. */
+const summarise = (plan, skipped) => {
+  const counts = {};
+  for (const row of plan) counts[row.status] = (counts[row.status] || 0) + 1;
+  return {
+    readable: plan.length,
+    ready: counts.ready || 0,
+    already_enrolled: counts.already_enrolled || 0,
+    // Kept in the shape for the single-enrolment path, which still enforces
+    // it. A bulk upload never produces this status.
+    not_recommended: counts.not_recommended || 0,
+    // Counted separately: these ARE being enrolled, and the operator is
+    // told how many so the number is a decision rather than a surprise.
+    unrecommended_included: plan.filter((row) => row.unrecommended).length,
+    not_found: counts.not_found || 0,
+    no_email: counts.no_email || 0,
+    email_taken: counts.email_taken || 0,
+    unreadable: skipped.length,
+  };
+};
+
+/** Read the uploaded file, or explain why it could not be read. */
+const readUpload = (req) => {
+  if (!req.file?.buffer) {
+    const error = new Error("Please choose a .xlsx or .csv file to upload");
+    error.statusCode = 400;
+    throw error;
+  }
+  try {
+    return parseCnicList(req.file.buffer, req.file.originalname);
+  } catch (parseError) {
+    parseError.statusCode = 400;
+    throw parseError;
+  }
+};
+
+const requireBatch = (req) => {
+  const tb_id = req.body?.tb_id || req.query?.tb_id;
+  if (!tb_id) {
+    const error = new Error(
+      "Select a training batch before uploading - a CNIC can have applied in more than one"
+    );
+    error.statusCode = 400;
+    throw error;
+  }
+  return tb_id;
+};
+
+// Exported for controllers/candidateEnrollmentBulk.test.js, which drives the
+// classification without a database. Not part of the HTTP surface.
+exports._internals = { findBlocker, planBulkEnrollment, summarise };
+
+/** The template, so nobody has to guess the column name. */
+exports.downloadCnicTemplate = async (_req, res) => {
+  try {
+    const csv = buildCnicTemplateCsv();
+    res.setHeader("Content-Type", "text/csv; charset=utf-8");
+    res.setHeader(
+      "Content-Disposition",
+      'attachment; filename="enrollment-cnic-template.csv"'
+    );
+    return res.send(csv);
+  } catch (error) {
+    console.error("CNIC template error:", error);
+    return res
+      .status(500)
+      .json({ success: false, message: "Could not build the template" });
+  }
+};
+
+/**
+ * Dry run. Nothing is written.
+ *
+ * Enrolling creates real LMS accounts and sends real email, so the operator
+ * sees exactly who will be affected - and, more importantly, who will not and
+ * why - before any of it happens.
+ */
+exports.previewBulkEnrollment = async (req, res) => {
+  try {
+    const tb_id = requireBatch(req);
+    const { cnics, skipped, total } = readUpload(req);
+    const plan = await planBulkEnrollment(cnics, tb_id);
+
+    return res.json({
+      success: true,
+      tb_id,
+      rowsInFile: total,
+      summary: summarise(plan, skipped),
+      plan,
+      skipped,
+    });
+  } catch (error) {
+    if (error.statusCode) {
+      return res.status(error.statusCode).json({ success: false, message: error.message });
+    }
+    console.error("Bulk enrollment preview error:", error);
+    return res
+      .status(500)
+      .json({ success: false, message: "Server error reading the CNIC list" });
+  }
+};
+
+/**
+ * Enrol everyone the plan says is ready.
+ *
+ * The file is re-read and re-planned rather than trusting a plan the browser
+ * sends back: between the preview and the confirmation somebody may have
+ * enrolled one of these candidates by hand, or withdrawn a recommendation, and
+ * the writes must match the database as it is now.
+ *
+ * One transaction PER candidate. A single bad record - a gender nobody can
+ * parse, a roll number clash - must not roll back the two hundred that were
+ * fine, which is what a single wrapping transaction would do.
+ */
+exports.bulkEnrollByCnic = async (req, res) => {
+  try {
+    const tb_id = requireBatch(req);
+    const { cnics, skipped, total } = readUpload(req);
+    const plan = await planBulkEnrollment(cnics, tb_id);
+
+    const ready = plan.filter((row) => row.status === "ready");
+    if (ready.length === 0) {
+      return res.status(400).json({
+        success: false,
+        message: "Nobody in this file can be enrolled. See the breakdown for why.",
+        summary: summarise(plan, skipped),
+        plan,
+        skipped,
+      });
+    }
+
+    const results = [];
+    let enrolled = 0;
+    let failed = 0;
+
+    for (const row of ready) {
+      const transaction = await sequelize.transaction();
+      try {
+        const candidate = await Candidate.findByPk(row.cand_id, { transaction });
+        if (!candidate) throw new Error("Candidate disappeared mid-run");
+
+        // Re-checked inside the transaction. The plan was built a moment ago
+        // and without one, so this is what actually prevents a double enrolment
+        // when two admins upload overlapping lists at the same time.
+        const blocker = await findBlocker(candidate, transaction, {
+          requireRecommendation: false,
+        });
+        if (blocker) {
+          await transaction.rollback();
+          results.push({ ...row, status: blocker.status, message: blocker.message });
+          continue;
+        }
+
+        const { rollNumber, centerId, courseId, email } =
+          await createStudentFromCandidate(candidate, {}, transaction);
+
+        await transaction.commit();
+        enrolled += 1;
+
+        // After the commit, and not awaited: the welcome email must never be
+        // able to undo an enrolment, and awaiting hundreds of them in turn
+        // would hold the request open long past any sensible timeout.
+        sendWelcomeEmail(candidate, rollNumber, centerId, courseId, email);
+
+        results.push({
+          ...row,
+          status: "enrolled",
+          message: `Enrolled as ${rollNumber}`,
+          std_rollno: rollNumber,
+        });
+      } catch (error) {
+        await transaction.rollback();
+        failed += 1;
+
+        const detail =
+          error.name === "SequelizeValidationError"
+            ? (error.errors || []).map((item) => `${item.path}: ${item.message}`).join("; ")
+            : error.message;
+
+        console.error(
+          `[bulk enroll] candidate ${row.cand_id} (${row.formatted}) failed:`,
+          detail
+        );
+        results.push({ ...row, status: "failed", message: detail });
+      }
+    }
+
+    // Rows the plan had already ruled out, carried through so the report
+    // accounts for every line of the file rather than only the ones acted on.
+    const untouched = plan.filter((row) => row.status !== "ready");
+
+    console.log(
+      `[bulk enroll] batch ${tb_id}: ${enrolled} enrolled, ${failed} failed, ` +
+        `${untouched.length} skipped, by user ${req.user.id} (${req.user.username})`
+    );
+
+    return res.json({
+      success: true,
+      message: `Enrolled ${enrolled} candidate(s).`,
+      tb_id,
+      rowsInFile: total,
+      enrolled,
+      failed,
+      results: [...results, ...untouched],
+      skipped,
+      // Welcome emails go out in the background and, on a metered provider,
+      // come out of the day's allowance. Said plainly so nobody reads a quiet
+      // inbox as a failed enrolment.
+      note: "Welcome emails are sent in the background and may take a few minutes.",
+    });
+  } catch (error) {
+    if (error.statusCode) {
+      return res.status(error.statusCode).json({ success: false, message: error.message });
+    }
+    console.error("Bulk enrollment error:", error);
+    return res
+      .status(500)
+      .json({ success: false, message: "Server error during bulk enrolment" });
   }
 };
