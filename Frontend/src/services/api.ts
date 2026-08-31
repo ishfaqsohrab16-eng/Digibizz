@@ -3836,10 +3836,21 @@ export const getCampaignStarterTemplate = async () => {
 // applicant has no account yet.
 // ---------------------------------------------------------------------------
 
+/**
+ * The server answers within ~8s even when the mail server is slow (it finishes
+ * the send in the background), so a request still running at 25s means the
+ * network or the server itself, not the mail. Without a timeout the button
+ * spins forever on a dropped connection, which is what a stalled mobile
+ * connection looks like to an applicant.
+ */
+const VERIFY_TIMEOUT_MS = 25000;
+
 export const sendEmailVerificationCode = async (email: string) => {
-  const response = await axios.post(`${API_URL}/email-verification/send-code`, {
-    email,
-  });
+  const response = await axios.post(
+    `${API_URL}/email-verification/send-code`,
+    { email },
+    { timeout: VERIFY_TIMEOUT_MS }
+  );
   return response.data as {
     success: boolean;
     message: string;
@@ -3854,7 +3865,8 @@ export const confirmEmailVerificationCode = async (
 ) => {
   const response = await axios.post(
     `${API_URL}/email-verification/verify-code`,
-    { email, code }
+    { email, code },
+    { timeout: VERIFY_TIMEOUT_MS }
   );
   return response.data as {
     success: boolean;
@@ -3867,6 +3879,7 @@ export const confirmEmailVerificationCode = async (
 export const getEmailVerificationStatus = async (email: string) => {
   const response = await axios.get(`${API_URL}/email-verification/status`, {
     params: { email },
+    timeout: VERIFY_TIMEOUT_MS,
   });
   return response.data as { success: boolean; verified: boolean };
 };

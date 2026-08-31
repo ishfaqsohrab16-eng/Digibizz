@@ -7,6 +7,7 @@ const {
   requireRoles,
   ROLES,
 } = require("../middleware/authMiddleware");
+const { EMAIL_CAMPAIGNS_ENABLED } = require("../config/features");
 
 /**
  * Spreadsheets are parsed and thrown away, never stored, so they are kept in
@@ -40,6 +41,25 @@ const listUpload = multer({
  * until someone remembers to protect it.
  */
 router.use(isAdminAuthenticated, requireRoles(ROLES.SUPER_ADMIN));
+
+/**
+ * The module can be switched off entirely (see config/features.js).
+ *
+ * The guard sits here, above every route, rather than in the UI alone:
+ * hiding a button does not stop a bookmarked URL, a browser tab still
+ * holding the old bundle, or anything calling the API directly. 503 rather
+ * than 404 - the feature exists, it is just not available right now.
+ */
+router.use((req, res, next) => {
+  if (!EMAIL_CAMPAIGNS_ENABLED) {
+    return res.status(503).json({
+      success: false,
+      disabled: true,
+      message: "The email campaign module is turned off at the moment.",
+    });
+  }
+  next();
+});
 
 router.get("/", controller.listCampaigns);
 router.post("/", controller.createCampaign);

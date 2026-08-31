@@ -97,13 +97,54 @@ const transporter = nodemailer.createTransport({
  * queue behind one another. It is deliberately not rate limited: it carries
  * one message per human action, which the cooldown in the verification
  * controller already bounds.
+ *
+ * It is also deliberately NOT pooled, which the pooled version of this got
+ * wrong. A pool holds the SMTP connection open between sends, and codes are
+ * sporadic - minutes or hours apart. Mail servers close idle connections
+ * (Poste.io/Haraka within a few minutes) and the client is not told. The next
+ * code is then written to a socket the server has already dropped, and
+ * nodemailer waits out socketTimeout before failing - so the applicant got
+ * either a long spin ending in "could not send", or a code that arrived only
+ * after they had given up. A fresh connection per message costs one
+ * handshake, roughly a second, and cannot go stale.
+ *
+ * Timeouts are shorter than the bulk transport's for the same reason: a code
+ * that takes thirty seconds has already failed as far as the person watching
+ * the form is concerned. Better to fail quickly and let them press resend.
  */
 const priorityTransporter = nodemailer.createTransport({
   ...baseTransportOptions,
-  pool: true,
-  maxConnections: 1,
-  maxMessages: 100,
+  pool: false,
+  connectionTimeout: 10000,
+  greetingTimeout: 10000,
+  socketTimeout: 20000,
 });
+
+/**
+ * Failures where the message did not get through and a retry might succeed.
+ *
+ * Connection-level only. An authentication failure or a rejected recipient
+ * fails identically the second time, so retrying those only doubles the wait
+ * for someone sitting in front of a form.
+ */
+const RETRYABLE_CODES = new Set([
+  "ECONNECTION",
+  "ECONNRESET",
+  "ECONNREFUSED",
+  "ETIMEDOUT",
+  "ESOCKET",
+  "EPIPE",
+  "EDNS",
+]);
+
+const isRetryable = (error) => {
+  if (!error) return false;
+  if (RETRYABLE_CODES.has(String(error.code || "").toUpperCase())) return true;
+  // Some socket failures arrive with no code at all, only a message.
+  return /socket close|connection closed|timed out|read ECONNRESET|EPIPE/i.test(
+    String(error.message || "")
+  );
+};
 
 /** Escape untrusted values before interpolating them into HTML. */
 const escapeHtml = (value) =>
@@ -204,43 +245,83 @@ const sendEmail = async (to, subject, text, html) => {
 
   const activeTransport = options.priority ? priorityTransporter : transporter;
 
-  try {
-    const info = await activeTransport.sendMail({
-      from: `"${SMTP_FROM_NAME}" <${SMTP_FROM_ADDRESS}>`,
-      to: options.to,
-      cc: options.cc,
-      bcc: options.bcc,
-      replyTo: options.replyTo || process.env.SMTP_REPLY_TO || undefined,
-      subject: options.subject,
-      text: bodyText,
-      html: bodyHtml,
-      attachments: options.attachments,
-    });
+  const message = {
+    from: `"${SMTP_FROM_NAME}" <${SMTP_FROM_ADDRESS}>`,
+    to: options.to,
+    cc: options.cc,
+    bcc: options.bcc,
+    replyTo: options.replyTo || process.env.SMTP_REPLY_TO || undefined,
+    subject: options.subject,
+    text: bodyText,
+    html: bodyHtml,
+    attachments: options.attachments,
+  };
 
-    // Log what the SMTP server actually answered. "accepted" only means the
-    // server took responsibility for the message - if it later fails to relay
-    // (spam rejection, bad DKIM, blocklist) that shows up in the mail server's
-    // own queue/logs and as a bounce to SMTP_FROM, never here.
-    console.log(
-      `[email] sent "${options.subject}" to ${options.to}`,
-      `| id=${info.messageId}`,
-      `| accepted=${JSON.stringify(info.accepted || [])}`,
-      `| rejected=${JSON.stringify(info.rejected || [])}`,
-      `| response=${info.response || "-"}`
-    );
-    return info;
-  } catch (error) {
-    // Surface the underlying SMTP failure - the generic message alone makes
-    // TLS/auth/timeout problems indistinguishable in the logs.
-    console.error(
-      `[email] FAILED to send "${options.subject}" to ${options.to}:`,
-      `code=${error.code || "-"}`,
-      `command=${error.command || "-"}`,
-      `response=${error.response || "-"}`,
-      error.message
-    );
-    throw error;
+  /**
+   * One retry, for transactional mail only.
+   *
+   * A dropped connection used to end the applicant's attempt outright: the
+   * code was never sent and they were told to try again, having done nothing
+   * wrong. Retrying once turns the common transient failure into a delay of a
+   * second rather than a dead end.
+   *
+   * Campaign mail deliberately does not retry here. The dispatcher owns that,
+   * with a per-recipient attempt counter, and a duplicate campaign email to a
+   * real applicant is worth avoiding. A duplicate verification email is not -
+   * it carries the same code either way.
+   */
+  const attempts = options.priority ? 2 : 1;
+  let lastError = null;
+
+  for (let attempt = 1; attempt <= attempts; attempt += 1) {
+    const startedAt = Date.now();
+    try {
+      const info = await activeTransport.sendMail(message);
+
+      // Log what the SMTP server actually answered. "accepted" only means the
+      // server took responsibility for the message - if it later fails to
+      // relay (spam rejection, bad DKIM, blocklist) that shows up in the mail
+      // server's own queue/logs and as a bounce to SMTP_FROM, never here.
+      //
+      // ms is the round trip to the mail server. If codes are arriving late
+      // and this number is small, the delay is downstream - the mail server's
+      // own queue, or greylisting at the recipient - and not in this app.
+      console.log(
+        `[email] sent "${options.subject}" to ${options.to}`,
+        `| id=${info.messageId}`,
+        `| ms=${Date.now() - startedAt}`,
+        `| attempt=${attempt}`,
+        `| accepted=${JSON.stringify(info.accepted || [])}`,
+        `| rejected=${JSON.stringify(info.rejected || [])}`,
+        `| response=${info.response || "-"}`
+      );
+      return info;
+    } catch (error) {
+      lastError = error;
+
+      // Surface the underlying SMTP failure - the generic message alone makes
+      // TLS/auth/timeout problems indistinguishable in the logs.
+      console.error(
+        `[email] FAILED to send "${options.subject}" to ${options.to}:`,
+        `code=${error.code || "-"}`,
+        `command=${error.command || "-"}`,
+        `response=${error.response || "-"}`,
+        `ms=${Date.now() - startedAt}`,
+        `attempt=${attempt}/${attempts}`,
+        error.message
+      );
+
+      if (attempt < attempts && isRetryable(error)) {
+        await new Promise((resolve) => setTimeout(resolve, 750));
+        continue;
+      }
+      throw error;
+    }
   }
+
+  // Unreachable: the loop either returns or throws. Kept so a later change to
+  // the loop bounds cannot silently return undefined.
+  throw lastError || new Error("sendEmail: no attempt was made");
 };
 
 /**
@@ -269,8 +350,9 @@ const sendPriorityEmail = async (to, subject, text, html) => {
 const verifyTransport = async () => {
   if (!isConfigured) return false;
   try {
-    // Both transports, so the first verification code does not pay for the
-    // TLS handshake and AUTH round trip on a cold transactional connection.
+    // Both transports. The transactional one is unpooled, so this leaves no
+    // warm connection behind - it proves the host, TLS and credentials work
+    // at boot, rather than on somebody's registration form.
     await Promise.all([transporter.verify(), priorityTransporter.verify()]);
     console.log(`[email] SMTP ready: ${SMTP_HOST}:${SMTP_PORT} (secure=${SMTP_SECURE})`);
     return true;
@@ -292,4 +374,6 @@ module.exports.verifyTransport = verifyTransport;
 module.exports.transporter = transporter;
 module.exports.priorityTransporter = priorityTransporter;
 module.exports.escapeHtml = escapeHtml;
+// Exported for the retry tests in ./emailConfig.test.js.
+module.exports.isRetryable = isRetryable;
 module.exports.isConfigured = isConfigured;

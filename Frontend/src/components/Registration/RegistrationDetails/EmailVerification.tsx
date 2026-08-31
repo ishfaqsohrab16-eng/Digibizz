@@ -22,6 +22,20 @@ const errorMessage = (error: any, fallback: string) =>
   (error instanceof Error ? error.message : fallback);
 
 /**
+ * The request was answered - by the server, with a status and a message.
+ *
+ * Anything else (a timeout, a dropped mobile connection) tells us nothing
+ * about what the server did, which matters here: the code is stored before
+ * it is sent, so an applicant can be holding a perfectly good code while the
+ * browser thinks the request failed.
+ */
+const wasAnswered = (error: any) => Boolean(error?.response);
+
+/** Axios flags a timeout as ECONNABORTED; a dead network as ERR_NETWORK. */
+const timedOut = (error: any) =>
+  error?.code === "ECONNABORTED" || /timeout/i.test(String(error?.message || ""));
+
+/**
  * Confirms the applicant owns the address they typed, on the form itself.
  *
  * The interview call-up is sent to this address, so a typo means the applicant
@@ -99,7 +113,26 @@ const EmailVerification: React.FC<Props> = ({
       setMessage(result.message);
       setCooldown(result.resendAfterSeconds || 60);
     } catch (err: any) {
-      setError(errorMessage(err, "Could not send the code. Please try again."));
+      if (!wasAnswered(err) && timedOut(err)) {
+        // The request reached the server and we simply stopped waiting for
+        // the reply. The server stores the code before sending it, so one is
+        // very likely on its way. Show the box: a code with nowhere to type
+        // it is a worse outcome than an entry field that goes unused.
+        setSent(true);
+        setMessage(
+          "The server is taking longer than usual. If a code arrives, enter it below."
+        );
+        // The server has already started its own 60-second cooldown, so
+        // offering resend right away would only earn a refusal.
+        setCooldown(60);
+      } else if (!wasAnswered(err)) {
+        setError(
+          "We could not reach the server. Check your internet connection and try again."
+        );
+      } else {
+        setError(errorMessage(err, "Could not send the code. Please try again."));
+      }
+
       // The server tells us how long to wait after a rate limit.
       const retry = Number(err?.response?.data?.retryAfter);
       if (Number.isFinite(retry) && retry > 0) setCooldown(retry);
@@ -121,7 +154,11 @@ const EmailVerification: React.FC<Props> = ({
         setError(result.message || "That code is not correct");
       }
     } catch (err: any) {
-      setError(errorMessage(err, "Could not check the code"));
+      setError(
+        wasAnswered(err)
+          ? errorMessage(err, "Could not check the code")
+          : "We could not reach the server. Check your internet connection and try again."
+      );
     } finally {
       setChecking(false);
     }
@@ -144,7 +181,7 @@ const EmailVerification: React.FC<Props> = ({
         <ShieldCheck className="h-4 w-4 shrink-0 text-slate-500" />
         <p className="flex-1 text-xs text-slate-600">
           Confirm this address before continuing — your interview details are
-          sent here.
+          sent here. The code can take a minute; check your spam folder too.
         </p>
         <button
           type="button"

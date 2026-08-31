@@ -26,6 +26,66 @@ const SEND_WINDOW_MINUTES = 60;
 /** Minimum gap between two sends to the same address. */
 const RESEND_COOLDOWN_SECONDS = 60;
 
+/**
+ * How long this request waits for the mail server before answering.
+ *
+ * The send used to be awaited outright, so the applicant's browser sat on
+ * the SMTP round trip: a mail server having a slow minute meant a spinner
+ * that ran for half a minute and often ended in an error, even when the code
+ * was on its way. The code row is already committed by this point, so the
+ * code works whenever it lands - there is nothing to wait for except the
+ * ability to report a failure.
+ *
+ * So: wait briefly, which covers the normal case (a healthy server answers
+ * in about a second, and a real failure is reported properly), and past that
+ * answer the applicant and let the send finish in the background. Its
+ * outcome is logged either way.
+ */
+const SEND_WAIT_MS = Number(process.env.VERIFY_SEND_WAIT_MS) || 8000;
+
+/**
+ * Resolve to `fallback` if `promise` has not settled within `ms`.
+ *
+ * The timer is always cleared once the race settles, so a fast send leaves
+ * nothing behind. It is deliberately NOT unref'd: an unref'd timer does not
+ * hold the event loop open, so when this is the only work in flight the
+ * process can exit before the wait elapses and the request is simply never
+ * answered.
+ */
+const settleWithin = (promise, ms, fallback) => {
+  let timer = null;
+  const timeout = new Promise((resolve) => {
+    timer = setTimeout(() => resolve(fallback), ms);
+  });
+  return Promise.race([promise, timeout]).finally(() => {
+    if (timer) clearTimeout(timer);
+  });
+};
+
+/**
+ * Hand back the send allowance after a send that did not happen.
+ *
+ * The counters are written before the mail is attempted, on purpose - two
+ * simultaneous requests must not both get through. But when the send then
+ * fails, leaving them raised punishes the applicant for the mail server's
+ * problem: they are told it could not be sent and then refused for a minute
+ * when they do exactly what the message told them to. No mail left the
+ * building, so the allowance was never really spent.
+ */
+const releaseSendSlot = async (record, previous) => {
+  try {
+    await record.update({
+      ev_sends: previous.ev_sends,
+      ev_last_sent_at: previous.ev_last_sent_at,
+    });
+  } catch (error) {
+    console.error(
+      "[verify] could not release the send slot:",
+      error?.message || error
+    );
+  }
+};
+
 const normaliseEmail = (value) => String(value || "").trim().toLowerCase();
 
 const isValidEmail = (value) =>
@@ -109,10 +169,21 @@ exports.sendCode = async (req, res) => {
       }
 
       if (record.ev_sends >= MAX_SENDS_PER_WINDOW) {
+        // Say when, not just no. The window runs from the last send, so the
+        // wait is known exactly and guessing at it wastes the applicant's
+        // afternoon.
+        const freeAt = new Date(
+          new Date(record.ev_last_sent_at).getTime() +
+            SEND_WINDOW_MINUTES * 60000
+        );
+        const minutes = Math.max(
+          1,
+          Math.ceil((freeAt.getTime() - now.getTime()) / 60000)
+        );
         return res.status(429).json({
           success: false,
-          message:
-            "Too many codes have been requested for this address. Please try again in an hour.",
+          message: `Too many codes have been requested for this address. Please try again in ${minutes} minute(s), or contact the center for help.`,
+          retryAfter: minutes * 60,
         });
       }
     }
@@ -129,6 +200,13 @@ exports.sendCode = async (req, res) => {
       ev_ip: resolveIp(req).ip,
     };
 
+    // Captured before the counters move, so a send that fails can hand the
+    // allowance back rather than locking the applicant out of a retry.
+    const previousQuota = {
+      ev_sends: record?.ev_sends || 0,
+      ev_last_sent_at: record?.ev_last_sent_at || null,
+    };
+
     if (record) {
       await record.update(values);
     } else {
@@ -140,22 +218,72 @@ exports.sendCode = async (req, res) => {
       expiresInMinutes: CODE_TTL_MINUTES,
     });
 
-    try {
-      // priority: the applicant is watching the form for this code, so it must
-      // not queue behind a running campaign on the bulk transport.
-      await sendEmail({ to: email, subject, text, html, priority: true });
-    } catch (error) {
-      console.error(`[verify] could not send a code to ${email}:`, error?.message || error);
+    // priority: the applicant is watching the form for this code, so it must
+    // not queue behind a running campaign on the bulk transport.
+    //
+    // Never rejects - the outcome is carried as a value so it can be examined
+    // both now and later, and an unhandled rejection cannot escape when the
+    // send outlives this request.
+    const startedAt = Date.now();
+    const delivery = sendEmail({
+      to: email,
+      subject,
+      text,
+      html,
+      priority: true,
+    }).then(
+      () => ({ status: "sent" }),
+      (error) => ({ status: "failed", error })
+    );
+
+    const outcome = await settleWithin(delivery, SEND_WAIT_MS, {
+      status: "pending",
+    });
+
+    if (outcome.status === "failed") {
+      await releaseSendSlot(record, previousQuota);
+      console.error(
+        `[verify] could not send a code to ${email} after ${
+          Date.now() - startedAt
+        }ms:`,
+        outcome.error?.message || outcome.error
+      );
       return res.status(502).json({
         success: false,
         message:
-          "We could not send the code. Please check the address is correct and try again.",
+          "We could not send the code just now. Please check the address is correct and try again.",
+      });
+    }
+
+    if (outcome.status === "pending") {
+      // Slower than the wait allows. Answer the applicant now; the send is
+      // still running and the code is already stored, so it works whenever it
+      // lands. Only the log records how it ended.
+      console.warn(
+        `[verify] the mail server has not answered for ${email} after ${SEND_WAIT_MS}ms; replying and finishing in the background`
+      );
+      delivery.then((result) => {
+        const elapsed = Date.now() - startedAt;
+        if (result.status === "failed") {
+          console.error(
+            `[verify] background send to ${email} failed after ${elapsed}ms:`,
+            result.error?.message || result.error
+          );
+          return releaseSendSlot(record, previousQuota);
+        }
+        console.log(
+          `[verify] background send to ${email} completed after ${elapsed}ms`
+        );
+        return undefined;
       });
     }
 
     return res.json({
       success: true,
-      message: `We sent a ${CODE_LENGTH}-digit code to ${email}. It expires in ${CODE_TTL_MINUTES} minutes.`,
+      message:
+        outcome.status === "pending"
+          ? `The code is on its way to ${email}. It can take a minute to arrive - check your spam folder too.`
+          : `We sent a ${CODE_LENGTH}-digit code to ${email}. It expires in ${CODE_TTL_MINUTES} minutes.`,
       expiresInMinutes: CODE_TTL_MINUTES,
       resendAfterSeconds: RESEND_COOLDOWN_SECONDS,
     });

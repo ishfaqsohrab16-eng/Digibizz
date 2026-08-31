@@ -62,6 +62,7 @@ import LearningResourceForm from "../LearningResources/LearningResourceForm";
 import InterviewPortal from "../AdmissionPortal/InterviewPortal";
 import AdmissionControlPanel from "../AdmissionPortal/AdmissionControlPanel";
 import EmailCampaigns from "../EmailCampaign/EmailCampaigns";
+import { EMAIL_CAMPAIGNS_ENABLED } from "../../utils/features";
 import MasterTrainerDashboard from "../dashboards/MasterTrainerDashboard";
 import QuizResultTable from "../Quiz/QuizResultTable";
 import ExamAssessmentView from "../ExamAssessment/ExamAssessmentView";
@@ -375,8 +376,25 @@ const ResponsiveLayout: React.FC = () => {
       case "AdmissionControl":
         return <AdmissionControlPanel />;
       // SuperAdmin only; the component and every endpoint enforce that too.
+      // Currently switched off (utils/features.ts): the sidebar entry is
+      // hidden, but this case still has to answer, because a bookmark or a
+      // typed URL arrives here without ever touching the sidebar.
       case "EmailCampaigns":
-        return <EmailCampaigns />;
+        return EMAIL_CAMPAIGNS_ENABLED ? (
+          <EmailCampaigns />
+        ) : (
+          <div className="container mx-auto px-4 py-16">
+            <div className="mx-auto max-w-md rounded-lg border border-slate-200 bg-slate-50 p-6 text-center">
+              <h2 className="text-lg font-semibold text-slate-800">
+                Email campaigns are turned off
+              </h2>
+              <p className="mt-1 text-sm text-slate-600">
+                The bulk email module is unavailable at the moment. Registration
+                codes and other automatic emails are not affected.
+              </p>
+            </div>
+          </div>
+        );
 
       case "ExamAssessmentView":
         return;

@@ -46,7 +46,16 @@ const basic = parseRecipientList(
 );
 check("reads every valid row", basic.recipients.length, 2);
 check("keeps the name", basic.recipients[0].name, "Ali Khan");
-check("extra columns become merge tokens", basic.recipients[0].merge.course, "Creative");
+// Extra columns are ignored rather than collected. The campaign body is
+// static HTML with no merge tokens, so there is nothing a spreadsheet value
+// could be substituted into - but a file carrying them must still upload,
+// because operators reuse sheets they already have.
+check("an extra column does not fail the upload", basic.skipped.length, 0);
+check(
+  "and nothing from it is carried into the recipient",
+  Object.keys(basic.recipients[0]).sort().join(","),
+  "email,line,name"
+);
 check("nothing skipped", basic.skipped.length, 0);
 
 // --- header tolerance -----------------------------------------------------
@@ -117,9 +126,9 @@ check(
   "ali.khan@example.com"
 );
 check(
-  "an email-only file produces no merge values, so everyone gets the same message",
-  Object.keys(parsedTemplate.recipients[0].merge).length,
-  0
+  "an email-only file is enough, since everyone gets the same message",
+  parsedTemplate.recipients.every((recipient) => recipient.email),
+  true
 );
 
 console.log(`\n${passed} passed, ${failed} failed`);

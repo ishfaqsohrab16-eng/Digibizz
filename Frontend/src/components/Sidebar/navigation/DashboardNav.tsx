@@ -21,6 +21,7 @@ import { useEffect, useState } from "react";
 import { SubNavItem } from "../SubNavItem";
 import { useBatch } from "../../../context/BatchContext";
 import { isRole, ROLE } from "../../../utils/roles";
+import { EMAIL_CAMPAIGNS_ENABLED } from "../../../utils/features";
 
 interface DashboardNavProps {
   openForm: (formName: string) => void;
@@ -155,8 +156,9 @@ export const DashboardNav = ({
       )}
       {/* Sits with the other admissions screens because that is where it is
           used, but stays SuperAdmin-only - the block above also admits
-          ContentAdmin, who must not be able to mail applicants. */}
-      {isRole(userType, ROLE.SUPER_ADMIN) && (
+          ContentAdmin, who must not be able to mail applicants.
+          Currently switched off; see utils/features.ts. */}
+      {EMAIL_CAMPAIGNS_ENABLED && isRole(userType, ROLE.SUPER_ADMIN) && (
         <NavItem
           icon={<Mail size={20} />}
           label="Email Campaigns"

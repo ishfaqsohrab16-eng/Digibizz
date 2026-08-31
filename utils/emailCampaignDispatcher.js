@@ -2,6 +2,7 @@ const { Op } = require("sequelize");
 const EmailCampaign = require("../models/emailCampaignModel");
 const EmailCampaignRecipient = require("../models/emailCampaignRecipientModel");
 const { sendEmail, isConfigured } = require("../servec/emailConfig");
+const { EMAIL_CAMPAIGNS_ENABLED } = require("../config/features");
 // Candidate, Student, Course, Center, TrainingBatch and the campaign template
 // renderers are deliberately NOT imported any more. A campaign no longer
 // resolves people out of the database or picks a built-in letter: it sends one
@@ -361,6 +362,20 @@ const tick = async () => {
 
 const start = () => {
   if (timer) return;
+
+  // Switched off in config/features.js. Returning here is what makes the
+  // switch mean something: closing the endpoints only stops NEW campaigns,
+  // while anything already in `running` would carry on draining from the
+  // database on the next tick, which is exactly what turning the module off
+  // is meant to prevent. Nothing is lost - progress is per recipient, so a
+  // campaign resumes at the next unsent address when the switch goes back on.
+  if (!EMAIL_CAMPAIGNS_ENABLED) {
+    console.log(
+      "[campaign dispatcher] not started: the email campaign module is off",
+      "(set EMAIL_CAMPAIGNS_ENABLED=true to re-enable)"
+    );
+    return;
+  }
   timer = setInterval(() => {
     tick().catch((error) =>
       console.error("[campaign dispatcher] unhandled:", error?.message || error)
