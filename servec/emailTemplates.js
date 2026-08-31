@@ -293,9 +293,60 @@ const enrolmentConfirmed = (data) => {
   return { subject, text, html };
 };
 
+/**
+ * A trainer's announcement to their class.
+ *
+ * The message is typed into a form and was previously dropped straight into
+ * the email as `<p>${message}</p>`. Anything a trainer wrote with an angle
+ * bracket in it - a time written as <9am, a stray tag pasted from Word - was
+ * interpreted as markup, so the announcement arrived mangled or half
+ * missing. It is escaped here, and newlines become line breaks, so what the
+ * trainer typed is what the class reads.
+ *
+ * @param {object} data
+ * @param {string} [data.name]     the student, for the greeting
+ * @param {string} data.subject
+ * @param {string} data.message
+ * @returns {{subject: string, text: string, html: string}}
+ */
+const classAnnouncement = (data) => {
+  const name = String(data?.name || "").trim();
+  const subject = String(data?.subject || "Class announcement").trim();
+  const message = String(data?.message || "");
+
+  const bodyHtml = escapeHtml(message).replace(/\r?\n/g, "<br />");
+
+  const html = documentShell(
+    subject,
+    `
+      <p style="margin:0 0 14px;color:#263238;font-size:16px;">${
+        name ? `Dear ${escapeHtml(name)},` : "Dear student,"
+      }</p>
+      <p style="margin:0 0 18px;color:#546e7a;font-size:14px;line-height:1.7;">${bodyHtml}</p>
+      <p style="margin:0;color:#90a4ae;font-size:13px;line-height:1.7;">
+        This message was sent to your class by your trainer through the
+        Digibizz LMS.
+      </p>
+    `
+  );
+
+  const text = [
+    name ? `Dear ${name},` : "Dear student,",
+    "",
+    message,
+    "",
+    "This message was sent to your class by your trainer through the Digibizz LMS.",
+    "",
+    `Support: ${SUPPORT_EMAIL}`,
+  ].join("\n");
+
+  return { subject, text, html };
+};
+
 module.exports = {
   applicationReceived,
   enrolmentConfirmed,
+  classAnnouncement,
   documentShell,
   detailRows,
   formatDate,

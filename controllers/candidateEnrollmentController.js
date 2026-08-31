@@ -6,8 +6,21 @@ const Center = require("../models/center");
 const Course = require("../models/course");
 const TrainingBatch = require("../models/trainingBatcheModel");
 const { Op } = require("sequelize");
-const { sendEmailSafe, escapeHtml } = require("../servec/emailConfig");
+const { sendEmail, escapeHtml } = require("../servec/emailConfig");
 const { enrolmentConfirmed } = require("../servec/emailTemplates");
+
+/**
+ * Required lazily: this controller is loaded by scripts and tests that have
+ * no database, and the outbox pulls in a model.
+ */
+let outboxModule = null;
+const outbox = () => {
+  if (!outboxModule) {
+    // eslint-disable-next-line global-require
+    outboxModule = require("../utils/emailOutbox");
+  }
+  return outboxModule;
+};
 const { findScheduleFor } = require("./classScheduleController");
 const {
   parseCnicList,
@@ -286,7 +299,8 @@ const sendWelcomeEmail = async (
   centerId,
   courseId,
   email,
-  batchId
+  batchId,
+  { queue = false } = {}
 ) => {
   try {
     const [center, course, schedule] = await Promise.all([
@@ -296,10 +310,14 @@ const sendWelcomeEmail = async (
     ]);
 
     if (!schedule) {
+      // findBlocker proved one existed moments ago, so this means it was
+      // deleted in between. The enrolment is already committed and the email
+      // must carry a real start date, so the only honest thing is to say so
+      // loudly and let somebody resend it.
       console.error(
         `[enroll] no class schedule for centre ${centerId} / course ${courseId} / batch ${batchId} - ${email} was enrolled but not emailed`
       );
-      return;
+      return { status: "no_schedule" };
     }
 
     const courseName = course?.course_full_name || course?.course_name || "";
@@ -315,15 +333,32 @@ const sendWelcomeEmail = async (
       note: schedule.cs_note,
     });
 
-    // These are transactional emails a student is actively waiting on, so if
-    // Brevo has hit its allowance the app should fall back to the local SMTP
-    // server rather than silently dropping the welcome message.
-    sendEmailSafe({ to: email, subject, text, html, priority: true });
+    // Bulk enrolment hands these to the outbox instead of sending inline.
+    // Two hundred enrolments would otherwise fire two hundred sends at once
+    // - a burst on any mail server - and awaiting them in turn would hold
+    // the request open for minutes. Queued, they drain at a steady rate,
+    // retry on their own, and can be counted afterwards.
+    if (queue) {
+      const row = await outbox().enqueue(
+        { to: email, subject, text, html },
+        "queued by bulk enrolment for paced delivery"
+      );
+      return { status: row ? "queued" : "failed" };
+    }
+
+    // Transactional: a student is waiting on this, and if Brevo has hit its
+    // allowance it falls back to the local SMTP server rather than being
+    // dropped. sendEmail rather than sendEmailSafe, so the outcome can be
+    // reported instead of swallowed - the try/catch below is what keeps a
+    // mail failure from touching an enrolment that is already committed.
+    const result = await sendEmail({ to: email, subject, text, html });
+    return { status: result?.queued ? "queued" : "sent" };
   } catch (error) {
     console.error(
       `[enroll] could not build the welcome email for ${email}:`,
       error?.message || error
     );
+    return { status: "failed" };
   }
 };
 
@@ -358,8 +393,18 @@ exports.enrollCandidate = async (req, res) => {
 
     await transaction.commit();
 
-    // Best-effort: never let a mail problem undo a committed enrolment.
-    sendWelcomeEmail(candidate, rollNumber, centerId, courseId, email, batchId);
+    // Awaited, so the admin is told whether the student actually has their
+    // class details yet. It is one email and it cannot throw - every failure
+    // inside is caught - so waiting costs a second and buys an honest answer
+    // instead of a hopeful one.
+    const mail = await sendWelcomeEmail(
+      candidate,
+      rollNumber,
+      centerId,
+      courseId,
+      email,
+      batchId
+    );
 
     console.log(
       `[enroll] candidate ${candidate.cand_id} enrolled as ${rollNumber} by user ${req.user.id} (${req.user.username})`
@@ -367,7 +412,13 @@ exports.enrollCandidate = async (req, res) => {
 
     return res.status(201).json({
       success: true,
-      message: "Candidate enrolled successfully",
+      message:
+        mail?.status === "sent"
+          ? "Candidate enrolled and sent their class details"
+          : mail?.status === "queued"
+          ? "Candidate enrolled. Their class details are queued and will arrive shortly."
+          : "Candidate enrolled, but their class details could not be emailed - see the server log",
+      emailStatus: mail?.status || "unknown",
       student: {
         std_id: newStudent.std_id,
         std_rollno: rollNumber,
@@ -656,6 +707,8 @@ exports.bulkEnrollByCnic = async (req, res) => {
     const results = [];
     let enrolled = 0;
     let failed = 0;
+    let emailsQueued = 0;
+    const emailNotSent = [];
 
     for (const row of ready) {
       const transaction = await sequelize.transaction();
@@ -684,7 +737,17 @@ exports.bulkEnrollByCnic = async (req, res) => {
         // After the commit, and not awaited: the welcome email must never be
         // able to undo an enrolment, and awaiting hundreds of them in turn
         // would hold the request open long past any sensible timeout.
-        sendWelcomeEmail(candidate, rollNumber, centerId, courseId, email, batchId);
+        const mail = await sendWelcomeEmail(
+          candidate,
+          rollNumber,
+          centerId,
+          courseId,
+          email,
+          batchId,
+          { queue: true }
+        );
+        if (mail?.status === "queued") emailsQueued += 1;
+        else emailNotSent.push(email);
 
         results.push({
           ...row,
@@ -727,10 +790,17 @@ exports.bulkEnrollByCnic = async (req, res) => {
       failed,
       results: [...results, ...untouched],
       skipped,
-      // Welcome emails go out in the background and, on a metered provider,
-      // come out of the day's allowance. Said plainly so nobody reads a quiet
-      // inbox as a failed enrolment.
-      note: "Welcome emails are sent in the background and may take a few minutes.",
+      // Welcome emails go out in the background, paced, and on a metered
+      // provider come out of the day's allowance. Said plainly so nobody
+      // reads a quiet inbox as a failed enrolment.
+      emailsQueued,
+      emailNotSent,
+      note:
+        `${emailsQueued} welcome email(s) queued; they are sent a few at a time and ` +
+        "may take several minutes to all arrive." +
+        (emailNotSent.length
+          ? ` ${emailNotSent.length} could not be prepared - see the server log.`
+          : ""),
     });
   } catch (error) {
     if (error.statusCode) {

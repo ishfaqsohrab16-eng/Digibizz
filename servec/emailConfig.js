@@ -450,11 +450,30 @@ const sendThroughBrevo = async (options, bodyHtml, bodyText) => {
  * does not. Throws if neither could take the message - the caller decides
  * whether that is fatal or something to queue.
  */
-const deliverNow = async (to, subject, text, html) => {
-  const options =
-    to && typeof to === "object" && !Array.isArray(to)
-      ? to
-      : { to, subject, text, html };
+/**
+ * Transactional unless the caller explicitly says otherwise.
+ *
+ * This default is the whole point. It used to be the other way round, and a
+ * password reset that forgot `priority: true` was silently classified as
+ * campaign mail - billed to the campaign budget, refused when that ran out,
+ * and excluded from the SMTP fallback. Forgetting a flag should not decide
+ * whether somebody can get back into their account.
+ *
+ * Bulk senders say so. There are two - the campaign dispatcher and class
+ * announcements - and both are places where somebody is deliberately mailing
+ * hundreds of people and knows it.
+ */
+const isBulk = (options) => options.bulk === true || options.priority === false;
+
+const deliverNow = async (rawTo, rawSubject, rawText, rawHtml) => {
+  const given =
+    rawTo && typeof rawTo === "object" && !Array.isArray(rawTo)
+      ? rawTo
+      : { to: rawTo, subject: rawSubject, text: rawText, html: rawHtml };
+
+  // One normalised flag from here down, so no call site can disagree with
+  // another about what kind of mail this is.
+  const options = { ...given, priority: !isBulk(given) };
 
   if (!isConfigured) {
     throw new Error(
@@ -619,10 +638,12 @@ const deliverNow = async (to, subject, text, html) => {
  * noQueue and get the plain throw.
  */
 const sendEmail = async (to, subject, text, html) => {
-  const options =
+  const given =
     to && typeof to === "object" && !Array.isArray(to)
       ? to
       : { to, subject, text, html };
+
+  const options = { ...given, priority: !isBulk(given) };
 
   try {
     return await deliverNow(options);
@@ -757,3 +778,5 @@ module.exports.isSmtpConfigured = isSmtpConfigured;
  * allowance means "pause until tomorrow" or "carry on through SMTP".
  */
 module.exports.canFallBackToSmtp = FALLBACK_TO_SMTP;
+/** Exported for the tests that check the transactional-by-default rule. */
+module.exports.isBulk = isBulk;

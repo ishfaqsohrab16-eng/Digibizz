@@ -6,6 +6,7 @@ const Course = require("../models/course");
 const Center = require("../models/center");
 const MasterTrainer = require("../models/masterTrainersModel");
 const User = require("../models/userModel"); // Add this line to import User model
+const { classAnnouncement } = require("../servec/emailTemplates");
 const Student = require("../models/studentModel");
 const sendEmail = require("../servec/emailConfig");
 const { validationResult } = require("express-validator");
@@ -254,6 +255,15 @@ exports.deleteAnnouncement = async (req, res) => {
   }
 };
 
+/**
+ * Gap between announcement emails.
+ *
+ * Short enough that a class of a hundred is notified in a couple of minutes,
+ * long enough that the send does not look like a blast. The campaign
+ * dispatcher paces for the same reason at a larger scale.
+ */
+const PER_MESSAGE_GAP_MS = Number(process.env.ANNOUNCEMENT_GAP_MS) || 400;
+
 exports.notifyStudents = async (req, res) => {
   try {
     const { course_id, center_id, subject, message, tb_id } = req.body;
@@ -280,25 +290,67 @@ exports.notifyStudents = async (req, res) => {
       });
     }
 
-    // Send emails to all matching students
-    const emailPromises = students.map((student) => {
-      if (student.user && student.user.user_email) {
-        return sendEmail(
-          student.user.user_email,
-          subject,
-          message, // plain text version
-          `<p>${message}</p>` // HTML version
-        );
-      }
-      return Promise.resolve(); // Skip if no email
-    });
+    // One at a time, with a gap. Promise.all fired every message at once,
+    // which is a burst on any mail server and looks exactly like the traffic
+    // blocklists are built to catch - and its first rejection abandoned the
+    // rest, so a single bad address meant the remaining students silently
+    // never heard from their trainer.
+    const recipients = students.filter((student) => student.user?.user_email);
+    const sent = [];
+    const queued = [];
+    const failed = [];
 
-    await Promise.all(emailPromises);
+    for (let index = 0; index < recipients.length; index += 1) {
+      const student = recipients[index];
+      const address = student.user.user_email;
+
+      try {
+        const { subject: builtSubject, text, html } = classAnnouncement({
+          name: student.user.user_name,
+          subject,
+          message,
+        });
+
+        // bulk: a class can be a hundred students, and this must not spend
+        // the allowance held back for registration codes. Not noQueue,
+        // though - nothing else retries these, so the outbox is what stops
+        // an announcement being lost when a provider is having a bad minute.
+        const result = await sendEmail({
+          to: address,
+          subject: builtSubject,
+          text,
+          html,
+          bulk: true,
+        });
+
+        if (result?.queued) queued.push(address);
+        else sent.push(address);
+      } catch (error) {
+        // One bad address must not cost the rest of the class their notice.
+        const reason = String(error?.message || error).slice(0, 300);
+        failed.push({ email: address, error: reason });
+        console.error(`[announcement] ${address} failed:`, reason);
+      }
+
+      if (index < recipients.length - 1) {
+        await new Promise((resolve) => setTimeout(resolve, PER_MESSAGE_GAP_MS));
+      }
+    }
+
+    const withoutEmail = students.length - recipients.length;
 
     res.status(200).json({
       success: true,
-      message: `Notification sent to ${students.length} students`,
+      message:
+        `Notified ${sent.length} of ${students.length} student(s)` +
+        (queued.length ? `; ${queued.length} queued for retry` : "") +
+        (failed.length ? `; ${failed.length} failed` : "") +
+        (withoutEmail ? `; ${withoutEmail} have no email address` : ""),
       studentCount: students.length,
+      sent: sent.length,
+      queued: queued.length,
+      failed,
+      withoutEmail,
     });
   } catch (error) {
     console.error("Error sending student notifications:", error);

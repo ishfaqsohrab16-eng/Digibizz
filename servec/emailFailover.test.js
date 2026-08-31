@@ -170,6 +170,43 @@ const message = (extra = {}) => ({
   check("Brevo carries the message", brevo.calls === 1 && smtp.calls.length === 0);
   check("and says so", info.provider === "brevo", info.provider);
 
+  console.log("\nMail is transactional unless it says otherwise\n");
+
+  // The default is the fix. It used to be the other way round, and a
+  // password reset that forgot the flag was billed to the campaign budget
+  // and refused when that ran out. Forgetting a flag should not decide
+  // whether somebody can get back into their account.
+  reset();
+  allowance.remainingForCampaigns = 0;
+  allowance.remainingTotal = 50;
+
+  info = await sendEmail(message());
+  check(
+    "a caller that says nothing is treated as transactional",
+    info.provider === "brevo",
+    info.provider
+  );
+
+  reset();
+  allowance.remainingForCampaigns = 0;
+  allowance.remainingTotal = 50;
+  info = await sendEmail(message({ bulk: true }));
+  check(
+    "a caller that says bulk is treated as campaign mail",
+    info.provider === "smtp",
+    info.provider
+  );
+
+  reset();
+  allowance.remainingForCampaigns = 0;
+  allowance.remainingTotal = 50;
+  info = await sendEmail(message({ priority: false }));
+  check(
+    "priority:false still means campaign, for callers written before bulk",
+    info.provider === "smtp",
+    info.provider
+  );
+
   console.log("\nWhen the allowance is gone - the reported bug\n");
 
   // 353 of 300, exactly the state in the report.
@@ -215,7 +252,7 @@ const message = (extra = {}) => ({
   allowance.remainingForCampaigns = 0;
   allowance.remainingTotal = 50;
 
-  info = await sendEmail(message());
+  info = await sendEmail(message({ bulk: true }));
   check("campaign mail moves to SMTP at the reserve", info.provider === "smtp");
 
   reset();
@@ -242,7 +279,9 @@ const message = (extra = {}) => ({
     brevo.behaviour = () => {
       throw error;
     };
-    info = await sendEmail(message());
+    // Campaign mail too. Brevo did not take it, so sending it elsewhere
+    // cannot duplicate it - which is the only question that matters.
+    info = await sendEmail(message({ bulk: true }));
     check(`${label} falls back to SMTP`, info.provider === "smtp", info.provider);
   }
 
@@ -261,7 +300,7 @@ const message = (extra = {}) => ({
   brevo.behaviour = () => {
     throw brevoError("Brevo did not answer within 15000ms", { code: "ETIMEDOUT" });
   };
-  info = await sendEmail(message());
+  info = await sendEmail(message({ bulk: true }));
   check(
     "a timeout on campaign mail does NOT re-send through SMTP",
     smtp.calls.length === 0,

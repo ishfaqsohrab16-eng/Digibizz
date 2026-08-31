@@ -1190,10 +1190,23 @@ exports.sendStudentMail = async (req, res) => {
         .status(400)
         .json({ success: false, message: "All fields are required." });
     }
-    await sendEmail(email, subject, message, `<p></p>`);
-    res
-      .status(200)
-      .json({ success: true, message: "Email sent successfully." });
+    // The fourth argument used to be `<p></p>` - an empty body that only
+    // survived because sendEmail treats markup with no visible text as
+    // absent and falls back to the plain text. Saying nothing is clearer
+    // than saying something that has to be ignored.
+    const result = await sendEmail({
+      to: email,
+      subject,
+      text: message,
+    });
+
+    res.status(200).json({
+      success: true,
+      message: result?.queued
+        ? "The mail server is busy; the email is queued and will be sent shortly."
+        : "Email sent successfully.",
+      queued: Boolean(result?.queued),
+    });
   } catch (error) {
     console.error("Error sending student email:", error);
     res.status(500).json({ success: false, message: "Failed to send email." });

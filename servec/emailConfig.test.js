@@ -86,6 +86,16 @@ process.env.SMTP_PORT = "465";
 // dotenv would otherwise load the real .env over the top of these.
 stub("dotenv", { config: () => ({ parsed: {} }) });
 
+// Without this the failure paths below reach for a real database to queue
+// the message, which is neither available nor the subject of these tests.
+const queued = [];
+stub("../utils/emailOutbox", {
+  async enqueue(options, reason) {
+    queued.push({ options, reason });
+    return { eo_id: queued.length };
+  },
+});
+
 const emailConfig = require("./emailConfig");
 const { sendEmail, isRetryable } = emailConfig;
 
@@ -161,11 +171,15 @@ const socketError = (code) => {
   priority.failures = [socketError("ECONNRESET"), socketError("ECONNRESET")];
   let secondFailure = null;
   try {
+    // noQueue so the throw is observable. Without it sendEmail would queue
+    // the message and return - which is the right behaviour in production,
+    // and exactly what hides the transport's own retry count from a test.
     await sendEmail({
       to: "applicant@example.test",
       subject: "code",
       text: "x",
       priority: true,
+      noQueue: true,
     });
   } catch (error) {
     secondFailure = error;
@@ -185,6 +199,7 @@ const socketError = (code) => {
       subject: "code",
       text: "x",
       priority: true,
+      noQueue: true,
     });
   } catch (error) {
     authFailure = error;
@@ -197,6 +212,10 @@ const socketError = (code) => {
 
   // The dispatcher owns campaign retries, with its own per-recipient attempt
   // counter. Retrying here as well would risk mailing a real applicant twice.
+  //
+  // `bulk: true` is what makes this campaign mail. Mail is transactional
+  // unless it says otherwise, because forgetting the flag used to mean a
+  // password reset was billed to the campaign budget and refused.
   bulk.calls = 0;
   bulk.failures = [socketError("ECONNRESET")];
   let bulkFailure = null;
@@ -205,6 +224,8 @@ const socketError = (code) => {
       to: "list@example.test",
       subject: "campaign",
       text: "x",
+      bulk: true,
+      noQueue: true,
     });
   } catch (error) {
     bulkFailure = error;
@@ -213,6 +234,26 @@ const socketError = (code) => {
     "campaign mail is not retried here",
     bulk.calls === 1 && bulkFailure !== null,
     `calls=${bulk.calls}`
+  );
+
+  console.log("\nNothing is dropped on the way out");
+
+  // Without noQueue, the same failure is caught and written to the outbox
+  // rather than thrown away. That is the difference between a delayed
+  // message and a lost one.
+  queued.length = 0;
+  priority.calls = 0;
+  priority.failures = [socketError("ECONNRESET"), socketError("ECONNRESET")];
+  const outcome = await sendEmail({
+    to: "applicant@example.test",
+    subject: "123456 is your code",
+    text: "123456",
+  });
+  check("a send nobody could make is queued, not thrown away", outcome?.queued === true);
+  check(
+    "with its body, so it can actually be resent",
+    queued[0]?.options?.text === "123456",
+    JSON.stringify(queued[0]?.options)
   );
 
   console.log(`\n${passed} passed, ${failed} failed`);

@@ -204,7 +204,12 @@ const sendTestCopies = async (campaign) => {
 
   for (const to of TEST_RECIPIENTS) {
     try {
-      await sendEmail({ to, ...rendered });
+      // bulk: hundreds of these go out, so they must not spend the
+      // allowance reserved for registration codes.
+      // noQueue: this loop reports its own failures to the operator who
+      // pressed the button; a queued retry hours later would be a test copy
+      // arriving long after the campaign it was meant to check.
+      await sendEmail({ to, ...rendered, bulk: true, noQueue: true });
       result.sent.push(to);
     } catch (error) {
       const message = String(error?.message || error).slice(0, 300);
@@ -274,7 +279,18 @@ const sendChunk = async (campaign) => {
     }
 
     try {
-      await sendEmail({ to: recipient.ecr_email, subject, html });
+      // noQueue is essential here, not an optimisation. This dispatcher
+      // already retries per recipient through ecr_attempts, and the outbox
+      // retries independently - so a failure that queued would be sent
+      // TWICE to a real applicant, once by each. Exactly one component may
+      // own the retry, and for campaign mail it is this one.
+      await sendEmail({
+        to: recipient.ecr_email,
+        subject,
+        html,
+        bulk: true,
+        noQueue: true,
+      });
 
       await recipient.update({
         ecr_status: "sent",
