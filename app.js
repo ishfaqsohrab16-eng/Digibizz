@@ -57,6 +57,8 @@ require("./models/courseModuleAssociation");
 // to tables that do not exist yet.
 require("./models/emailSendQuotaModel");
 require("./models/brevoContactModel");
+require("./models/emailOutboxModel");
+require("./models/classScheduleModel");
 const app = express();
 
 // Security Middleware
@@ -255,6 +257,16 @@ emailCampaignDispatcher.start();
 // applied. No-op unless Brevo is the provider.
 const brevoContactCleanup = require("./utils/brevoContactCleanup");
 brevoContactCleanup.start();
+
+// Retry anything that could not be handed to a provider. This is what makes
+// a spent Brevo allowance or a mail server reboot a delay rather than a
+// message nobody receives and nobody hears about. `deliverNow` is injected
+// rather than required inside the outbox, so the two modules do not form a
+// require cycle.
+const emailOutbox = require("./utils/emailOutbox");
+const { deliverNow } = require("./servec/emailConfig");
+emailOutbox.setDeliver(deliverNow);
+emailOutbox.start();
 
 const PORT = process.env.PORT || 5000;
 

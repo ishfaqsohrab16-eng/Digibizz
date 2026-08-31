@@ -97,6 +97,30 @@ stub("../servec/emailConfig", {
   sendEmailSafe: () => Promise.resolve(true),
   escapeHtml: (v) => String(v),
 });
+stub("../servec/emailTemplates", {
+  enrolmentConfirmed: () => ({ subject: "s", text: "t", html: "<p>h</p>" }),
+});
+
+/**
+ * The class schedule the enrolment email quotes.
+ *
+ * Present by default: these tests are about who may be enrolled, and every
+ * one of them would otherwise trip the missing-schedule blocker instead of
+ * the rule it is checking. The blocker has its own tests below.
+ */
+const schedules = { present: true };
+stub("./classScheduleController", {
+  async findScheduleFor() {
+    return schedules.present
+      ? {
+          cs_start_date: "2026-09-15",
+          cs_class_days: "Monday to Friday",
+          cs_start_time: "09:00 AM",
+          cs_end_time: "01:00 PM",
+        }
+      : null;
+  },
+});
 
 const { _internals } = require("./candidateEnrollmentController");
 const { findBlocker, planBulkEnrollment, summarise } = _internals;
@@ -171,6 +195,23 @@ const entry = (cnic, line) => ({
     "an email already in use is refused",
     (await findBlocker(good))?.status === "email_taken"
   );
+
+  // The enrolment email quotes the class start date and timings. Telling
+  // somebody to arrive on a blank date is worse than sending nothing.
+  db.users = [];
+  schedules.present = false;
+  const noSchedule = await findBlocker(good);
+  check(
+    "a class with no start date and timings cannot be enrolled into",
+    noSchedule?.status === "no_schedule",
+    JSON.stringify(noSchedule)
+  );
+  check(
+    "and the message says where to set them",
+    /Class Schedule/.test(noSchedule?.message || ""),
+    noSchedule?.message
+  );
+  schedules.present = true;
 
   console.log("\nPlanning an upload\n");
 
@@ -268,7 +309,8 @@ const entry = (cnic, line) => ({
       summary.not_found +
       summary.already_enrolled +
       summary.no_email +
-      summary.email_taken ===
+      summary.email_taken +
+      summary.no_schedule ===
       plan.length,
     JSON.stringify(summary)
   );

@@ -5,6 +5,7 @@ const {
   sendEmail,
   isConfigured,
   provider,
+  canFallBackToSmtp,
 } = require("../servec/emailConfig");
 const { EMAIL_CAMPAIGNS_ENABLED } = require("../config/features");
 const quota = require("./emailQuota");
@@ -256,7 +257,18 @@ const sendChunk = async (campaign) => {
     // Checked per message, not once per chunk: several campaigns can be
     // draining at the same time, and registration codes are being sent
     // alongside them, so the budget moves underneath a long chunk.
-    if (provider === "brevo" && (await quota.campaignBudget()) <= 0) {
+    //
+    // Running out of Brevo allowance only ends the day's sending when there
+    // is nowhere else to send from. With an SMTP server configured the
+    // campaign carries on through it - at this same pace, because the
+    // chunking and the gaps between messages are what keep a few hundred
+    // emails from looking like a blast, and that matters more on the
+    // program's own domain than it does on Brevo's.
+    if (
+      provider === "brevo" &&
+      !canFallBackToSmtp &&
+      (await quota.campaignBudget()) <= 0
+    ) {
       stoppedForQuota = true;
       break;
     }
@@ -295,8 +307,8 @@ const sendChunk = async (campaign) => {
     const usage = await quota.describe();
     console.log(
       `[campaign ${campaign.ec_id}] stopped after ${sent} message(s): today's allowance is spent ` +
-        `(${usage.total}/${usage.dailyLimit}, ${usage.reserve} held back for registration codes). ` +
-        "The rest of this campaign goes out tomorrow."
+        `(${usage.total}/${usage.dailyLimit}, ${usage.reserve} held back for registration codes) ` +
+        "and no SMTP fallback is configured. The rest of this campaign goes out tomorrow."
     );
   }
 

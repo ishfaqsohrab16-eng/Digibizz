@@ -937,13 +937,15 @@ exports.forgotPassword = async (req, res) => {
       expiry: Date.now() + 15 * 60 * 1000, // 15 minutes expiry
     };
 
-    // Send email with the verification code
-    await sendEmail(
-      user_email,
-      "Password Reset Verification Code",
-      `Your verification code is \n ${verificationCode}`,
-      `<p>Your verification code is <strong>${verificationCode}</strong></p>`
-    );
+    // This is a time-sensitive, user-visible action. If Brevo is at quota,
+    // the SMTP fallback must still send the code rather than failing the reset.
+    await sendEmail({
+      to: user_email,
+      subject: "Password Reset Verification Code",
+      text: `Your verification code is \n ${verificationCode}`,
+      html: `<p>Your verification code is <strong>${verificationCode}</strong></p>`,
+      priority: true,
+    });
 
     res.json({ message: "Verification code sent to your email" });
   } catch (error) {

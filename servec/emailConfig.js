@@ -21,6 +21,15 @@ const quota = () => {
   return quotaModule;
 };
 
+let outboxModule = null;
+const outbox = () => {
+  if (!outboxModule) {
+    // eslint-disable-next-line global-require
+    outboxModule = require("../utils/emailOutbox");
+  }
+  return outboxModule;
+};
+
 let cleanupModule = null;
 const contactCleanup = () => {
   if (!cleanupModule) {
@@ -317,26 +326,63 @@ const mayRetryBrevo = (error, attempt, options) => {
   return Boolean(options.priority);
 };
 
+/**
+ * May this Brevo failure be re-sent through SMTP?
+ *
+ * The question is only ever: did Brevo definitely NOT take the message? If
+ * it did not, sending it elsewhere cannot duplicate it, and that holds for
+ * campaign mail as much as for a password reset.
+ *
+ * A refused key, a spent allowance, a rate limit and a refused connection
+ * are all definite - Brevo answered, or was never reached. A TIMEOUT is not:
+ * the request may have been accepted with the reply lost on the way back. So
+ * timeouts fall back only for mail where a duplicate is harmless - a code is
+ * the same code twice, while a campaign email arriving twice is a real cost.
+ */
+const AMBIGUOUS_CODES = new Set(["ETIMEDOUT", "ECONNRESET", "EPIPE"]);
+
+const mayFallBackToSmtp = (error, options) => {
+  if (!isSmtpConfigured) return false;
+  if (error?.quotaExceeded) return true;
+
+  const ambiguous =
+    AMBIGUOUS_CODES.has(String(error?.code || "").toUpperCase()) ||
+    /timed out|timeout/i.test(String(error?.message || ""));
+
+  return ambiguous ? Boolean(options.priority) : true;
+};
+
+/**
+ * Is there Brevo allowance left for this message?
+ *
+ * Campaign mail may spend down to the reserve; transactional mail may spend
+ * everything, because a person is waiting on it and there is no later.
+ *
+ * Returns a reason string when there is not, rather than throwing. Running
+ * out of a provider's daily allowance is a ROUTING decision - it means use
+ * the other provider - and throwing made it look like a failure, which is
+ * how a password reset ended up refused while a working mail server sat
+ * idle next to it.
+ */
+const brevoAllowanceBlock = async (options) => {
+  const kind = options.priority ? "transactional" : "campaign";
+  const usage = await quota().describe();
+
+  if (kind === "campaign" && usage.remainingForCampaigns <= 0) {
+    return (
+      `Brevo campaign allowance is used up: ${usage.total} of ${usage.dailyLimit} sent, ` +
+      `with ${usage.reserve} held back for registration codes`
+    );
+  }
+  if (usage.remainingTotal <= 0) {
+    return `Brevo daily allowance is used up: ${usage.total} of ${usage.dailyLimit} sent`;
+  }
+  return null;
+};
+
 /** Send through Brevo, counting it against the day's allowance. */
 const sendThroughBrevo = async (options, bodyHtml, bodyText) => {
   const kind = options.priority ? "transactional" : "campaign";
-
-  // A campaign must not spend the allowance registration codes depend on.
-  // Checked before the request so the refusal explains itself, rather than
-  // arriving as Brevo's generic credit error several hundred sends later.
-  if (kind === "campaign") {
-    const budget = await quota().campaignBudget();
-    if (budget <= 0) {
-      const usage = await quota().describe();
-      const error = new Error(
-        `Today's campaign allowance is used up: ${usage.total} of ${usage.dailyLimit} sent, ` +
-          `with ${usage.reserve} held back for registration codes. Sending resumes tomorrow.`
-      );
-      error.code = "EQUOTA";
-      error.quotaExceeded = true;
-      throw error;
-    }
-  }
 
   let lastError = null;
 
@@ -397,7 +443,14 @@ const sendThroughBrevo = async (options, bodyHtml, bodyText) => {
   throw lastError || new Error("sendThroughBrevo: no attempt was made");
 };
 
-const sendEmail = async (to, subject, text, html) => {
+/**
+ * One delivery attempt, right now.
+ *
+ * Tries Brevo when it is the provider and has allowance left, SMTP when it
+ * does not. Throws if neither could take the message - the caller decides
+ * whether that is fatal or something to queue.
+ */
+const deliverNow = async (to, subject, text, html) => {
   const options =
     to && typeof to === "object" && !Array.isArray(to)
       ? to
@@ -428,17 +481,25 @@ const sendEmail = async (to, subject, text, html) => {
       : htmlToText(options.html);
 
   if (provider === "brevo") {
-    try {
-      return await sendThroughBrevo(options, bodyHtml, bodyText);
-    } catch (error) {
-      // Only mail somebody is sitting in front of a form waiting for falls
-      // back, and only when there is an SMTP server to fall back to. The
-      // case this exists for is the free plan's daily allowance running out,
-      // which would otherwise stop applicants registering until midnight.
-      if (!(options.priority && FALLBACK_TO_SMTP)) throw error;
+    // Checked BEFORE the request. When the allowance is gone there is
+    // nothing to ask Brevo, and asking would only turn a routing decision
+    // into an error to recover from.
+    const blocked = FALLBACK_TO_SMTP ? await brevoAllowanceBlock(options) : null;
+
+    if (blocked) {
       console.warn(
-        `[email] brevo failed for "${options.subject}" (${error.message}); falling back to SMTP`
+        `[email] ${blocked}; sending "${options.subject}" through SMTP instead`
       );
+    } else {
+      try {
+        const info = await sendThroughBrevo(options, bodyHtml, bodyText);
+        return { ...info, provider: "brevo" };
+      } catch (error) {
+        if (!FALLBACK_TO_SMTP || !mayFallBackToSmtp(error, options)) throw error;
+        console.warn(
+          `[email] brevo failed for "${options.subject}" (${error.message}); falling back to SMTP`
+        );
+      }
     }
   }
 
@@ -477,6 +538,27 @@ const sendEmail = async (to, subject, text, html) => {
     try {
       const info = await activeTransport.sendMail(message);
 
+      // Confirm the server took it, rather than assuming a resolved promise
+      // means delivery. Poste/Haraka will accept a message for one recipient
+      // and refuse another in the same call, and nodemailer reports that in
+      // `rejected` without throwing - which would otherwise be recorded as a
+      // successful send to somebody who got nothing.
+      if (Array.isArray(info.rejected) && info.rejected.length > 0) {
+        const refused = new Error(
+          `The mail server refused ${info.rejected.join(", ")}` +
+            `${info.response ? ` (${info.response})` : ""}`
+        );
+        refused.code = "EREJECTED";
+        throw refused;
+      }
+      if (Array.isArray(info.accepted) && info.accepted.length === 0) {
+        const nobody = new Error(
+          `The mail server accepted the message for nobody${info.response ? ` (${info.response})` : ""}`
+        );
+        nobody.code = "EREJECTED";
+        throw nobody;
+      }
+
       // Log what the SMTP server actually answered. "accepted" only means the
       // server took responsibility for the message - if it later fails to
       // relay (spam rejection, bad DKIM, blocklist) that shows up in the mail
@@ -494,7 +576,7 @@ const sendEmail = async (to, subject, text, html) => {
         `| rejected=${JSON.stringify(info.rejected || [])}`,
         `| response=${info.response || "-"}`
       );
-      return info;
+      return { ...info, provider: "smtp" };
     } catch (error) {
       lastError = error;
 
@@ -520,7 +602,54 @@ const sendEmail = async (to, subject, text, html) => {
 
   // Unreachable: the loop either returns or throws. Kept so a later change to
   // the loop bounds cannot silently return undefined.
-  throw lastError || new Error("sendEmail: no attempt was made");
+  throw lastError || new Error("deliverNow: no attempt was made");
+};
+
+/**
+ * Send an email, and do not lose it.
+ *
+ * A message that cannot be handed over right now is written to the outbox and
+ * retried until it goes out or is declared dead. That is what turns a spent
+ * Brevo allowance, a mail server rebooting, or a minute of bad network into a
+ * delay instead of a message nobody ever receives and nobody ever hears about.
+ *
+ * Resolving therefore means "accepted, or safely queued" - not "in their
+ * inbox". Check `queued` on the result to tell the two apart. Callers that
+ * must not queue - the outbox drain itself, and dead-letter alerts - pass
+ * noQueue and get the plain throw.
+ */
+const sendEmail = async (to, subject, text, html) => {
+  const options =
+    to && typeof to === "object" && !Array.isArray(to)
+      ? to
+      : { to, subject, text, html };
+
+  try {
+    return await deliverNow(options);
+  } catch (error) {
+    // Queuing the drain's own sends would make a second row for the same
+    // message on every failure; queuing an alert about a failed send would
+    // start a loop.
+    if (options.noQueue) throw error;
+
+    // A bad recipient or an unconfigured provider will fail identically
+    // forever. Queuing those just fills the table and delays the error.
+    if (!isConfigured || !options.to) throw error;
+
+    const row = await outbox().enqueue(options, error?.message || String(error));
+
+    // Nothing holds the message now, so this really is a failure.
+    if (!row) throw error;
+
+    return {
+      queued: true,
+      outboxId: row.eo_id,
+      accepted: [],
+      rejected: [],
+      messageId: null,
+      response: `queued for retry: ${error?.message || error}`,
+    };
+  }
 };
 
 /**
@@ -606,6 +735,8 @@ const verifyTransport = async () => {
 
 module.exports = sendEmail;
 module.exports.sendEmail = sendEmail;
+/** One attempt, no queuing. The outbox drain uses this. */
+module.exports.deliverNow = deliverNow;
 module.exports.sendEmailSafe = sendEmailSafe;
 module.exports.sendPriorityEmail = sendPriorityEmail;
 module.exports.verifyTransport = verifyTransport;
@@ -619,3 +750,10 @@ module.exports.isConfigured = isConfigured;
 module.exports.provider = provider;
 module.exports.isBrevoConfigured = isBrevoConfigured;
 module.exports.isSmtpConfigured = isSmtpConfigured;
+/**
+ * Can a send that Brevo will not take still go out today?
+ *
+ * The campaign dispatcher asks this before deciding whether a spent Brevo
+ * allowance means "pause until tomorrow" or "carry on through SMTP".
+ */
+module.exports.canFallBackToSmtp = FALLBACK_TO_SMTP;
