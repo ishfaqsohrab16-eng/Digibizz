@@ -7,6 +7,8 @@ const Course = require("../models/course");
 const TrainingBatch = require("../models/trainingBatcheModel");
 const { Op } = require("sequelize");
 const { sendEmailSafe, escapeHtml } = require("../servec/emailConfig");
+const { enrolmentConfirmed } = require("../servec/emailTemplates");
+const { findScheduleFor } = require("./classScheduleController");
 const {
   parseCnicList,
   buildCnicTemplateCsv,
@@ -197,6 +199,20 @@ const findBlocker = async (
     };
   }
 
+  const schedule = await findScheduleFor(
+    candidate.center_id,
+    candidate.course_id,
+    candidate.tb_id,
+    transaction
+  );
+  if (!schedule) {
+    return {
+      status: "no_schedule",
+      message:
+        "No class start date and timings have been set for this centre and course. Set them under Class Schedule, then enrol.",
+    };
+  }
+
   return null;
 };
 
@@ -258,27 +274,54 @@ const createStudentFromCandidate = async (candidate, overrides, transaction) => 
   return { newUser, newStudent, rollNumber, centerId, courseId, batchId, email };
 };
 
-/** The welcome email. Fire-and-forget: mail must never undo an enrolment. */
-const sendWelcomeEmail = async (candidate, rollNumber, centerId, courseId, email) => {
-  const [center, course] = await Promise.all([
-    Center.findByPk(centerId, { attributes: ["center_name"] }),
-    Course.findByPk(courseId, { attributes: ["course_name", "course_full_name"] }),
-  ]);
+/**
+ * The welcome email: congratulations, and when to turn up.
+ *
+ * Fire-and-forget. Mail must never be able to undo an enrolment that is
+ * already committed, so every failure in here is swallowed and logged.
+ */
+const sendWelcomeEmail = async (
+  candidate,
+  rollNumber,
+  centerId,
+  courseId,
+  email,
+  batchId
+) => {
+  try {
+    const [center, course, schedule] = await Promise.all([
+      Center.findByPk(centerId, { attributes: ["center_name"] }),
+      Course.findByPk(courseId, { attributes: ["course_name", "course_full_name"] }),
+      findScheduleFor(centerId, courseId, batchId),
+    ]);
 
-  const courseName = course?.course_full_name || course?.course_name || "";
-  sendEmailSafe(
-    email,
-    "You are enrolled - Digibizz Program",
-    `Dear ${candidate.cand_name},\n\nCongratulations! You have been enrolled in the Digibizz Program.\n\nRoll Number: ${rollNumber}\nCourse: ${courseName}\nCenter: ${
-      center?.center_name || ""
-    }\n\nPlease visit the Digibizz LMS and set your password to start learning.`,
-    `<p>Dear <strong>${escapeHtml(candidate.cand_name)}</strong>,</p>
-     <p>Congratulations! You have been enrolled in the Digibizz Program.</p>
-     <p><strong>Roll Number:</strong> ${escapeHtml(rollNumber)}<br/>
-        <strong>Course:</strong> ${escapeHtml(courseName)}<br/>
-        <strong>Center:</strong> ${escapeHtml(center?.center_name || "")}</p>
-     <p>Please visit the Digibizz LMS and set your password to start learning.</p>`
-  );
+    if (!schedule) {
+      console.error(
+        `[enroll] no class schedule for centre ${centerId} / course ${courseId} / batch ${batchId} - ${email} was enrolled but not emailed`
+      );
+      return;
+    }
+
+    const courseName = course?.course_full_name || course?.course_name || "";
+    const { subject, text, html } = enrolmentConfirmed({
+      name: candidate.cand_name,
+      rollNumber,
+      courseName,
+      centerName: center?.center_name || "",
+      startDate: schedule.cs_start_date,
+      classDays: schedule.cs_class_days,
+      startTime: schedule.cs_start_time,
+      endTime: schedule.cs_end_time,
+      note: schedule.cs_note,
+    });
+
+    sendEmailSafe({ to: email, subject, text, html });
+  } catch (error) {
+    console.error(
+      `[enroll] could not build the welcome email for ${email}:`,
+      error?.message || error
+    );
+  }
 };
 
 exports.enrollCandidate = async (req, res) => {
@@ -313,7 +356,7 @@ exports.enrollCandidate = async (req, res) => {
     await transaction.commit();
 
     // Best-effort: never let a mail problem undo a committed enrolment.
-    sendWelcomeEmail(candidate, rollNumber, centerId, courseId, email);
+    sendWelcomeEmail(candidate, rollNumber, centerId, courseId, email, batchId);
 
     console.log(
       `[enroll] candidate ${candidate.cand_id} enrolled as ${rollNumber} by user ${req.user.id} (${req.user.username})`
@@ -492,6 +535,7 @@ const summarise = (plan, skipped) => {
     not_found: counts.not_found || 0,
     no_email: counts.no_email || 0,
     email_taken: counts.email_taken || 0,
+    no_schedule: counts.no_schedule || 0,
     unreadable: skipped.length,
   };
 };
@@ -628,7 +672,7 @@ exports.bulkEnrollByCnic = async (req, res) => {
           continue;
         }
 
-        const { rollNumber, centerId, courseId, email } =
+        const { rollNumber, centerId, courseId, batchId, email } =
           await createStudentFromCandidate(candidate, {}, transaction);
 
         await transaction.commit();
@@ -637,7 +681,7 @@ exports.bulkEnrollByCnic = async (req, res) => {
         // After the commit, and not awaited: the welcome email must never be
         // able to undo an enrolment, and awaiting hundreds of them in turn
         // would hold the request open long past any sensible timeout.
-        sendWelcomeEmail(candidate, rollNumber, centerId, courseId, email);
+        sendWelcomeEmail(candidate, rollNumber, centerId, courseId, email, batchId);
 
         results.push({
           ...row,

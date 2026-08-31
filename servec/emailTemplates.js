@@ -190,8 +190,112 @@ const applicationReceived = (data) => {
   return { subject, text, html };
 };
 
+/**
+ * Sent to a student the moment they are enrolled.
+ *
+ * The congratulation is the reason they open it; the start date and timings
+ * are the reason it matters. Those come from the class schedule entered for
+ * their centre and course, not from the batch record - the batch dates are a
+ * plan, and what the centre tells the student is what the student turns up on.
+ *
+ * Every value is required by the time this is called. An email telling
+ * somebody to arrive on a blank date is worse than sending nothing, so
+ * enrolment refuses to proceed without a schedule rather than letting this
+ * template paper over the gap.
+ *
+ * @param {object} data
+ * @param {string} data.name
+ * @param {string} data.rollNumber
+ * @param {string} data.courseName
+ * @param {string} data.centerName
+ * @param {string} data.startDate
+ * @param {string} data.classDays
+ * @param {string} data.startTime
+ * @param {string} data.endTime
+ * @param {string} [data.note]
+ * @returns {{subject: string, text: string, html: string}}
+ */
+const enrolmentConfirmed = (data) => {
+  const name = String(data?.name || "Student");
+  const rollNumber = String(data?.rollNumber || "");
+  const courseName = String(data?.courseName || "");
+  const centerName = String(data?.centerName || "");
+  const startDate = formatDate(data?.startDate);
+  const classDays = String(data?.classDays || "");
+  const startTime = String(data?.startTime || "");
+  const endTime = String(data?.endTime || "");
+  const note = String(data?.note || "");
+
+  const subject = `You are enrolled - ${courseName} at ${centerName}`;
+
+  const html = documentShell(
+    subject,
+    `
+      <p style="margin:0 0 14px;color:#263238;font-size:18px;font-weight:bold;">Congratulations, ${escapeHtml(
+        name
+      )}!</p>
+      <p style="margin:0 0 18px;color:#546e7a;font-size:14px;line-height:1.7;">
+        You have been enrolled in the Digibizz Program. Your place on
+        <strong>${escapeHtml(courseName)}</strong> at
+        <strong>${escapeHtml(centerName)}</strong> is confirmed, and your class
+        details are below. Please keep this email - your roll number is on it.
+      </p>
+
+      <table role="presentation" width="100%" cellpadding="0" cellspacing="0" style="border:1px solid #e0e6e3;border-radius:8px;margin:0 0 18px;">
+        <tr><td colspan="2" style="background-color:#f5f7f8;padding:11px 14px;color:#37474f;font-size:12px;font-weight:bold;letter-spacing:0.6px;text-transform:uppercase;">Your class</td></tr>
+        ${detailRows([
+          ["Roll number", rollNumber],
+          ["Course", courseName],
+          ["Centre", centerName],
+          ["Classes begin", startDate],
+          ["Class days", classDays],
+          ["Class timings", `${startTime} - ${endTime}`],
+        ])}
+      </table>
+
+      ${
+        note
+          ? `<p style="margin:0 0 18px;color:#546e7a;font-size:14px;line-height:1.7;">${escapeHtml(
+              note
+            )}</p>`
+          : ""
+      }
+
+      <p style="margin:0 0 8px;color:#546e7a;font-size:14px;line-height:1.7;">
+        Please arrive on the first day with your original CNIC. Your LMS account
+        has been created against this email address - visit the Digibizz LMS and
+        use "Forgot password" to set your password before classes begin.
+      </p>
+    `
+  );
+
+  const text = [
+    `Congratulations, ${name}!`,
+    "",
+    `You have been enrolled in the Digibizz Program. Your place on ${courseName}`,
+    `at ${centerName} is confirmed.`,
+    "",
+    `Roll number:   ${rollNumber}`,
+    `Course:        ${courseName}`,
+    `Centre:        ${centerName}`,
+    `Classes begin: ${startDate}`,
+    `Class days:    ${classDays}`,
+    `Class timings: ${startTime} - ${endTime}`,
+    ...(note ? ["", note] : []),
+    "",
+    "Please arrive on the first day with your original CNIC. Your LMS account has",
+    "been created against this email address - visit the Digibizz LMS and use",
+    "\"Forgot password\" to set your password before classes begin.",
+    "",
+    `Support: ${SUPPORT_EMAIL}`,
+  ].join("\n");
+
+  return { subject, text, html };
+};
+
 module.exports = {
   applicationReceived,
+  enrolmentConfirmed,
   documentShell,
   detailRows,
   formatDate,

@@ -660,6 +660,69 @@ export const getAllCourse = async () => {
     }
   }
 };
+
+export const getClassSchedules = async (tbId: number) => {
+  try {
+    const response = await axios.get(`${API_URL}/class-schedules/${tbId}`, {
+      headers: {
+        Authorization: `Bearer ${getCurrentUserToken()}`,
+        "Content-Type": "application/json",
+      },
+    });
+    return response.data;
+  } catch (error) {
+    if (axios.isAxiosError(error)) {
+      const errorMessage = error.response?.data?.message || "Failed to load class schedules";
+      throw new Error(errorMessage);
+    }
+    throw error;
+  }
+};
+
+export const saveClassSchedule = async (payload: {
+  center_id: number;
+  course_id: number;
+  tb_id: number;
+  cs_start_date: string;
+  cs_class_days: string;
+  cs_start_time: string;
+  cs_end_time: string;
+  cs_note?: string;
+}) => {
+  try {
+    const response = await axios.post(`${API_URL}/class-schedules`, payload, {
+      headers: {
+        Authorization: `Bearer ${getCurrentUserToken()}`,
+        "Content-Type": "application/json",
+      },
+    });
+    return response.data;
+  } catch (error) {
+    if (axios.isAxiosError(error)) {
+      const errorMessage = error.response?.data?.message || "Failed to save class schedule";
+      throw new Error(errorMessage);
+    }
+    throw error;
+  }
+};
+
+export const deleteClassSchedule = async (csId: number) => {
+  try {
+    const response = await axios.delete(`${API_URL}/class-schedules/${csId}`, {
+      headers: {
+        Authorization: `Bearer ${getCurrentUserToken()}`,
+        "Content-Type": "application/json",
+      },
+    });
+    return response.data;
+  } catch (error) {
+    if (axios.isAxiosError(error)) {
+      const errorMessage = error.response?.data?.message || "Failed to delete class schedule";
+      throw new Error(errorMessage);
+    }
+    throw error;
+  }
+};
 export const getUserType = async () => {
   try {
     const response = await axios.get(`${API_URL}/user/type`);

@@ -8,10 +8,17 @@ import {
   UserPlus,
   ChevronDown,
   Upload,
+  CalendarDays,
+  Clock3,
 } from "lucide-react";
 import {
   getCandidateProfile,
   getSelectedCandidateProfile,
+  getCenter,
+  getAllCourse,
+  getClassSchedules,
+  saveClassSchedule,
+  deleteClassSchedule,
 } from "../../services/api";
 import { useBatch } from "../../context/BatchContext";
 import { DataTable } from "./DataTable";
@@ -127,6 +134,297 @@ const SummaryCard = ({
 
 // Add this type or import your real Candidate type if available
 type Candidate = any;
+
+type ScheduleFormState = {
+  cs_start_date: string;
+  cs_class_days: string;
+  cs_start_time: string;
+  cs_end_time: string;
+  cs_note: string;
+};
+
+function ClassScheduleManager({ tbId }: { tbId: number }) {
+  const [centers, setCenters] = useState<any[]>([]);
+  const [courses, setCourses] = useState<any[]>([]);
+  const [rows, setRows] = useState<any[]>([]);
+  const [selectedCenterId, setSelectedCenterId] = useState<string>("");
+  const [selectedCourseId, setSelectedCourseId] = useState<string>("");
+  const [form, setForm] = useState<ScheduleFormState>({
+    cs_start_date: "",
+    cs_class_days: "",
+    cs_start_time: "",
+    cs_end_time: "",
+    cs_note: "",
+  });
+  const [loading, setLoading] = useState(true);
+  const [saving, setSaving] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+
+  const loadData = async () => {
+    try {
+      setLoading(true);
+      setError(null);
+
+      const [centersRes, coursesRes, schedulesRes] = await Promise.all([
+        getCenter(),
+        getAllCourse(),
+        getClassSchedules(tbId),
+      ]);
+
+      const list = Array.isArray(centersRes?.data) ? centersRes.data : centersRes || [];
+      const courseList = Array.isArray(coursesRes?.data)
+        ? coursesRes.data
+        : Array.isArray(coursesRes)
+        ? coursesRes
+        : [];
+      const scheduleList = schedulesRes?.classes || [];
+
+      setCenters(list);
+      setCourses(courseList);
+      setRows(scheduleList);
+
+      if (!selectedCenterId && list.length) {
+        setSelectedCenterId(String(list[0].center_id));
+      }
+      if (!selectedCourseId && courseList.length) {
+        setSelectedCourseId(String(courseList[0].course_id));
+      }
+    } catch (err: any) {
+      setError(err.message || "Failed to load class schedules");
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  useEffect(() => {
+    if (tbId) {
+      loadData();
+    }
+  }, [tbId]);
+
+  const selectedSchedule = rows.find(
+    (row) =>
+      String(row.center_id) === String(selectedCenterId) &&
+      String(row.course_id) === String(selectedCourseId)
+  );
+
+  const handleSave = async () => {
+    if (!selectedCenterId || !selectedCourseId) {
+      setError("Select both a centre and a course");
+      return;
+    }
+
+    if (!form.cs_start_date || !form.cs_class_days || !form.cs_start_time || !form.cs_end_time) {
+      setError("Please fill in start date, class days, and class timings");
+      return;
+    }
+
+    setSaving(true);
+    setError(null);
+
+    try {
+      await saveClassSchedule({
+        center_id: Number(selectedCenterId),
+        course_id: Number(selectedCourseId),
+        tb_id: tbId,
+        cs_start_date: form.cs_start_date,
+        cs_class_days: form.cs_class_days,
+        cs_start_time: form.cs_start_time,
+        cs_end_time: form.cs_end_time,
+        cs_note: form.cs_note.trim(),
+      });
+
+      setForm({
+        cs_start_date: "",
+        cs_class_days: "",
+        cs_start_time: "",
+        cs_end_time: "",
+        cs_note: "",
+      });
+      await loadData();
+    } catch (err: any) {
+      setError(err.message || "Failed to save schedule");
+    } finally {
+      setSaving(false);
+    }
+  };
+
+  const handleDelete = async (csId: number) => {
+    try {
+      setError(null);
+      await deleteClassSchedule(csId);
+      await loadData();
+    } catch (err: any) {
+      setError(err.message || "Failed to delete schedule");
+    }
+  };
+
+  return (
+    <div className="container mx-auto px-4 sm:px-8 py-6 sm:py-8">
+      <div className="mb-6 rounded-xl border border-[hsl(var(--border))] bg-[hsl(var(--card))] p-5 shadow-sm">
+        <div className="flex items-center gap-3 mb-4">
+          <CalendarDays className="h-5 w-5 text-[hsl(var(--primary))]" />
+          <h2 className="text-xl font-semibold text-[hsl(var(--foreground))]">Class Schedule</h2>
+        </div>
+
+        {error && (
+          <div className="mb-4 rounded-md border border-red-200 bg-red-50 px-3 py-2 text-sm text-red-700">
+            {error}
+          </div>
+        )}
+
+        {loading ? (
+          <div className="text-sm text-[hsl(var(--muted-foreground))]">Loading schedules...</div>
+        ) : (
+          <div className="grid gap-4 lg:grid-cols-[1fr,1fr]">
+            <div className="space-y-4">
+              <div className="grid gap-3 sm:grid-cols-2">
+                <label className="text-sm text-[hsl(var(--muted-foreground))]">
+                  Centre
+                  <select
+                    value={selectedCenterId}
+                    onChange={(e) => setSelectedCenterId(e.target.value)}
+                    className="mt-1 w-full rounded-md border border-[hsl(var(--border))] bg-[hsl(var(--background))] px-3 py-2 text-[hsl(var(--foreground))]"
+                  >
+                    {centers.map((center) => (
+                      <option key={center.center_id} value={center.center_id}>
+                        {center.center_name}
+                      </option>
+                    ))}
+                  </select>
+                </label>
+
+                <label className="text-sm text-[hsl(var(--muted-foreground))]">
+                  Course
+                  <select
+                    value={selectedCourseId}
+                    onChange={(e) => setSelectedCourseId(e.target.value)}
+                    className="mt-1 w-full rounded-md border border-[hsl(var(--border))] bg-[hsl(var(--background))] px-3 py-2 text-[hsl(var(--foreground))]"
+                  >
+                    {courses.map((course) => (
+                      <option key={course.course_id} value={course.course_id}>
+                        {course.course_full_name || course.course_name}
+                      </option>
+                    ))}
+                  </select>
+                </label>
+              </div>
+
+              <div className="grid gap-3 sm:grid-cols-2">
+                <label className="text-sm text-[hsl(var(--muted-foreground))]">
+                  Start date
+                  <input
+                    type="date"
+                    value={form.cs_start_date}
+                    onChange={(e) => setForm({ ...form, cs_start_date: e.target.value })}
+                    className="mt-1 w-full rounded-md border border-[hsl(var(--border))] bg-[hsl(var(--background))] px-3 py-2 text-[hsl(var(--foreground))]"
+                  />
+                </label>
+                <label className="text-sm text-[hsl(var(--muted-foreground))]">
+                  Class days
+                  <input
+                    value={form.cs_class_days}
+                    onChange={(e) => setForm({ ...form, cs_class_days: e.target.value })}
+                    placeholder="Monday to Friday"
+                    className="mt-1 w-full rounded-md border border-[hsl(var(--border))] bg-[hsl(var(--background))] px-3 py-2 text-[hsl(var(--foreground))]"
+                  />
+                </label>
+              </div>
+
+              <div className="grid gap-3 sm:grid-cols-2">
+                <label className="text-sm text-[hsl(var(--muted-foreground))]">
+                  Start time
+                  <input
+                    value={form.cs_start_time}
+                    onChange={(e) => setForm({ ...form, cs_start_time: e.target.value })}
+                    placeholder="09:00 AM"
+                    className="mt-1 w-full rounded-md border border-[hsl(var(--border))] bg-[hsl(var(--background))] px-3 py-2 text-[hsl(var(--foreground))]"
+                  />
+                </label>
+                <label className="text-sm text-[hsl(var(--muted-foreground))]">
+                  End time
+                  <input
+                    value={form.cs_end_time}
+                    onChange={(e) => setForm({ ...form, cs_end_time: e.target.value })}
+                    placeholder="01:00 PM"
+                    className="mt-1 w-full rounded-md border border-[hsl(var(--border))] bg-[hsl(var(--background))] px-3 py-2 text-[hsl(var(--foreground))]"
+                  />
+                </label>
+              </div>
+
+              <label className="block text-sm text-[hsl(var(--muted-foreground))]">
+                Note (optional)
+                <textarea
+                  value={form.cs_note}
+                  onChange={(e) => setForm({ ...form, cs_note: e.target.value })}
+                  placeholder="Room 4, Gate B, etc."
+                  rows={3}
+                  className="mt-1 w-full rounded-md border border-[hsl(var(--border))] bg-[hsl(var(--background))] px-3 py-2 text-[hsl(var(--foreground))]"
+                />
+              </label>
+
+              <div className="flex justify-end">
+                <button
+                  onClick={handleSave}
+                  disabled={saving}
+                  className="rounded-md bg-emerald-600 px-4 py-2 text-sm font-semibold text-white hover:bg-emerald-700 disabled:cursor-not-allowed disabled:opacity-50"
+                >
+                  {saving ? "Saving..." : selectedSchedule?.schedule ? "Update schedule" : "Save schedule"}
+                </button>
+              </div>
+            </div>
+
+            <div className="space-y-3">
+              <div className="flex items-center gap-2 text-sm font-medium text-[hsl(var(--foreground))]">
+                <Clock3 className="h-4 w-4 text-[hsl(var(--primary))]" />
+                Batch classes
+              </div>
+
+              {rows.length === 0 ? (
+                <div className="rounded-md border border-dashed border-[hsl(var(--border))] p-4 text-sm text-[hsl(var(--muted-foreground))]">
+                  No class schedules entered for this batch yet.
+                </div>
+              ) : (
+                rows.map((row) => (
+                  <div
+                    key={`${row.center_id}-${row.course_id}`}
+                    className="rounded-lg border border-[hsl(var(--border))] bg-[hsl(var(--background))] p-3"
+                  >
+                    <div className="mb-2 flex items-center justify-between gap-3">
+                      <div>
+                        <p className="font-semibold text-[hsl(var(--foreground))]">{row.center_name}</p>
+                        <p className="text-sm text-[hsl(var(--muted-foreground))]">{row.course_name}</p>
+                      </div>
+                      {row.schedule && (
+                        <button
+                          onClick={() => handleDelete(row.schedule.cs_id)}
+                          className="text-xs font-medium text-red-600 hover:text-red-700"
+                        >
+                          Delete
+                        </button>
+                      )}
+                    </div>
+
+                    {row.schedule ? (
+                      <div className="space-y-1 text-sm text-[hsl(var(--muted-foreground))]">
+                        <p><span className="font-medium text-[hsl(var(--foreground))]">Start:</span> {row.schedule.cs_start_date}</p>
+                        <p><span className="font-medium text-[hsl(var(--foreground))]">Days:</span> {row.schedule.cs_class_days}</p>
+                        <p><span className="font-medium text-[hsl(var(--foreground))]">Timings:</span> {row.schedule.cs_start_time} - {row.schedule.cs_end_time}</p>
+                        {row.schedule.cs_note && <p><span className="font-medium text-[hsl(var(--foreground))]">Note:</span> {row.schedule.cs_note}</p>}
+                      </div>
+                    ) : (
+                      <p className="text-sm text-amber-700">Missing schedule</p>
+                    )}
+                  </div>
+                ))
+              )}
+            </div>
+          </div>
+        )}
+      </div>
+    </div>
+  );
+}
 
 function AdmissionPortal() {
   const [candidateData, setCandidateData] = useState<{
@@ -397,6 +695,12 @@ function AdmissionPortal() {
             >
               Center/Domain Change
             </button>
+            <button
+              onClick={() => setActiveTab("classSchedule")}
+              className="px-3 py-2 rounded-md text-[hsl(var(--foreground))] hover:bg-[hsl(var(--muted))] transition-colors"
+            >
+              Class Schedule
+            </button>
 
             {/* Interview Panel */}
             <button
@@ -528,6 +832,7 @@ function AdmissionPortal() {
         )}
         {/* This tab had a button but no render branch, so it showed a blank page. */}
         {activeTab === "centerDomainChange" && <CenterDomainChange />}
+        {activeTab === "classSchedule" && <ClassScheduleManager tbId={selectedBatchId} />}
         {activeTab === "interviewPanel" && <InterviewPortal />}
 
         <EnrollCandidateDialog
