@@ -100,12 +100,18 @@ exports.getTrainerProfileForFeedBack = async (req, res) => {
     return res.status(404).json({ message: "Student not found" });
   }
 
+  // This endpoint answers "who is my trainer?" with exactly one person. A
+  // class taught by two trainers therefore shows the student only one of
+  // them; the order makes it consistently the same one rather than whichever
+  // row came back first. Showing both would mean changing what this endpoint
+  // returns and the screen that reads it.
   const trainerCenterAllocation = await TrainerCenterAllocation.findOne({
     where: {
       tb_id,
       center_id: student.center_id,
       course_id: student.course_id,
     },
+    order: [["t_id", "ASC"]],
     include: [
       {
         model: Trainer,

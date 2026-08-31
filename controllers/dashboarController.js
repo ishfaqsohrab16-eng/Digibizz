@@ -223,7 +223,14 @@ exports.getStudentDashoard = async (req, res) => {
     // Every trainer on this student's class. With findOne, a class taught by
     // two trainers counted only one of their quiz sets, so the student's
     // "total quizzes" was lower than the number they could actually see.
-    const trainerCenterAllocation = await TrainerCenterAllocation.findAll({
+    //
+    // Named as a list deliberately. When this was changed from findOne to
+    // findAll, two later uses were left reading `.t_id` off it as though it
+    // were still one row. An empty array is truthy, so the guards in front of
+    // them passed, and every student dashboard died on
+    // `WHERE parameter "t_id" has invalid "undefined" value`. A name that says
+    // what it holds is what makes that mistake visible at the call site.
+    const classAllocations = await TrainerCenterAllocation.findAll({
       where: {
         tb_id: tb_id,
         center_id: studentProfile.center_id,
@@ -231,7 +238,7 @@ exports.getStudentDashoard = async (req, res) => {
       },
     });
     const classTrainerIds = [
-      ...new Set(trainerCenterAllocation.map((a) => a.t_id)),
+      ...new Set(classAllocations.map((a) => a.t_id)),
     ];
     const totalQuizzes = classTrainerIds.length
       ? await Quiz.count({
@@ -317,12 +324,12 @@ exports.getStudentDashoard = async (req, res) => {
     );
 
     // Count pending items
-    const pendingQuizCount = trainerCenterAllocation
+    const pendingQuizCount = classTrainerIds.length
       ? Math.max(
           (await Quiz.count({
             where: {
               tb_id: tb_id,
-              t_id: trainerCenterAllocation.t_id,
+              t_id: { [Op.in]: classTrainerIds },
             },
           })) -
             (await QuizAttempts.count({
@@ -364,14 +371,16 @@ exports.getStudentDashoard = async (req, res) => {
       order: [["ca_added_on", "DESC"]],
     });
 
+    // A student with no trainer allocated to their class yet sees no quizzes,
+    // rather than every quiz in the batch.
     const quiz =
-      userType === "student" && !trainerCenterAllocation
+      userType === "student" && classTrainerIds.length === 0
         ? []
         : await Quiz.findAll({
             where: {
               tb_id,
               ...(userType === "student"
-                ? { t_id: trainerCenterAllocation.t_id }
+                ? { t_id: { [Op.in]: classTrainerIds } }
                 : {}),
             },
             order: [["quiz_created_on", "DESC"]],

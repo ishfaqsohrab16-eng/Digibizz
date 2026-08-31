@@ -42,7 +42,22 @@ const todayKey = (now = new Date()) =>
     day: "2-digit",
   }).format(now);
 
+/**
+ * A zeroed usage report.
+ *
+ * Separate from ZERO_COLUMNS below on purpose: this is the shape the rest of
+ * the app reads, and those are database column names. One constant serving
+ * both was passed to findOrCreate as `defaults` and silently ignored, since
+ * no column is called `total` - Sequelize warned about exactly that.
+ */
 const EMPTY = { total: 0, transactional: 0, campaign: 0 };
+
+/** The same zeroes, under the names the table actually uses. */
+const ZERO_COLUMNS = {
+  esq_total: 0,
+  esq_transactional: 0,
+  esq_campaign: 0,
+};
 
 /**
  * Today's row, created if this is the day's first send.
@@ -54,7 +69,7 @@ const todayRow = async () => {
   try {
     const [row] = await EmailSendQuota.findOrCreate({
       where: { esq_date: todayKey() },
-      defaults: { esq_date: todayKey(), ...EMPTY },
+      defaults: { esq_date: todayKey(), ...ZERO_COLUMNS },
     });
     return row;
   } catch (error) {

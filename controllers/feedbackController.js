@@ -135,12 +135,22 @@ const createFeedback = async (req, res) => {
       });
     }
 
+    // A class can have more than one trainer. Feedback is a single score
+    // against a single t_id, so one of them has to be chosen, and there is
+    // currently nothing in the form asking the student which they mean.
+    //
+    // The order is explicit so that the choice is at least the SAME trainer
+    // every week rather than whichever row the database happened to return
+    // first - otherwise a student's feedback could drift between colleagues
+    // and neither score would mean anything. Deciding this properly needs the
+    // form to ask.
     const trainer = await TrainerCenterAllocation.findOne({
       where: {
         tb_id: student.tb_id,
         center_id: student.center_id,
         course_id: student.course_id,
       },
+      order: [["t_id", "ASC"]],
     });
     if (!trainer) {
       return res.status(400).json({

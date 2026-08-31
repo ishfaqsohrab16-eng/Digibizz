@@ -2,7 +2,6 @@ import React from "react";
 import { CandidateFormData } from "../../../types/registration";
 import { domicileOptions } from "../../../types/degreeAreas";
 import { Field, SelectInput, TextInput, TextareaInput, fieldGrid } from "./fields";
-import EmailVerification from "./EmailVerification";
 
 interface ContactInformationProps {
   formData: CandidateFormData;
@@ -12,17 +11,12 @@ interface ContactInformationProps {
       HTMLInputElement | HTMLSelectElement | HTMLTextAreaElement
     >
   ) => void;
-  /** Whether the typed address has been confirmed with an emailed code. */
-  emailVerified: boolean;
-  onEmailVerifiedChange: (verified: boolean) => void;
 }
 
 const ContactInformation: React.FC<ContactInformationProps> = ({
   formData,
   errors,
   handleInputChange,
-  emailVerified,
-  onEmailVerifiedChange,
 }) => {
   return (
     <div className={fieldGrid}>
@@ -35,11 +29,6 @@ const ContactInformation: React.FC<ContactInformationProps> = ({
           onChange={handleInputChange}
           placeholder="Enter your email address"
           hasError={Boolean(errors.cand_email)}
-        />
-        <EmailVerification
-          email={formData.cand_email}
-          verified={emailVerified}
-          onVerifiedChange={onEmailVerifiedChange}
         />
       </Field>
 

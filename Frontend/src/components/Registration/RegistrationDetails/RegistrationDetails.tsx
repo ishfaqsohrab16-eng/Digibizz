@@ -138,7 +138,6 @@ const RegistrationDetails: React.FC<RegistrationDetailsProps> = ({
   // Confirmed with an emailed code. Blocks the contact step rather than only
   // the final submit, so the applicant fixes a mistyped address while they are
   // still looking at it - the interview call-up goes to this address.
-  const [emailVerified, setEmailVerified] = useState(false);
   const [isSubmitting, setIsSubmitting] = useState(false);
   const [agreeToTerms, setAgreeToTerms] = useState(false);
   const [stepIndex, setStepIndex] = useState(0);
@@ -300,10 +299,6 @@ const RegistrationDetails: React.FC<RegistrationDetailsProps> = ({
           current_city: "Current city",
           where_find_us: "Where did you find us",
         });
-        if (formData.cand_email && !emailVerified) {
-          stepErrors.cand_email =
-            "Please confirm your email address with the code we sent";
-        }
         break;
       }
       case "academic": {
@@ -534,8 +529,6 @@ const RegistrationDetails: React.FC<RegistrationDetailsProps> = ({
             formData={formData}
             errors={errors}
             handleInputChange={handleInputChange}
-            emailVerified={emailVerified}
-            onEmailVerifiedChange={setEmailVerified}
           />
         );
       case "academic":

@@ -1,6 +1,7 @@
 const { validationResult } = require("express-validator");
 const fs = require("fs").promises;
 const { sequelize } = require("../config/db");
+const { isGender } = require("../utils/gender");
 const EarningsModel = require("../models/earningsModel");
 const Student = require("../models/studentModel");
 const TrainerCenterAllocationModel = require("../models/trainersCenterAllocationModel");
@@ -730,9 +731,12 @@ const generateResponse = (
       uniqueStudents.add(earning.students.std_id);
       studentStats.totalStudents++;
 
-      if (earning.students.std_gender === "Male") {
+      // Compared through the normaliser: rows written before the students
+      // table normalised gender still hold whatever they were given, and a
+      // plain === "Male" silently undercounts them.
+      if (isGender(earning.students.std_gender, "Male")) {
         studentStats.maleCount++;
-      } else if (earning.students.std_gender === "Female") {
+      } else if (isGender(earning.students.std_gender, "Female")) {
         studentStats.femaleCount++;
       }
     }

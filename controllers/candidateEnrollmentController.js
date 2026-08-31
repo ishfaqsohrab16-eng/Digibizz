@@ -282,6 +282,19 @@ exports.enrollCandidate = async (req, res) => {
       });
     }
 
+    // Say which field the applicant's record fails on. A bare 500 sent the
+    // admin to the server log to find out that a gender was spelled in lower
+    // case - a question the response could have answered.
+    if (error.name === "SequelizeValidationError") {
+      const details = (error.errors || [])
+        .map((item) => `${item.path}: ${item.message}`)
+        .join("; ");
+      return res.status(400).json({
+        success: false,
+        message: `This candidate's record cannot be enrolled as it stands. ${details}`,
+      });
+    }
+
     return res.status(500).json({
       success: false,
       message: "Server error while enrolling candidate",

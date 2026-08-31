@@ -48,7 +48,6 @@ const courseModuleRoutes = require("./routes/courseModuleRoutes");
 const trainerTopicReportRoutes = require("./routes/trainerTopicReportRoutes");
 const admissionControlRoutes = require("./routes/admissionControlRoutes");
 const emailCampaignRoutes = require("./routes/emailCampaignRoutes");
-const emailVerificationRoutes = require("./routes/emailVerificationRoutes");
 
 require("./models/courseModuleAssociation");
 // Registered explicitly so sync() creates their tables on first boot.
@@ -196,7 +195,13 @@ app.use("/api/course-modules", courseModuleRoutes);
 app.use("/api/trainer-topic-reports", trainerTopicReportRoutes);
 app.use("/api/admission-control", admissionControlRoutes);
 app.use("/api/email-campaigns", emailCampaignRoutes);
-app.use("/api/email-verification", emailVerificationRoutes);
+// Email confirmation has been removed from the registration form, so these
+// endpoints are no longer mounted. They were the only unauthenticated way to
+// make this application send mail, which on a metered provider is also a way
+// to burn the day's allowance - not something to leave reachable for a
+// feature nothing calls. The controller and routes file are kept, so
+// restoring it is a matter of uncommenting this line.
+// app.use("/api/email-verification", emailVerificationRoutes);
 // Catch-all handler to return the React frontend's index.html file
 app.get("*", (req, res) => {
   res.sendFile(path.join(__dirname, "dist", "index.html"));

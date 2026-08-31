@@ -1,6 +1,7 @@
 const { DataTypes } = require("sequelize");
 const bcrypt = require("bcryptjs");
 const { sequelize } = require("../config/db");
+const { normaliseGender, CANONICAL } = require("../utils/gender");
 const Center = require("./center");
 const Course = require("./course");
 const User = require("./userModel");
@@ -47,8 +48,24 @@ const StudentModel = sequelize.define(
     std_gender: {
       type: DataTypes.STRING(50),
       allowNull: false,
+      /**
+       * Normalised on the way in, so the validator below only ever judges
+       * meaning and not capitalisation.
+       *
+       * The registration form posts "female"; this column accepts "Female".
+       * Enrolling a candidate copies one to the other, so every female
+       * applicant failed to enrol. A setter fixes it for every writer at
+       * once - the enrolment path, imports, and anything written later -
+       * rather than only for the one that happened to be reported.
+       */
+      set(value) {
+        this.setDataValue("std_gender", normaliseGender(value));
+      },
       validate: {
-        isIn: [["Male", "Female", "Other"]],
+        // Still strict. An unrecognised value passes through the setter
+        // untouched and is refused here, which is what should happen to
+        // data nobody can interpret.
+        isIn: [CANONICAL],
       },
     },
     std_qualification: {
