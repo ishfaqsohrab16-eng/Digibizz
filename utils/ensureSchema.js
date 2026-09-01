@@ -21,6 +21,13 @@ const { sequelize } = require("../config/db");
  */
 const REQUIRED_COLUMNS = [
   {
+    table: "assignments",
+    column: "as_group_id",
+    definition:
+      "VARCHAR(36) NULL DEFAULT NULL COMMENT 'Ties together the copies set for each of a trainer classes'",
+    migration: "migration/023_assignment_group_id.sql",
+  },
+  {
     table: "email_campaign_recipients",
     column: "ecr_merge_data",
     definition:

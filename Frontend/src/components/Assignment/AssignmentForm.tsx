@@ -230,13 +230,18 @@ const AssignmentForm = ({
           setProfilePhoto(null);
         }
       }
-    } catch (error) {
+    } catch (error: any) {
       if (isMounted) {
         console.error("Submission error:", error);
+        // The server now says exactly what was wrong - the deadline is not a
+        // date, the marks are out of range, this assignment is not yours to
+        // edit. Replacing that with "Failed to create assignment" threw away
+        // the only part the trainer could act on.
         toast.error(
-          mode === "create"
-            ? "Failed to create assignment"
-            : "Failed to update assignment",
+          error?.response?.data?.message ||
+            (mode === "create"
+              ? "Failed to create assignment"
+              : "Failed to update assignment"),
           {
             position: "top-right",
             duration: 3000,

@@ -21,6 +21,21 @@ const AssignmentModel = sequelize.define(
       type: DataTypes.TEXT("long"),
       allowNull: false,
     },
+    /**
+     * Ties together the copies created for each of a trainer's classes.
+     *
+     * One assignment set for three centres is three rows, because students
+     * are listed per class and submissions hang off a single row. Without a
+     * shared key, editing the title changed it for one centre and left the
+     * other two showing the old one, and deleting removed one of three.
+     *
+     * Nullable: rows written before this column existed have no group, and
+     * are edited and deleted individually, exactly as they were.
+     */
+    as_group_id: {
+      type: DataTypes.STRING(36),
+      allowNull: true,
+    },
     as_attachment: {
       type: DataTypes.STRING(255),
       allowNull: true,

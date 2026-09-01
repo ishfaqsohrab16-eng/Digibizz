@@ -1,3 +1,7 @@
+const fs = require("fs");
+const path = require("path");
+const crypto = require("crypto");
+const { Op } = require("sequelize");
 const Assignment = require("../models/assignmentModel");
 const Center = require("../models/center");
 const Course = require("../models/course");
@@ -9,52 +13,107 @@ const Student = require("../models/studentModel");
 const AssignmentSubmission = require("../models/assignmentSubmissionModel");
 const { validationResult } = require("express-validator");
 const { sequelize } = require("../config/db");
-// Create Assignment
-exports.createAssignment = async (req, res) => {
+const {
+  resolveViewer,
+  assignmentScopeFor,
+  canManageAssignment,
+} = require("../utils/assignmentAccess");
+const {
+  submissionStatistics,
+  isPastDeadline,
+  minutesUntilDeadline,
+} = require("../utils/assignmentRules");
+
+/** Where uploaded attachments live, for deleting the orphans. */
+const UPLOAD_DIR = path.join(__dirname, "..", "uploads", "user-assignments");
+
+/**
+ * Remove an attachment from disk.
+ *
+ * Best-effort and deliberately quiet about a missing file: the row is the
+ * record, and failing a delete because a file was already gone would leave the
+ * assignment undeletable. The path is resolved and confined to the upload
+ * directory, so a stored value cannot reach outside it.
+ */
+const removeAttachment = (storedPath) => {
+  if (!storedPath) return;
+  try {
+    const name = path.basename(String(storedPath));
+    const full = path.join(UPLOAD_DIR, name);
+    if (!full.startsWith(UPLOAD_DIR)) return;
+    if (fs.existsSync(full)) fs.unlinkSync(full);
+  } catch (error) {
+    console.warn(`[assignment] could not remove ${storedPath}:`, error.message);
+  }
+};
+
+/** First validation failure, phrased for the person who typed it. */
+const firstValidationError = (req) => {
   const errors = validationResult(req);
-  if (!errors.isEmpty()) {
-    return res.status(400).json({ errors: errors.array() });
+  if (errors.isEmpty()) return null;
+  const first = errors.array()[0];
+  return first?.msg || "Some of those details are not valid";
+};
+
+// ---------------------------------------------------------------------------
+// Create
+// ---------------------------------------------------------------------------
+
+/**
+ * Set an assignment for every class the trainer teaches in this batch.
+ *
+ * One row per (centre, course) allocation, because students are listed per
+ * class and a single shared row could not carry per-class submissions. The rows
+ * share an `as_group_id` so that editing or deleting later acts on the set -
+ * without it, changing a title changed it for one centre and left the others
+ * showing the old one.
+ */
+exports.createAssignment = async (req, res) => {
+  const invalid = firstValidationError(req);
+  if (invalid) {
+    return res.status(400).json({ success: false, message: invalid });
   }
 
   try {
-    const { as_title, as_description, as_deadline, as_marks, tb_id, user_id } =
-      req.body;
+    const { as_title, as_description, as_deadline, as_marks, tb_id } = req.body;
 
-    // Validate training batch
     const trainingBatch = await TrainingBatch.findByPk(tb_id);
     if (!trainingBatch) {
-      return res.status(400).json({
-        success: false,
-        message: "Invalid training batch",
-      });
+      return res
+        .status(400)
+        .json({ success: false, message: "That training batch does not exist" });
     }
 
-    // Find trainer
-    const trainer = await Trainer.findOne({
-      where: { user_id: user_id },
-      raw: true,
-    });
+    // Whose assignment this is. Taken from the signed-in user, never from the
+    // body: `user_id` used to come from the request, so anyone could create
+    // assignments in another trainer's name.
+    const viewer = await resolveViewer(req.user, tb_id);
 
+    let trainer = viewer.trainer;
     if (!trainer) {
-      return res.status(400).json({
-        success: false,
-        message: "Trainer not found",
-      });
+      // An admin may set work on a trainer's behalf, but must say which one.
+      if (viewer.isAdmin && req.body.user_id) {
+        trainer = await Trainer.findOne({ where: { user_id: req.body.user_id } });
+      }
+      if (!trainer) {
+        return res.status(400).json({
+          success: false,
+          message: viewer.isAdmin
+            ? "Choose the trainer this assignment is for"
+            : "No trainer record is linked to your account",
+        });
+      }
     }
 
-    // Find all trainer's center allocations for this batch
     const trainerAllocations = await trainers_center_allocation.findAll({
-      where: {
-        t_id: trainer.t_id,
-        tb_id: tb_id,
-      },
+      where: { t_id: trainer.t_id, tb_id },
       raw: true,
     });
 
-    if (!trainerAllocations || trainerAllocations.length === 0) {
+    if (trainerAllocations.length === 0) {
       return res.status(400).json({
         success: false,
-        message: "Trainer is not allocated to this batch",
+        message: "That trainer is not allocated to any class in this batch",
       });
     }
 
@@ -62,158 +121,148 @@ exports.createAssignment = async (req, res) => {
       ? `/uploads/user-assignments/${req.file.filename}`
       : "";
 
-    // Create assignments for each center-course allocation
-    const createdAssignments = [];
+    // Ties the rows together. Generated here rather than derived from the first
+    // row's id, so every row in the set has it from the moment it is written.
+    const as_group_id = crypto.randomUUID();
 
-    // Use transaction to ensure all assignments are created or none
-    const result = await sequelize.transaction(async (t) => {
+    const created = await sequelize.transaction(async (t) => {
+      // Built inside the transaction. It used to be declared outside and pushed
+      // into, so a rolled-back attempt left its rows in the array and the
+      // response reported assignments that do not exist.
+      const rows = [];
       for (const allocation of trainerAllocations) {
-        const newAssignment = await Assignment.create(
-          {
-            as_title,
-            as_description,
-            as_attachment,
-            as_deadline,
-            as_marks,
-            t_id: trainer.t_id,
-            tb_id,
-            course_id: allocation.course_id,
-            center_id: allocation.center_id,
-            as_added_on: new Date().toISOString().split("T")[0],
-          },
-          { transaction: t }
+        rows.push(
+          await Assignment.create(
+            {
+              as_title,
+              as_description,
+              as_attachment,
+              as_deadline,
+              as_marks,
+              as_group_id,
+              t_id: trainer.t_id,
+              tb_id,
+              course_id: allocation.course_id,
+              center_id: allocation.center_id,
+              as_added_on: new Date().toISOString().split("T")[0],
+            },
+            { transaction: t }
+          )
         );
-
-        createdAssignments.push(newAssignment);
       }
-
-      return createdAssignments;
+      return rows;
     });
 
-    res.status(201).json({
+    console.log(
+      `[assignment] "${as_title}" set for ${created.length} class(es) by user ${req.user.id}`
+    );
+
+    return res.status(201).json({
       success: true,
-      message: `Assignment created successfully for ${
-        createdAssignments.length
-      } center${createdAssignments.length > 1 ? "s" : ""}`,
-      data: createdAssignments,
+      message: `Assignment set for ${created.length} class${
+        created.length === 1 ? "" : "es"
+      }`,
+      data: created,
     });
   } catch (error) {
-    console.error(error);
-    res.status(500).json({
+    // The file is already on disk by the time the controller runs, so a failure
+    // here leaves it orphaned unless it is cleaned up.
+    if (req.file) removeAttachment(req.file.filename);
+    console.error("Assignment creation error:", error);
+    return res.status(500).json({
       success: false,
-      message: "Error creating assignment",
-      error: error.message,
+      message: "Could not create the assignment",
+      error: process.env.NODE_ENV === "development" ? error.message : undefined,
     });
   }
 };
 
-// Get Assignment by ID
+// ---------------------------------------------------------------------------
+// Read
+// ---------------------------------------------------------------------------
+
 exports.getAssignmentById = async (req, res) => {
   try {
-    // The route is GET /:id, so the primary key comes from req.params.id.
-    // `id` was used bare here and is not a variable in scope, so this endpoint
-    // threw "id is not defined" on every call.
-    const { id, tb_id } = req.params;
+    const { id } = req.params;
+
     const assignment = await Assignment.findByPk(id, {
-      where: { tb_id },
       include: [
-        { model: Center, as: "center", attributes: ["center_name"] },
-        { model: Course, as: "course", attributes: ["course_name"] },
-        { model: TrainingBatch, as: "trainingBatch", attributes: ["tb_name"] },
+        { model: Center, attributes: ["center_name"] },
+        { model: Course, attributes: ["course_name"] },
+        { model: TrainingBatch, attributes: ["tb_name"] },
       ],
     });
+
     if (!assignment) {
-      return res.status(404).json({ message: "Assignment not found" });
+      return res
+        .status(404)
+        .json({ success: false, message: "Assignment not found" });
     }
 
-    res.json(assignment);
+    // Reading one assignment is subject to the same scoping as listing them.
+    // Without this, a student could read another class's brief by guessing an
+    // id - and this endpoint was unreachable, so nobody noticed it had no check.
+    const viewer = await resolveViewer(req.user, assignment.tb_id);
+    const scope = assignmentScopeFor(viewer);
+
+    const permitted =
+      scope !== null &&
+      Object.entries(scope).every(
+        ([field, value]) => String(assignment[field]) === String(value)
+      );
+
+    if (!permitted) {
+      return res
+        .status(403)
+        .json({ success: false, message: "That assignment is not yours to view" });
+    }
+
+    return res.json({ success: true, data: assignment });
   } catch (error) {
     console.error("Assignment fetch error:", error);
-    res.status(500).json({ message: "Server error fetching assignment" });
+    return res
+      .status(500)
+      .json({ success: false, message: "Could not load the assignment" });
   }
 };
 
-// Get All Assignments
+/**
+ * Every assignment in a batch that the signed-in user is entitled to see.
+ *
+ * The identity used to come from `?user_id=`, so one person could read another
+ * person's list by editing the URL. Worse, when the matching trainer or student
+ * row could not be found the WHERE clause was left unscoped and they saw the
+ * whole batch - a missing record granted MORE access. Both are gone: identity
+ * comes from the token, and an unresolvable viewer sees nothing.
+ */
 exports.getAllAssignmentsByTB = async (req, res) => {
   try {
+    const invalid = firstValidationError(req);
+    if (invalid) {
+      return res.status(400).json({ success: false, message: invalid });
+    }
+
     const { tb_id } = req.params;
-    const { user_id } = req.query;
+    const viewer = await resolveViewer(req.user, tb_id);
+    const scope = assignmentScopeFor(viewer);
 
-    if (!user_id) {
-      return res.status(400).json({
-        success: false,
-        message: "User ID is required",
+    if (scope === null) {
+      return res.status(200).json({
+        success: true,
+        data: [],
+        message:
+          viewer.role === "student"
+            ? "Your student record could not be found, so no assignments can be listed"
+            : "You have no classes in this batch",
       });
-    }
-
-    const user = await User.findByPk(user_id, {
-      raw: true,
-    });
-
-    if (!user) {
-      return res.status(404).json({
-        success: false,
-        message: "User not found",
-      });
-    }
-
-    let whereClause = { tb_id };
-    let studentRollno = null;
-
-    // Handle different user types
-    if (user.user_type === "trainer") {
-      const trainer = await Trainer.findOne({
-        where: { user_id: user_id },
-        raw: true,
-      });
-
-      if (trainer) {
-        const trainerCenter = await trainers_center_allocation.findOne({
-          where: {
-            t_id: trainer.t_id,
-            tb_id,
-          },
-          raw: true,
-        });
-
-        if (trainerCenter) {
-          whereClause = {
-            ...whereClause,
-            t_id: trainer.t_id,
-          };
-        }
-      }
-    } else if (user.user_type === "student") {
-      const student = await Student.findOne({
-        where: { user_id: user_id },
-        raw: true,
-      });
-
-      if (student) {
-        studentRollno = student.std_rollno;
-        whereClause = {
-          ...whereClause,
-          center_id: student.center_id,
-          course_id: student.course_id,
-        };
-      }
     }
 
     const assignments = await Assignment.findAll({
-      where: whereClause,
+      where: { tb_id, ...scope },
       include: [
-        {
-          model: Course,
-          attributes: ["course_name"],
-        },
-        {
-          model: Center,
-          attributes: ["center_name"],
-        },
-        {
-          model: TrainingBatch,
-          attributes: ["tb_name"],
-        },
+        { model: Course, attributes: ["course_name"] },
+        { model: Center, attributes: ["center_name"] },
+        { model: TrainingBatch, attributes: ["tb_name"] },
         {
           model: Trainer,
           attributes: ["user_id"],
@@ -226,189 +275,279 @@ exports.getAllAssignmentsByTB = async (req, res) => {
           ],
         },
       ],
-      order: [["as_added_on", "DESC"]],
+      order: [["as_added_on", "DESC"], ["as_id", "DESC"]],
     });
 
-    // Enhanced assignments data with submission statistics
-    const enhancedAssignments = await Promise.all(
-      assignments.map(async (assignment) => {
-        const plainAssignment = assignment.get({ plain: true });
+    if (assignments.length === 0) {
+      return res.status(200).json({ success: true, data: [] });
+    }
 
-        if (user.user_type === "trainer") {
-          // Get submission statistics for trainer
-          const submissions = await AssignmentSubmission.findAll({
-            where: {
-              as_id: assignment.as_id,
-              tb_id: tb_id,
-            },
-            raw: true,
-          });
-
-          // Count students in this assignment's center and course
-          const totalStudents = await Student.count({
-            where: {
-              tb_id: tb_id,
-              center_id: assignment.center_id,
-              course_id: assignment.course_id,
-            },
-          });
-
-          // Calculate statistics
-          const submissionCount = submissions.length;
-          const pendingCount = totalStudents - submissionCount;
-
-          // Calculate average marks if there are submissions with marks
-          let avgMarks = 0;
-          const markedSubmissions = submissions.filter(
-            (sub) => sub.obt_marks && parseFloat(sub.obt_marks) > 0
-          );
-
-          if (markedSubmissions.length > 0) {
-            const totalMarks = markedSubmissions.reduce(
-              (sum, sub) => sum + parseFloat(sub.obt_marks),
-              0
-            );
-            avgMarks = (totalMarks / markedSubmissions.length).toFixed(1);
-          }
-
-          return {
-            ...plainAssignment,
-            statistics: {
-              submissionCount,
-              pendingCount,
-              totalStudents,
-              avgMarks,
-            },
-          };
-        } else if (user.user_type === "student" && studentRollno) {
-          // Get student's submission for this assignment if any
-          const studentSubmission = await AssignmentSubmission.findOne({
-            where: {
-              as_id: assignment.as_id,
-              std_rollno: studentRollno,
-            },
-            raw: true,
-          });
-
-          return {
-            ...plainAssignment,
-            studentStats: {
-              hasSubmitted: !!studentSubmission,
-              obtainedMarks: studentSubmission
-                ? studentSubmission.obt_marks
-                : null,
-              submissionStatus: studentSubmission
-                ? studentSubmission.as_submission_status
-                : null,
-              submissionDate: studentSubmission
-                ? studentSubmission.submitted_on
-                : null,
-              status: studentSubmission
-                ? studentSubmission.as_submission_status
-                : null,
-            },
-          };
-        }
-
-        return plainAssignment;
-      })
-    );
-
-    return res.status(200).json({
-      success: true,
-      data: enhancedAssignments,
+    // One query for every submission in this batch, then grouped in memory.
+    // It used to run two queries PER assignment inside a Promise.all, so a
+    // trainer with thirty assignments made sixty round trips to render a list.
+    const assignmentIds = assignments.map((a) => a.as_id);
+    const submissions = await AssignmentSubmission.findAll({
+      where: { as_id: { [Op.in]: assignmentIds }, tb_id },
+      raw: true,
     });
+
+    const byAssignment = new Map();
+    for (const submission of submissions) {
+      if (!byAssignment.has(submission.as_id)) byAssignment.set(submission.as_id, []);
+      byAssignment.get(submission.as_id).push(submission);
+    }
+
+    const isStaff = viewer.isAdmin || viewer.role === "trainer";
+
+    // Class sizes, also in one query rather than one per assignment.
+    const classSizes = new Map();
+    if (isStaff) {
+      const counts = await Student.findAll({
+        where: {
+          tb_id,
+          center_id: { [Op.in]: [...new Set(assignments.map((a) => a.center_id))] },
+          course_id: { [Op.in]: [...new Set(assignments.map((a) => a.course_id))] },
+          std_lms_status: { [Op.ne]: 2 },
+        },
+        attributes: ["center_id", "course_id"],
+        raw: true,
+      });
+      for (const row of counts) {
+        const key = `${row.center_id}|${row.course_id}`;
+        classSizes.set(key, (classSizes.get(key) || 0) + 1);
+      }
+    }
+
+    const data = assignments.map((assignment) => {
+      const plain = assignment.get({ plain: true });
+      const mine = byAssignment.get(assignment.as_id) || [];
+
+      // Useful to every role, and previously computed in three different places
+      // in the browser from a string column.
+      plain.deadlinePassed = isPastDeadline(assignment.as_deadline);
+      plain.minutesRemaining = minutesUntilDeadline(assignment.as_deadline);
+
+      if (isStaff) {
+        const size = classSizes.get(`${assignment.center_id}|${assignment.course_id}`) || 0;
+        plain.statistics = submissionStatistics(mine, size);
+        return plain;
+      }
+
+      if (viewer.role === "student" && viewer.student) {
+        const own = mine.find(
+          (submission) =>
+            String(submission.std_rollno) === String(viewer.student.std_rollno)
+        );
+
+        plain.studentStats = {
+          hasSubmitted: Boolean(own),
+          obtainedMarks: own ? own.obt_marks : null,
+          submissionStatus: own ? own.as_submission_status : null,
+          submissionDate: own ? own.submitted_on : null,
+          submissionId: own ? own.as_submission_id : null,
+          trainerComments: own ? own.trainer_comments : null,
+          // Kept for the existing screens, which read `status`.
+          status: own ? own.as_submission_status : null,
+        };
+      }
+
+      return plain;
+    });
+
+    return res.status(200).json({ success: true, data });
   } catch (error) {
     console.error("Error fetching assignments:", error);
     return res.status(500).json({
       success: false,
-      message: "Error fetching assignments",
+      message: "Could not load assignments",
       error: process.env.NODE_ENV === "development" ? error.message : undefined,
     });
   }
 };
-// Update Assignment
+
+// ---------------------------------------------------------------------------
+// Update
+// ---------------------------------------------------------------------------
+
+/**
+ * Edit an assignment, and every copy of it set at the same time.
+ *
+ * Three separate faults are fixed here. `Assignment.update()` returns
+ * `[affectedCount]`, and the old code compared that ARRAY to 0 - which is never
+ * true - so editing a non-existent assignment answered 200 with a null body
+ * instead of 404. A replacement attachment was accepted by the route and never
+ * read by the controller, so the file landed on disk and the assignment kept
+ * the old one. And there was no ownership check at all: any caller could edit
+ * anyone's assignment.
+ */
 exports.updateAssignment = async (req, res) => {
   try {
-    const { as_id } = req.params;
-    const {
-      as_title,
-      as_description,
-      as_instructions,
-      as_marks,
-      as_deadline,
-      as_status,
-    } = req.body;
-
-    const updatedRowsCount = await Assignment.update(
-      {
-        as_title,
-        as_description,
-        as_instructions,
-        as_marks,
-        as_deadline,
-        as_status,
-      },
-      { where: { as_id: as_id } }
-    );
-
-    if (updatedRowsCount === 0) {
-      return res.status(404).json({ message: "Assignment not found" });
+    const invalid = firstValidationError(req);
+    if (invalid) {
+      if (req.file) removeAttachment(req.file.filename);
+      return res.status(400).json({ success: false, message: invalid });
     }
 
-    const updatedAssignment = await Assignment.findByPk(as_id);
+    const { as_id } = req.params;
+    const assignment = await Assignment.findByPk(as_id);
 
-    res.json({
-      message: "Assignment updated successfully",
-      assignment: updatedAssignment,
+    if (!assignment) {
+      if (req.file) removeAttachment(req.file.filename);
+      return res
+        .status(404)
+        .json({ success: false, message: "Assignment not found" });
+    }
+
+    const viewer = await resolveViewer(req.user, assignment.tb_id);
+    if (!canManageAssignment(viewer, assignment)) {
+      if (req.file) removeAttachment(req.file.filename);
+      return res.status(403).json({
+        success: false,
+        message: "Only the trainer who set this assignment can change it",
+      });
+    }
+
+    // Only what was actually sent. Spreading the whole body would write
+    // undefined over columns the form did not include - and `as_instructions`,
+    // which the old code wrote, is not a column at all, so it was silently
+    // dropped on every save.
+    const changes = {};
+    for (const field of ["as_title", "as_description", "as_marks", "as_deadline", "as_status"]) {
+      if (req.body[field] !== undefined) changes[field] = req.body[field];
+    }
+
+    const previousAttachment = assignment.as_attachment;
+    if (req.file) {
+      changes.as_attachment = `/uploads/user-assignments/${req.file.filename}`;
+    }
+
+    if (Object.keys(changes).length === 0) {
+      return res.status(400).json({
+        success: false,
+        message: "Nothing was sent to change",
+      });
+    }
+
+    // The copies set together are edited together. Without this, correcting a
+    // title changed it for one centre and left the others showing the old one.
+    const where = assignment.as_group_id
+      ? { as_group_id: assignment.as_group_id }
+      : { as_id };
+
+    const [updatedCount] = await Assignment.update(changes, { where });
+
+    if (updatedCount === 0) {
+      if (req.file) removeAttachment(req.file.filename);
+      return res
+        .status(404)
+        .json({ success: false, message: "Assignment not found" });
+    }
+
+    // Only once the new one is safely stored.
+    if (req.file && previousAttachment) removeAttachment(previousAttachment);
+
+    const updated = await Assignment.findByPk(as_id);
+
+    console.log(
+      `[assignment] ${as_id} updated (${updatedCount} class copies) by user ${req.user.id}`
+    );
+
+    return res.json({
+      success: true,
+      message:
+        updatedCount > 1
+          ? `Assignment updated for all ${updatedCount} classes`
+          : "Assignment updated",
+      assignment: updated,
+      updatedCount,
     });
   } catch (error) {
+    if (req.file) removeAttachment(req.file.filename);
     console.error("Assignment update error:", error);
-    res.status(500).json({ message: "Server error updating assignment" });
+    return res
+      .status(500)
+      .json({ success: false, message: "Could not update the assignment" });
   }
 };
 
-// Delete Assignment
+// ---------------------------------------------------------------------------
+// Delete
+// ---------------------------------------------------------------------------
+
+/**
+ * Delete an assignment and everything submitted against it.
+ *
+ * This destroys students' work, and until now any caller at all could do it to
+ * any assignment - the route had no authentication and the controller had no
+ * ownership check.
+ */
 exports.deleteAssignment = async (req, res) => {
   try {
     const { id } = req.params;
 
     const assignment = await Assignment.findByPk(id);
     if (!assignment) {
-      return res.status(404).json({
+      return res
+        .status(404)
+        .json({ success: false, message: "Assignment not found" });
+    }
+
+    const viewer = await resolveViewer(req.user, assignment.tb_id);
+    if (!canManageAssignment(viewer, assignment)) {
+      return res.status(403).json({
         success: false,
-        message: "Assignment not found",
+        message: "Only the trainer who set this assignment can delete it",
       });
     }
 
-    const result = await sequelize.transaction(async (t) => {
-      const submissionsDeleted = await AssignmentSubmission.destroy({
-        where: { as_id: id },
-        transaction: t,
-      });
+    // The whole set, so a deleted assignment does not linger at the other
+    // centres it was set for.
+    const siblings = assignment.as_group_id
+      ? await Assignment.findAll({ where: { as_group_id: assignment.as_group_id } })
+      : [assignment];
 
-      // Then delete the assignment itself
-      const assignmentDeleted = await Assignment.destroy({
-        where: { as_id: id },
-        transaction: t,
-      });
+    const ids = siblings.map((row) => row.as_id);
 
-      return { submissionsDeleted, assignmentDeleted };
+    const attachments = await AssignmentSubmission.findAll({
+      where: { as_id: { [Op.in]: ids } },
+      attributes: ["as_submission_attachment"],
+      raw: true,
     });
 
-    res.json({
+    const result = await sequelize.transaction(async (t) => {
+      const submissionsDeleted = await AssignmentSubmission.destroy({
+        where: { as_id: { [Op.in]: ids } },
+        transaction: t,
+      });
+      const assignmentsDeleted = await Assignment.destroy({
+        where: { as_id: { [Op.in]: ids } },
+        transaction: t,
+      });
+      return { submissionsDeleted, assignmentsDeleted };
+    });
+
+    // After the commit: a rolled-back delete must not have removed the files
+    // its rows still point at.
+    for (const row of siblings) removeAttachment(row.as_attachment);
+    for (const row of attachments) removeAttachment(row.as_submission_attachment);
+
+    console.log(
+      `[assignment] ${ids.join(", ")} deleted with ${result.submissionsDeleted} submission(s) by user ${req.user.id}`
+    );
+
+    return res.json({
       success: true,
-      message: "Assignment and all associated submissions deleted successfully",
+      message: `Assignment deleted, along with ${result.submissionsDeleted} submission(s)`,
       data: {
         submissionsDeleted: result.submissionsDeleted,
-        assignmentDeleted: result.assignmentDeleted,
+        assignmentsDeleted: result.assignmentsDeleted,
       },
     });
   } catch (error) {
     console.error("Assignment deletion error:", error);
-    res.status(500).json({
+    return res.status(500).json({
       success: false,
-      message: "Server error deleting assignment",
+      message: "Could not delete the assignment",
       error: process.env.NODE_ENV === "development" ? error.message : undefined,
     });
   }

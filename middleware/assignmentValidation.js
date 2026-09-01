@@ -1,114 +1,98 @@
-const { body, param, query } = require("express-validator");
+const { body, param } = require("express-validator");
+
+/**
+ * Validation for the assignment endpoints.
+ *
+ * Rewritten because the previous rules described a different API from the one
+ * that exists, and were therefore never usable:
+ *
+ *   - creation demanded course_id and center_id in the body. The controller
+ *     derives both from the trainer's allocations and the form has never sent
+ *     them, so wiring this in would have refused every real request.
+ *   - it demanded `as_max_marks`. The column, the model and the controller all
+ *     call it `as_marks`.
+ *   - the update rules checked `param("id")` while the route is "/:as_id", so
+ *     that check could only ever fail.
+ *
+ * None of it mattered, because the create route never applied the validator and
+ * the update controller never read the result. Both are fixed, so these rules
+ * now have to be right.
+ */
+
+/** The deadline is stored as text but must still be a real moment in time. */
+const isParsableDate = (value) => !Number.isNaN(new Date(value).getTime());
 
 exports.validateAssignmentCreation = [
-  body("course_id")
-    .notEmpty()
-    .withMessage("Course ID is required")
-    .isInt()
-    .withMessage("Course ID must be an integer"),
-
-  body("center_id")
-    .notEmpty()
-    .withMessage("Center ID is required")
-    .isInt()
-    .withMessage("Center ID must be an integer"),
-
   body("tb_id")
     .notEmpty()
-    .withMessage("Training Batch ID is required")
-    .isInt()
-    .withMessage("Training Batch ID must be an integer"),
+    .withMessage("Training batch is required")
+    .isInt({ min: 1 })
+    .withMessage("Training batch must be a whole number"),
 
   body("as_title")
     .trim()
     .notEmpty()
-    .withMessage("Assignment Title is required")
+    .withMessage("Give the assignment a title")
     .isLength({ max: 255 })
-    .withMessage("Assignment Title must be less than 255 characters"),
+    .withMessage("Keep the title under 255 characters"),
 
   body("as_description")
     .trim()
     .notEmpty()
-    .withMessage("Assignment Description is required"),
+    .withMessage("Describe what the students have to do"),
 
-  body("as_instructions")
-    .optional()
-    .isString()
-    .withMessage("Assignment Instructions must be a string"),
-
-  body("as_max_marks")
+  body("as_marks")
     .notEmpty()
-    .withMessage("Maximum Marks is required")
-    .isInt({ min: 0 })
-    .withMessage("Maximum Marks must be a non-negative integer"),
+    .withMessage("Total marks are required")
+    // Minimum 1: an assignment worth zero marks cannot be graded, and every
+    // percentage calculated from it divides by zero.
+    .isInt({ min: 1, max: 10000 })
+    .withMessage("Total marks must be a whole number between 1 and 10000"),
 
   body("as_deadline")
     .notEmpty()
-    .withMessage("Assignment Deadline is required")
-    .isISO8601()
-    .withMessage("Invalid date format for deadline"),
-
-  body("as_status")
-    .optional()
-    .isIn([0, 1])
-    .withMessage("Assignment Status must be 0 or 1"),
+    .withMessage("A deadline is required")
+    .custom(isParsableDate)
+    .withMessage("That deadline is not a valid date and time"),
 ];
 
 exports.validateAssignmentUpdate = [
-  param("id")
-    .notEmpty()
-    .withMessage("Assignment ID is required")
-    .isInt()
-    .withMessage("Assignment ID must be an integer"),
+  param("as_id")
+    .isInt({ min: 1 })
+    .withMessage("Assignment id must be a whole number"),
 
   body("as_title")
     .optional()
     .trim()
     .notEmpty()
-    .withMessage("Assignment Title cannot be empty")
+    .withMessage("The title cannot be emptied")
     .isLength({ max: 255 })
-    .withMessage("Assignment Title must be less than 255 characters"),
+    .withMessage("Keep the title under 255 characters"),
 
   body("as_description")
     .optional()
     .trim()
     .notEmpty()
-    .withMessage("Assignment Description cannot be empty"),
+    .withMessage("The description cannot be emptied"),
 
-  body("as_instructions")
+  body("as_marks")
     .optional()
-    .isString()
-    .withMessage("Assignment Instructions must be a string"),
-
-  body("as_max_marks")
-    .optional()
-    .isInt({ min: 0 })
-    .withMessage("Maximum Marks must be a non-negative integer"),
+    .isInt({ min: 1, max: 10000 })
+    .withMessage("Total marks must be a whole number between 1 and 10000"),
 
   body("as_deadline")
     .optional()
-    .isISO8601()
-    .withMessage("Invalid date format for deadline"),
+    .custom(isParsableDate)
+    .withMessage("That deadline is not a valid date and time"),
 
   body("as_status")
     .optional()
-    .isIn([0, 1])
-    .withMessage("Assignment Status must be 0 or 1"),
+    .isIn([0, 1, "0", "1"])
+    .withMessage("Status must be 0 or 1"),
 ];
 
 exports.validateAssignmentQuery = [
-  query("center_id")
-    .optional()
-    .isInt()
-    .withMessage("Center ID must be an integer"),
-
-  query("course_id")
-    .optional()
-    .isInt()
-    .withMessage("Course ID must be an integer"),
-
-  query("tb_id")
-    .optional()
-    .isInt()
-    .withMessage("Training Batch ID must be an integer"),
+  param("tb_id")
+    .isInt({ min: 1 })
+    .withMessage("Training batch must be a whole number"),
 ];
