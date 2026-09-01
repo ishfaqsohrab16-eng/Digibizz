@@ -212,20 +212,29 @@ exports.getAssignmentSubmissionById = async (req, res) => {
         .json({ success: false, message: "That assignment no longer exists" });
     }
 
-    const submission = await AssignmentSubmission.findOne({
-      where: { as_id, std_rollno },
-    });
-
     const viewer = await resolveViewer(req.user, assignment.tb_id);
+
+    // A student always reads their OWN submission, whatever roll number the
+    // browser sent. It is both safer and more forgiving: the roll number in the
+    // URL comes from localStorage, so a stale or reformatted value would
+    // otherwise refuse a student their own work.
+    const targetRollNumber =
+      viewer.role === "student" && viewer.student
+        ? viewer.student.std_rollno
+        : std_rollno;
+
+    const submission = await AssignmentSubmission.findOne({
+      where: { as_id, std_rollno: targetRollNumber },
+    });
 
     // Checked even when there is no submission: whether a given student has
     // handed in is itself something only their trainer should be able to ask.
+    // A student is asking about their own row by construction (see above), so
+    // the only question left for them is whether they are a student at all.
     const permitted = submission
       ? canReadSubmission(viewer, assignment, submission)
       : canMarkSubmission(viewer, assignment) ||
-        (viewer.role === "student" &&
-          viewer.student &&
-          String(viewer.student.std_rollno) === String(std_rollno));
+        (viewer.role === "student" && Boolean(viewer.student));
 
     if (!permitted) {
       return res

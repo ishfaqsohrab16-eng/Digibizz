@@ -151,6 +151,15 @@ const AssignmentView: React.FC<AssignmentViewProps> = ({
   const [selectedFile, setSelectedFile] = useState<File | null>(null);
   const [isdeadlineExpired, setIsdeadlineExpired] = useState(false);
   const [isSubmitted, setIsSubmitted] = useState(false);
+
+  /**
+   * The student's own submission, once fetched.
+   *
+   * Held separately from the form: the form is what they are about to send,
+   * this is what they already sent. Conflating the two is why a submitted
+   * assignment showed nothing back - there was nowhere to put it.
+   */
+  const [submission, setSubmission] = useState<any | null>(null);
   const studentInfo = JSON.parse(localStorage.getItem("studentInfo") || "{}");
   const rollNumber = studentInfo.rollNumber || "";
   const BACKEND_URL = import.meta.env.VITE_BACKEND_URL;
@@ -283,66 +292,69 @@ const AssignmentView: React.FC<AssignmentViewProps> = ({
 
   const checkSubmissionAndDeadline = async () => {
     try {
-      if (!assignment.as_deadline || isDeadlinePassed(assignment.as_deadline)) {
-        setIsdeadlineExpired(true);
-        toast.error(
-          "Deadline Expired. The deadline for this assignment has passed."
-        );
-        return;
-      }
-
+      // The deadline and the submission are two independent questions, and
+      // tangling them is what hid every student's work.
+      //
+      // This used to `return` as soon as the deadline had passed - BEFORE
+      // fetching the submission - so an assignment whose deadline was in the
+      // past showed "NOT SUBMITTED" to everyone, whether they had handed in or
+      // not. The deadline is exactly when a student most wants to look: it is
+      // when the marks appear.
       const response = await getStudentAssignmentSubmits(
         assignment.as_id,
         formData.std_rollno
       );
-      if (
-        response.success &&
-        response.assignmentSubmission &&
-        response.assignmentSubmission.as_submission_status !== 2
-      ) {
-        setIsSubmitted(true);
-        toast.success(
-          "Already Submitted. You have already submitted this assignment."
-        );
-        console.log("Assignment Submission Response:", response);
+
+      const found = response?.assignmentSubmission;
+
+      // Status 2 means the trainer returned it for rework, so there is work to
+      // look at but the student may submit again.
+      const returnedForRework = found && Number(found.as_submission_status) === 2;
+
+      setSubmission(found || null);
+      setIsSubmitted(Boolean(found) && !returnedForRework);
+
+      if (found) {
         setFormData((prev) => ({
           ...prev,
-          as_submission_comment:
-            response.assignmentSubmission.as_submission_comment || "",
-          submitted_on: response.assignmentSubmission.submitted_on || "",
-          obt_marks: response.assignmentSubmission.obt_marks || "",
-          as_submission_status:
-            response.assignmentSubmission.as_submission_status,
-        }));
-      } else if (
-        response.assignmentSubmission &&
-        response.assignmentSubmission.as_submission_status === 2
-      ) {
-        setIsSubmitted(false);
-        setFormData((prev) => ({
-          ...prev,
-          as_submission_comment: "",
-          submitted_on: "",
-          obt_marks: "",
-          as_submission_status: 2,
+          as_submission_comment: returnedForRework
+            ? ""
+            : found.as_submission_comment || "",
+          submitted_on: found.submitted_on || "",
+          obt_marks: found.obt_marks || "",
+          as_submission_status: found.as_submission_status,
         }));
       }
-    } catch (error) {
+    } catch (error: any) {
+      // 404 is the ordinary "nothing handed in yet" answer, not a fault.
+      if (error?.response?.status === 404) {
+        setSubmission(null);
+        setIsSubmitted(false);
+        return;
+      }
       console.error("Error checking submission status:", error);
     }
   };
+
+  /**
+   * Whether the deadline has passed. Its own effect now, because it used to be
+   * set inside the submission fetch - which meant it depended on that fetch
+   * running, and that fetch returning early depended on it.
+   */
+  useEffect(() => {
+    setIsdeadlineExpired(
+      !assignment?.as_deadline || isDeadlinePassed(assignment.as_deadline)
+    );
+  }, [assignment?.as_deadline]);
 
   useEffect(() => {
     if (assignment?.as_id && formData.std_rollno && userType === "student") {
       checkSubmissionAndDeadline();
     }
-  }, [
-    assignment?.as_id,
-    assignment?.as_deadline,
-    formData.std_rollno,
-    isSubmitted,
-    userType,
-  ]);
+    // `isSubmitted` is deliberately NOT a dependency. The function sets it, so
+    // listing it made the effect re-run every time it succeeded - refetching in
+    // a loop and firing a toast on each pass.
+  }, [assignment?.as_id, formData.std_rollno, userType]);
 
   useEffect(() => {
     if (userType === "student" && (!rollNumber || rollNumber === "undefined")) {
@@ -383,15 +395,22 @@ const AssignmentView: React.FC<AssignmentViewProps> = ({
 
   // Helper function to get student's points display text
   const getStudentPointsDisplay = () => {
-    if (assignment.studentStats) {
-      if (assignment.studentStats.status === 1) {
-        return `${assignment.studentStats.obtainedMarks} / ${assignment.as_marks}`;
-      }
-      return assignment.studentStats.hasSubmitted
-        ? "NOT MARKED YET"
-        : "NOT SUBMITTED";
+    // The fetched submission is the truth here. studentStats is a snapshot
+    // taken when the list loaded, so relying on it alone reported "NOT
+    // SUBMITTED" to a student looking at work they had just handed in.
+    const status = submission
+      ? Number(submission.as_submission_status)
+      : assignment.studentStats?.status;
+    const marks = submission
+      ? submission.obt_marks
+      : assignment.studentStats?.obtainedMarks;
+    const handedIn = Boolean(submission) || assignment.studentStats?.hasSubmitted;
+
+    if (status === 1 && marks !== null && marks !== undefined && marks !== "") {
+      return `${marks} / ${assignment.as_marks}`;
     }
-    return "NOT SUBMITTED";
+    if (status === 2) return "RETURNED FOR REWORK";
+    return handedIn ? "NOT MARKED YET" : "NOT SUBMITTED";
   };
 
   // Format statistics for trainer view
@@ -479,6 +498,80 @@ const AssignmentView: React.FC<AssignmentViewProps> = ({
                   <h3 className="text-lg md:text-xl font-semibold text-[hsl(var(--foreground))] mb-6">
                     Submit your Assignment
                   </h3>
+                  {/* What they handed in. Shown whether or not the deadline has
+                      passed - after it passes is exactly when a student looks,
+                      because that is when the marks appear. */}
+                  {submission && (
+                    <div className="mb-6 rounded-lg border border-emerald-200 bg-emerald-50 p-4">
+                      <div className="flex flex-wrap items-center justify-between gap-2">
+                        <h4 className="font-semibold text-emerald-900">
+                          Your submission
+                        </h4>
+                        <span className="rounded-full bg-emerald-600 px-3 py-0.5 text-xs font-semibold text-white">
+                          {Number(submission.as_submission_status) === 1
+                            ? "Marked"
+                            : Number(submission.as_submission_status) === 2
+                            ? "Returned for rework"
+                            : "Submitted - awaiting marking"}
+                        </span>
+                      </div>
+
+                      <dl className="mt-3 space-y-2 text-sm">
+                        <div className="flex justify-between gap-4">
+                          <dt className="text-emerald-800">Submitted on</dt>
+                          <dd className="font-medium text-emerald-950">
+                            {submission.submitted_on || "—"}
+                          </dd>
+                        </div>
+
+                        <div className="flex justify-between gap-4">
+                          <dt className="text-emerald-800">Marks</dt>
+                          <dd className="font-medium text-emerald-950">
+                            {Number(submission.as_submission_status) === 1 &&
+                            submission.obt_marks !== null &&
+                            submission.obt_marks !== ""
+                              ? `${submission.obt_marks} / ${assignment.as_marks}`
+                              : "Not marked yet"}
+                          </dd>
+                        </div>
+
+                        {submission.as_submission_comment && (
+                          <div>
+                            <dt className="text-emerald-800">Your comment</dt>
+                            <dd className="mt-1 whitespace-pre-wrap rounded border border-emerald-200 bg-white p-2 text-emerald-950">
+                              {submission.as_submission_comment}
+                            </dd>
+                          </div>
+                        )}
+
+                        {submission.trainer_comments && (
+                          <div>
+                            <dt className="text-emerald-800">
+                              Feedback from your trainer
+                            </dt>
+                            <dd className="mt-1 whitespace-pre-wrap rounded border border-emerald-200 bg-white p-2 text-emerald-950">
+                              {submission.trainer_comments}
+                            </dd>
+                          </div>
+                        )}
+                      </dl>
+
+                      {/* The file they uploaded. There was no way to see it at
+                          all before - a student could not check that the right
+                          thing had gone in. */}
+                      {submission.as_submission_attachment && (
+                        <a
+                          href={`${BACKEND_URL}${submission.as_submission_attachment}`}
+                          target="_blank"
+                          rel="noopener noreferrer"
+                          className="mt-3 inline-flex items-center gap-2 rounded-md border border-emerald-300 bg-white px-3 py-2 text-sm font-medium text-emerald-800 hover:bg-emerald-100"
+                        >
+                          Open the file you submitted
+                        </a>
+                      )}
+                    </div>
+                  )}
+
                   {isdeadlineExpired ? (
                     <div className="p-4 bg-red-50 border border-red-200 rounded-lg">
                       <p className="text-red-600">
@@ -486,7 +579,10 @@ const AssignmentView: React.FC<AssignmentViewProps> = ({
                         {assignment.as_deadline
                           ? formatDeadlineDate(assignment.as_deadline)
                           : "N/A"}
-                        . Submissions are no longer accepted.
+                        .{" "}
+                        {submission
+                          ? "Your submission above was received."
+                          : "Submissions are no longer accepted."}
                       </p>
                     </div>
                   ) : (
@@ -574,11 +670,14 @@ const AssignmentView: React.FC<AssignmentViewProps> = ({
                 <StatisticsPanel
                   student={name}
                   rollNo={rollNumber}
+                  // The freshly fetched submission first, falling back to what
+                  // the list said. studentStats is a snapshot from whenever the
+                  // list was loaded, so on its own it showed "NOT SUBMITTED"
+                  // to a student who had just handed in.
                   submittedOn={
-                    assignment.studentStats.submissionDate === undefined ||
-                    assignment.studentStats.submissionDate === null
-                      ? "NOT SUBMITTED"
-                      : assignment.studentStats.submissionDate
+                    submission?.submitted_on ||
+                    assignment.studentStats?.submissionDate ||
+                    "NOT SUBMITTED"
                   }
                   deadline={assignment.as_deadline_formatted}
                   totalPoints={assignment.as_marks}

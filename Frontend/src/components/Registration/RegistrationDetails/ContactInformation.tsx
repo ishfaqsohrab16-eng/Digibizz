@@ -2,7 +2,7 @@ import React from "react";
 import { CandidateFormData } from "../../../types/registration";
 import { domicileOptions } from "../../../types/degreeAreas";
 import { Field, SelectInput, TextInput, TextareaInput, fieldGrid } from "./fields";
-import { CheckCircle2, Loader2 } from "lucide-react";
+import { AlertCircle, CheckCircle2, Loader2 } from "lucide-react";
 import type { ContactFieldState } from "./RegistrationDetails";
 
 interface ContactInformationProps {
@@ -19,16 +19,22 @@ interface ContactInformationProps {
 }
 
 /**
- * The line under the field while it is being checked.
+ * The line under the field, saying where the value stands.
  *
- * Nothing is shown for "unknown" or "taken": there is no news before the
- * first answer, and a taken value is already reported as a field error in
- * red - saying it twice, in two styles, reads as two problems.
+ * "taken" gets a message of its own. It originally rendered nothing, on the
+ * assumption that the field error underneath would explain - but that error is
+ * only set when the applicant tries to continue, so a value the live check had
+ * already rejected showed a red outline and no reason at all. A red box that
+ * does not say what is wrong is worse than no red box.
+ *
+ * Nothing is shown for "unknown": there is no news before the first answer.
  */
-const ContactStatus: React.FC<{ state?: ContactFieldState; noun: string }> = ({
-  state,
-  noun,
-}) => {
+const ContactStatus: React.FC<{
+  state?: ContactFieldState;
+  noun: string;
+  /** Suppressed when the field already carries an error saying the same thing. */
+  silenced?: boolean;
+}> = ({ state, noun, silenced }) => {
   if (state === "checking") {
     return (
       <p className="mt-1 flex items-center gap-1.5 text-xs text-gray-500">
@@ -42,6 +48,14 @@ const ContactStatus: React.FC<{ state?: ContactFieldState; noun: string }> = ({
       <p className="mt-1 flex items-center gap-1.5 text-xs text-emerald-700">
         <CheckCircle2 className="h-3 w-3" />
         This {noun} is available
+      </p>
+    );
+  }
+  if (state === "taken" && !silenced) {
+    return (
+      <p className="mt-1 flex items-center gap-1.5 text-xs font-medium text-red-600">
+        <AlertCircle className="h-3 w-3 shrink-0" />
+        This {noun} is already registered — please use a different one
       </p>
     );
   }
@@ -67,7 +81,11 @@ const ContactInformation: React.FC<ContactInformationProps> = ({
           placeholder="Enter your email address"
           hasError={Boolean(errors.cand_email) || emailState === "taken"}
         />
-        <ContactStatus state={emailState} noun="email address" />
+        <ContactStatus
+          state={emailState}
+          noun="email address"
+          silenced={Boolean(errors.cand_email)}
+        />
       </Field>
 
       <Field label="Phone no." htmlFor="cand_phone" required error={errors.cand_phone}>
@@ -80,7 +98,11 @@ const ContactInformation: React.FC<ContactInformationProps> = ({
           placeholder="Enter your phone number"
           hasError={Boolean(errors.cand_phone) || phoneState === "taken"}
         />
-        <ContactStatus state={phoneState} noun="phone number" />
+        <ContactStatus
+          state={phoneState}
+          noun="phone number"
+          silenced={Boolean(errors.cand_phone)}
+        />
       </Field>
 
       <Field
