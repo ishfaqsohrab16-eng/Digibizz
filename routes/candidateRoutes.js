@@ -73,6 +73,10 @@ router.put(
 router.put("/suspend/:candidateId", candidateController.suspendCandidate);
 router.get("/selected/:tb_id", isAdminAuthenticated, getAllSelectedCandidates);
 
+// Public: the registration form asks this while the applicant types, so a
+// duplicate email or phone is caught in the field rather than on submit.
+router.get("/contact-available", candidateController.checkContactAvailability);
+
 // --- Enrollment (recommended candidates only) -------------------------------
 router.get(
   "/enrollment-preview/:cand_id",

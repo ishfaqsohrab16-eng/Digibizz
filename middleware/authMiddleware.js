@@ -83,8 +83,15 @@ const isAdminAuthenticated = async (req, res, next) => {
     // Extract token (expecting "Bearer <token>")
     const token = authHeader.split(" ")[1];
 
-    if (!token) {
-      return res.status(401).json({ message: "Invalid token format" });
+    // `Bearer null` and `Bearer undefined` arrive whenever the browser
+    // interpolates a missing token into the header - a signed-out or
+    // expired session, most often. They are not tokens, and treating them
+    // as one produced "Invalid token", which reads like tampering and sent
+    // everyone looking in the wrong place. It means: no session, log in.
+    if (!token || token === "null" || token === "undefined") {
+      return res
+        .status(401)
+        .json({ message: "No session - please sign in again", code: "NO_SESSION" });
     }
 
     // Verify token

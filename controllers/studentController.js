@@ -10,6 +10,7 @@ const User = require("../models/userModel");
 const bcrypt = require("bcryptjs");
 const { Op } = require("sequelize");
 const { sequelize } = require("../config/db");
+const { findContactConflict } = require("../utils/contactUniqueness");
 const MasterTrainer = require("../models/masterTrainersModel");
 const CenterDates = require("../models/centersDatesModel");
 const Attendance = require("../models/attendanceModel");
@@ -941,6 +942,26 @@ exports.updateStudentProfile = async (req, res) => {
       },
       { transaction }
     );
+
+    // Checked before the write, not left to the unique index. The raw
+    // constraint error surfaced as a 500 with "user_email must be unique"
+    // and a stack, which tells the person editing their profile nothing
+    // they can act on. Their own row is excluded, so saving an unchanged
+    // email is not a conflict with themselves.
+    if (user_email) {
+      const conflict = await findContactConflict(
+        { email: user_email },
+        { user_id: student.user_id }
+      );
+      if (conflict) {
+        await transaction.rollback();
+        return res.status(409).json({
+          success: false,
+          field: conflict.field,
+          message: conflict.message,
+        });
+      }
+    }
 
     // Update the user table with where clause
     const user = await User.update(

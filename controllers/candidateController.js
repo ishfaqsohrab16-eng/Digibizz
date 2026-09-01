@@ -4,6 +4,7 @@ const Center = require("../models/center");
 const TrainingBatch = require("../models/trainingBatcheModel");
 const { validationResult } = require("express-validator");
 const { Op } = require("sequelize");
+const { findContactConflict } = require("../utils/contactUniqueness");
 const db = require("../config/db"); // Add this line to import your database configuration
 const sequelize = db.sequelize;
 const Student = require("../models/studentModel");
@@ -135,6 +136,21 @@ exports.createCandidate = async (req, res) => {
         tb_id: candidateData.tb_id 
       },
     });
+
+    // The email and phone are checked against user, student AND candidate,
+    // because all three can hold the same person's details and only some
+    // were being checked. An applicant reached the insert before the
+    // database refused it, and got a 500 mentioning Sequelize for what is
+    // simply "that address is taken".
+    const conflict = await findContactConflict({
+      email: candidateData.cand_email,
+      phone: candidateData.cand_phone,
+    });
+    if (conflict) {
+      return res
+        .status(409)
+        .json({ message: conflict.message, field: `cand_${conflict.field}` });
+    }
     
     const user_profile_photo = req.file
       ? `/uploads/candidate_photos/${req.file.filename}`
@@ -1153,5 +1169,45 @@ exports.suspendCandidate = async (req, res) => {
   } catch (error) {
     console.error("Candidate suspension error:", error);
     res.status(500).json({ message: "Server error suspending candidate" });
+  }
+};
+
+/**
+ * Is this email address or phone number free to register with?
+ *
+ * Asked by the registration form as the applicant fills it in, so a duplicate
+ * is caught while the field is in front of them rather than after they have
+ * filled in six more and pressed submit.
+ *
+ * Public by necessity - the person asking has no account yet - and it answers
+ * only yes or no about a value the caller already supplied. It reveals nothing
+ * they could not learn by attempting to register, which is exactly what this
+ * saves them from doing.
+ */
+exports.checkContactAvailability = async (req, res) => {
+  try {
+    const email = String(req.query.email || "").trim();
+    const phone = String(req.query.phone || "").trim();
+
+    if (!email && !phone) {
+      return res
+        .status(400)
+        .json({ success: false, message: "Give an email address or a phone number" });
+    }
+
+    const conflict = await findContactConflict({ email, phone });
+
+    return res.json({
+      success: true,
+      available: !conflict,
+      field: conflict?.field || null,
+      message: conflict?.message || null,
+    });
+  } catch (error) {
+    console.error("Contact availability error:", error);
+    // Fail open: this is a convenience check, and the submit path checks again
+    // properly. Blocking a registration because a lookup hiccuped would be a
+    // worse outcome than letting them find out a moment later.
+    return res.json({ success: true, available: true, field: null, message: null });
   }
 };

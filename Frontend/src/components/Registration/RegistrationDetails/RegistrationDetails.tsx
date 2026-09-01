@@ -4,6 +4,7 @@ import {
   getCenter,
   getAllCourse,
   getPublicAdmissionControl,
+  checkContactAvailability,
 } from "../../../services/api";
 import { CandidateFormData } from "../../../types/registration";
 import PersonalInformation from "./PersonalInformation";
@@ -139,6 +140,7 @@ const RegistrationDetails: React.FC<RegistrationDetailsProps> = ({
   // the final submit, so the applicant fixes a mistyped address while they are
   // still looking at it - the interview call-up goes to this address.
   const [isSubmitting, setIsSubmitting] = useState(false);
+  const [checkingContact, setCheckingContact] = useState(false);
   const [agreeToTerms, setAgreeToTerms] = useState(false);
   const [stepIndex, setStepIndex] = useState(0);
   const [maxStepReached, setMaxStepReached] = useState(0);
@@ -341,13 +343,40 @@ const RegistrationDetails: React.FC<RegistrationDetailsProps> = ({
     window.scrollTo({ top: 0, behavior: "smooth" });
   };
 
-  const handleContinue = () => {
+  const handleContinue = async () => {
     const stepErrors = validateStep(stepIndex);
     setErrors(stepErrors);
 
     if (Object.keys(stepErrors).length > 0) {
       toast.error(Object.values(stepErrors)[0]);
       return;
+    }
+
+    // The email and phone are checked against everyone already registered
+    // before the applicant is allowed off this step. Leaving it to submit
+    // meant filling in four more steps and then being sent back - and, until
+    // recently, being sent back with a 500 rather than a reason.
+    if (STEPS[stepIndex]?.id === "contact") {
+      setCheckingContact(true);
+      try {
+        const result = await checkContactAvailability({
+          email: formData.cand_email,
+          phone: formData.cand_phone,
+        });
+
+        if (!result.available && result.field) {
+          const field = `cand_${result.field}`;
+          const message = result.message || "That is already registered";
+          setErrors({ [field]: message });
+          toast.error(message);
+          return;
+        }
+      } catch {
+        // The submit path checks again properly. Blocking the form because
+        // a convenience lookup failed would be the worse outcome.
+      } finally {
+        setCheckingContact(false);
+      }
     }
 
     if (stepIndex < STEPS.length - 1) {
@@ -665,11 +694,15 @@ const RegistrationDetails: React.FC<RegistrationDetailsProps> = ({
               <button
                 type={isLastStep ? "submit" : "button"}
                 onClick={isLastStep ? undefined : handleContinue}
-                disabled={isSubmitting}
+                disabled={isSubmitting || checkingContact}
                 className="inline-flex items-center gap-2 rounded-md bg-[#006537] px-5 py-2.5 text-sm font-semibold text-white transition-colors hover:bg-[#00522c] disabled:cursor-not-allowed disabled:opacity-60"
               >
-                {isSubmitting ? "Submitting..." : activeStep.nextLabel}
-                {!isSubmitting && <ArrowRight size={16} />}
+                {isSubmitting
+                  ? "Submitting..."
+                  : checkingContact
+                  ? "Checking..."
+                  : activeStep.nextLabel}
+                {!isSubmitting && !checkingContact && <ArrowRight size={16} />}
               </button>
             </div>
           </form>

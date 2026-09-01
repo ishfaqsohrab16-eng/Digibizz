@@ -67,6 +67,14 @@ const allowedOrigins = (process.env.ALLOWED_ORIGINS || "")
   .map((origin) => origin.trim())
   .filter(Boolean);
 
+/**
+ * The last origin refused, so a bot hammering the API logs one line rather
+ * than one per request. Deliberately not a Set - this is a log-noise guard,
+ * not an audit trail, and an unbounded Set fed by request headers is a slow
+ * memory leak.
+ */
+let lastRefusedOrigin = null;
+
 const corsOptions = {
   origin(origin, callback) {
     // Allow requests without an Origin header, such as curl or server-to-server traffic.
@@ -78,7 +86,25 @@ const corsOptions = {
       return callback(null, true);
     }
 
-    return callback(new Error(`Origin ${origin} is not allowed by CORS`));
+    // Refuse by omitting the CORS headers, not by throwing.
+    //
+    // Throwing sent the rejection to the global error handler, which turned
+    // every one into a 500 with a stack trace - filling the log with
+    // "Origin null is not allowed by CORS" from sandboxed iframes, file://
+    // pages, link previewers and redirects, none of which are a server
+    // fault. Answering without the headers is what CORS is actually for:
+    // the request is served, and the BROWSER refuses to hand the response
+    // to a page that is not allowed to read it.
+    //
+    // "null" in particular is never added to the allowlist. It is not an
+    // origin, it is the absence of one, and honouring it with
+    // credentials: true would let any sandboxed frame make signed-in
+    // requests.
+    if (origin !== lastRefusedOrigin) {
+      lastRefusedOrigin = origin;
+      console.warn(`[cors] refused an unlisted origin: ${origin}`);
+    }
+    return callback(null, false);
   },
   credentials: true,
 };
@@ -207,14 +233,117 @@ app.use("/api/email-campaigns", emailCampaignRoutes);
 // restoring it is a matter of uncommenting this line.
 // app.use("/api/email-verification", emailVerificationRoutes);
 // Catch-all handler to return the React frontend's index.html file
+/** Column names are not what a person entering a form is looking at. */
+const FIELD_LABELS = {
+  user_email: "email address",
+  cand_email: "email address",
+  std_cnic: "CNIC",
+  cand_cnic: "CNIC",
+  std_rollno: "roll number",
+  user_username: "username",
+  cand_phone: "phone number",
+  std_phone: "phone number",
+};
+
+const humaniseField = (field) =>
+  FIELD_LABELS[field] || String(field || "value").replace(/_/g, " ");
+
 app.get("*", (req, res) => {
   res.sendFile(path.join(__dirname, "dist", "index.html"));
 });
 
-// Global Error Handler
+/**
+ * Global error handler.
+ *
+ * Everything used to arrive here as a 500 with a full stack trace, whatever
+ * it actually was. An upload over the size limit and a bot with a strange
+ * Origin header both read as "the server is broken", the client got a
+ * useless message, and the log filled with stacks for things that are not
+ * faults at all.
+ *
+ * Each case below is a condition the CLIENT can fix, so each gets the status
+ * that says so and a message that names the fix. Anything unrecognised is
+ * still a 500 with its stack - those are ours.
+ */
 app.use((err, req, res, next) => {
-  console.error(err.stack);
-  res.status(500).send({
+  if (res.headersSent) return next(err);
+
+  // Uploads. multer aborts mid-stream, so without this the request hangs
+  // until the client gives up and the operator sees no reason why.
+  if (err && err.name === "MulterError") {
+    const limitMb = err.field && req.uploadLimitMb ? req.uploadLimitMb : null;
+    const messages = {
+      LIMIT_FILE_SIZE: limitMb
+        ? `That file is too large. The limit is ${limitMb} MB.`
+        : "That file is too large for this upload.",
+      LIMIT_FILE_COUNT: "Too many files were attached.",
+      LIMIT_UNEXPECTED_FILE: `Unexpected file field "${err.field}".`,
+      LIMIT_PART_COUNT: "Too many parts in the upload.",
+      LIMIT_FIELD_KEY: "A field name in the upload is too long.",
+      LIMIT_FIELD_VALUE: "A field value in the upload is too long.",
+      LIMIT_FIELD_COUNT: "Too many fields in the upload.",
+    };
+
+    console.warn(
+      `[upload] ${err.code} on ${req.method} ${req.originalUrl}` +
+        `${err.field ? ` (field ${err.field})` : ""}`
+    );
+
+    return res.status(err.code === "LIMIT_FILE_SIZE" ? 413 : 400).json({
+      success: false,
+      status: "error",
+      code: err.code,
+      message: messages[err.code] || "That upload was rejected.",
+    });
+  }
+
+  // A duplicate row is somebody entering an email or CNIC that is already
+  // taken. 409 and the field name, rather than a stack about SQL.
+  if (err && err.name === "SequelizeUniqueConstraintError") {
+    const field = err.errors?.[0]?.path;
+    const value = err.errors?.[0]?.value;
+    console.warn(`[conflict] ${field} "${value}" is already in use`);
+    return res.status(409).json({
+      success: false,
+      status: "error",
+      field,
+      message: field
+        ? `That ${humaniseField(field)} is already registered. Please use a different one.`
+        : "Those details are already registered.",
+    });
+  }
+
+  if (err && err.name === "SequelizeValidationError") {
+    const details = (err.errors || [])
+      .map((item) => `${humaniseField(item.path)}: ${item.message}`)
+      .join("; ");
+    return res.status(400).json({
+      success: false,
+      status: "error",
+      message: details || "Some of those details are not valid.",
+    });
+  }
+
+  // express.json() rejecting a malformed body is a client error, not ours.
+  if (err && err.type === "entity.parse.failed") {
+    return res.status(400).json({
+      success: false,
+      status: "error",
+      message: "The request body was not valid JSON.",
+    });
+  }
+  if (err && err.type === "entity.too.large") {
+    return res.status(413).json({
+      success: false,
+      status: "error",
+      message: "That request is too large.",
+    });
+  }
+
+  // Ours. Keep the stack.
+  console.error(err.stack || err);
+  return res.status(err.status || err.statusCode || 500).json({
+    success: false,
     status: "error",
     message: err.message || "Something went wrong!",
   });

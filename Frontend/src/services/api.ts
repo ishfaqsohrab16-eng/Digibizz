@@ -136,9 +136,16 @@ const getCurrentUserToken = () => {
   // Otherwise use the main admin token
   const currentAdmin = localStorage.getItem("currentAdmin");
   if (currentAdmin) {
-    return localStorage.getItem(`token${currentAdmin}`);
+    return localStorage.getItem(`token${currentAdmin}`) || "";
   }
-  return null;
+
+  // Empty string, not null. Every call site builds the header as
+  // `Bearer ${getCurrentUserToken()}`, and null was interpolated into the
+  // literal text "Bearer null" - which the server then tried to verify as a
+  // token and rejected as "Invalid token", making a signed-out session look
+  // like a tampered one. An empty string produces `Bearer `, which reads
+  // correctly as no session at all.
+  return "";
 };
 const handleApiError = (error: unknown) => {
   if (axios.isAxiosError(error)) {
@@ -4091,6 +4098,28 @@ export const confirmEmailVerificationCode = async (
     success: boolean;
     verified: boolean;
     message: string;
+  };
+};
+
+/**
+ * Is this email or phone free to register with?
+ *
+ * Called as the registration form is filled in. No auth header: the
+ * applicant has no account yet.
+ */
+export const checkContactAvailability = async (contact: {
+  email?: string;
+  phone?: string;
+}) => {
+  const response = await axios.get(
+    `${API_URL}/candidateRoutes/contact-available`,
+    { params: contact, timeout: 15000 }
+  );
+  return response.data as {
+    success: boolean;
+    available: boolean;
+    field: "email" | "phone" | null;
+    message: string | null;
   };
 };
 
