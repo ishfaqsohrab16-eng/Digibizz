@@ -69,7 +69,12 @@ stub("../models/userModel", table(() => db.users));
 stub("../models/CandidateModel", table(() => db.candidates));
 stub("../models/studentModel", table(() => db.students));
 
-const { findContactConflict, phoneKey } = require("./contactUniqueness");
+const {
+  findContactConflict,
+  findContactConflicts,
+  describeConflicts,
+  phoneKey,
+} = require("./contactUniqueness");
 
 const reset = () => {
   db.users = [];
@@ -178,6 +183,53 @@ const reset = () => {
   check(
     "the same holds for your own phone number",
     (await findContactConflict({ phone: "03001234567" }, { std_id: 5 })) === null
+  );
+
+  console.log("\nReporting both at once\n");
+
+  // Being told about the email, fixing it, and only then being told about the
+  // phone is two rounds of a six-step form for something that could be said
+  // once.
+  reset();
+  db.users = [{ user_id: 1, user_email: "taken@x.com" }];
+  db.students = [{ std_id: 3, std_phone: "0300-1234567" }];
+
+  const both = await findContactConflicts({
+    email: "taken@x.com",
+    phone: "03001234567",
+  });
+  check("both conflicts are found", both.conflicts.length === 2, both.fields.join());
+  check(
+    "and one sentence covers both",
+    /email address and phone number are both/.test(both.message),
+    both.message
+  );
+
+  reset();
+  db.users = [{ user_id: 1, user_email: "taken@x.com" }];
+  const onlyEmail = await findContactConflicts({
+    email: "taken@x.com",
+    phone: "03009999999",
+  });
+  check(
+    "only the email is named when only it is taken",
+    onlyEmail.fields.join() === "email",
+    onlyEmail.fields.join()
+  );
+  check(
+    "and the message does not mention the phone",
+    !/phone/.test(onlyEmail.message),
+    onlyEmail.message
+  );
+
+  reset();
+  const free = await findContactConflicts({
+    email: "new@x.com",
+    phone: "03001112222",
+  });
+  check(
+    "free details report nothing",
+    free.conflicts.length === 0 && free.message === ""
   );
 
   console.log("\nNothing to check\n");

@@ -30,6 +30,25 @@ interface RegistrationDetailsProps {
 const today = new Date();
 const formattedToday = today.toISOString().split("T")[0]; // Extract only the date part (YYYY-MM-DD)
 
+/** Where the email or phone stands with the server. */
+export type ContactFieldState = "unknown" | "checking" | "free" | "taken";
+
+/**
+ * How long to wait after the last keystroke before asking the server.
+ *
+ * Long enough that typing an address does not fire a request per character,
+ * short enough that the answer is there by the time the applicant reaches the
+ * next field.
+ */
+const CONTACT_CHECK_DEBOUNCE_MS = 600;
+
+const looksLikeEmail = (value: string) =>
+  /^[^\s@]+@[^\s@]+\.[^\s@]{2,}$/.test(String(value || "").trim());
+
+/** Enough digits to be worth asking about; fewer is still being typed. */
+const looksLikePhone = (value: string) =>
+  String(value || "").replace(/\D/g, "").length >= 10;
+
 const initialFormData: CandidateFormData = {
   cand_id: 0,
   cand_cnic: "",
@@ -141,6 +160,19 @@ const RegistrationDetails: React.FC<RegistrationDetailsProps> = ({
   // still looking at it - the interview call-up goes to this address.
   const [isSubmitting, setIsSubmitting] = useState(false);
   const [checkingContact, setCheckingContact] = useState(false);
+
+  /**
+   * What the server last said about the email and phone as they were typed.
+   *
+   * "unknown" until it has been asked, so the Continue button is never blocked
+   * before the first answer arrives - a slow lookup must not look like a
+   * rejection. Only "taken" stops the applicant.
+   */
+  const [contactCheck, setContactCheck] = useState<{
+    email: ContactFieldState;
+    phone: ContactFieldState;
+    message: string | null;
+  }>({ email: "unknown", phone: "unknown", message: null });
   const [agreeToTerms, setAgreeToTerms] = useState(false);
   const [stepIndex, setStepIndex] = useState(0);
   const [maxStepReached, setMaxStepReached] = useState(0);
@@ -343,6 +375,66 @@ const RegistrationDetails: React.FC<RegistrationDetailsProps> = ({
     window.scrollTo({ top: 0, behavior: "smooth" });
   };
 
+  /**
+   * Ask the server whether the email and phone are free, as they are typed.
+   *
+   * Debounced, and only once each value looks complete enough to be worth
+   * asking about - checking "a@" tells the applicant nothing except that they
+   * have not finished typing.
+   *
+   * Every request is tagged with the values it was asked about, and a reply is
+   * discarded if either has changed since. Without that, a slow answer about an
+   * old address arrives after a fast answer about the new one and marks a
+   * perfectly good address as taken.
+   */
+  const latestContactRequest = useRef(0);
+
+  useEffect(() => {
+    const email = String(formData.cand_email || "").trim();
+    const phone = String(formData.cand_phone || "").trim();
+
+    const askEmail = looksLikeEmail(email);
+    const askPhone = looksLikePhone(phone);
+
+    if (!askEmail && !askPhone) {
+      setContactCheck({ email: "unknown", phone: "unknown", message: null });
+      return;
+    }
+
+    setContactCheck((previous) => ({
+      email: askEmail ? "checking" : previous.email,
+      phone: askPhone ? "checking" : previous.phone,
+      message: null,
+    }));
+
+    const ticket = ++latestContactRequest.current;
+
+    const timer = window.setTimeout(async () => {
+      try {
+        const result = await checkContactAvailability({
+          ...(askEmail ? { email } : {}),
+          ...(askPhone ? { phone } : {}),
+        });
+
+        // A stale reply. See the note above.
+        if (ticket !== latestContactRequest.current) return;
+
+        setContactCheck({
+          email: askEmail ? (result.emailTaken ? "taken" : "free") : "unknown",
+          phone: askPhone ? (result.phoneTaken ? "taken" : "free") : "unknown",
+          message: result.available ? null : result.message,
+        });
+      } catch {
+        // The submit path checks again properly, so a failed convenience
+        // lookup must not leave the applicant stuck on a red field.
+        if (ticket !== latestContactRequest.current) return;
+        setContactCheck({ email: "unknown", phone: "unknown", message: null });
+      }
+    }, CONTACT_CHECK_DEBOUNCE_MS);
+
+    return () => window.clearTimeout(timer);
+  }, [formData.cand_email, formData.cand_phone]);
+
   const handleContinue = async () => {
     const stepErrors = validateStep(stepIndex);
     setErrors(stepErrors);
@@ -356,7 +448,7 @@ const RegistrationDetails: React.FC<RegistrationDetailsProps> = ({
     // before the applicant is allowed off this step. Leaving it to submit
     // meant filling in four more steps and then being sent back - and, until
     // recently, being sent back with a 500 rather than a reason.
-    if (STEPS[stepIndex]?.id === "contact") {
+    if (STEPS[stepIndex]?.key === "contact") {
       setCheckingContact(true);
       try {
         const result = await checkContactAvailability({
@@ -364,10 +456,27 @@ const RegistrationDetails: React.FC<RegistrationDetailsProps> = ({
           phone: formData.cand_phone,
         });
 
-        if (!result.available && result.field) {
-          const field = `cand_${result.field}`;
-          const message = result.message || "That is already registered";
-          setErrors({ [field]: message });
+        if (!result.available) {
+          // Every offending field is marked, not just the first. Being told
+          // about the email, fixing it, and only then being told about the
+          // phone is two rounds of a six-step form.
+          const message = result.message || "Those details are already registered";
+          const marked: { [key: string]: string } = {};
+          if (result.emailTaken) {
+            marked.cand_email =
+              "This email address is already registered - please use a different one";
+          }
+          if (result.phoneTaken) {
+            marked.cand_phone =
+              "This phone number is already registered - please use a different one";
+          }
+
+          setErrors(marked);
+          setContactCheck({
+            email: result.emailTaken ? "taken" : "free",
+            phone: result.phoneTaken ? "taken" : "free",
+            message,
+          });
           toast.error(message);
           return;
         }
@@ -458,9 +567,50 @@ const RegistrationDetails: React.FC<RegistrationDetailsProps> = ({
       } else {
         toast.error("Registration failed. Please try again.");
       }
-    } catch (error) {
+    } catch (error: any) {
       console.error("Registration error:", error);
-      toast.error("Registration failed. Please try again.");
+
+      // The server says exactly what is wrong - which email, which phone,
+      // already registered. Replacing that with "Registration failed. Please
+      // try again." told the applicant to repeat the thing that just failed.
+      const data = error?.response?.data;
+      const message =
+        data?.message ||
+        (error?.response
+          ? "Registration failed. Please check your details and try again."
+          : "Could not reach the server. Check your connection and try again.");
+
+      // Mark the offending inputs and take the applicant back to them, rather
+      // than leaving them on the final step with a message about a field six
+      // steps behind that they cannot see.
+      const fields: string[] = Array.isArray(data?.fields)
+        ? data.fields
+        : data?.field
+        ? [data.field]
+        : [];
+
+      if (fields.length > 0) {
+        const marked: { [key: string]: string } = {};
+        for (const field of fields) {
+          marked[field] =
+            field === "cand_email"
+              ? "This email address is already registered - please use a different one"
+              : field === "cand_phone"
+              ? "This phone number is already registered - please use a different one"
+              : message;
+        }
+        setErrors(marked);
+        setContactCheck({
+          email: fields.includes("cand_email") ? "taken" : "free",
+          phone: fields.includes("cand_phone") ? "taken" : "free",
+          message,
+        });
+
+        const contactStep = STEPS.findIndex((step) => step.key === "contact");
+        if (contactStep >= 0) goToStep(contactStep);
+      }
+
+      toast.error(message, { duration: 8000 });
     } finally {
       setIsSubmitting(false);
     }
@@ -558,6 +708,8 @@ const RegistrationDetails: React.FC<RegistrationDetailsProps> = ({
             formData={formData}
             errors={errors}
             handleInputChange={handleInputChange}
+            emailState={contactCheck.email}
+            phoneState={contactCheck.phone}
           />
         );
       case "academic":
@@ -694,7 +846,16 @@ const RegistrationDetails: React.FC<RegistrationDetailsProps> = ({
               <button
                 type={isLastStep ? "submit" : "button"}
                 onClick={isLastStep ? undefined : handleContinue}
-                disabled={isSubmitting || checkingContact}
+                // A value the server has already said is taken blocks the
+                // step. "checking" does not: a slow lookup must not read as
+                // a rejection.
+                disabled={
+                  isSubmitting ||
+                  checkingContact ||
+                  (activeStep.key === "contact" &&
+                    (contactCheck.email === "taken" ||
+                      contactCheck.phone === "taken"))
+                }
                 className="inline-flex items-center gap-2 rounded-md bg-[#006537] px-5 py-2.5 text-sm font-semibold text-white transition-colors hover:bg-[#00522c] disabled:cursor-not-allowed disabled:opacity-60"
               >
                 {isSubmitting

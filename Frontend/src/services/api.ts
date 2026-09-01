@@ -4115,13 +4115,19 @@ export const checkContactAvailability = async (contact: {
     `${API_URL}/candidateRoutes/contact-available`,
     { params: contact, timeout: 15000 }
   );
-  return response.data as {
-    success: boolean;
-    available: boolean;
-    field: "email" | "phone" | null;
-    message: string | null;
-  };
+  return response.data as ContactAvailability;
 };
+
+export interface ContactAvailability {
+  success: boolean;
+  available: boolean;
+  /** Per field, so the form can mark one and leave the other alone. */
+  emailTaken: boolean;
+  phoneTaken: boolean;
+  fields: Array<"email" | "phone">;
+  field: "email" | "phone" | null;
+  message: string | null;
+}
 
 /** Survives a page refresh, so a confirmed address is not re-verified. */
 export const getEmailVerificationStatus = async (email: string) => {

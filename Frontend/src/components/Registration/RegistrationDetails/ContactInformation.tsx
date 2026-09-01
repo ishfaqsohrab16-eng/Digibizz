@@ -2,6 +2,8 @@ import React from "react";
 import { CandidateFormData } from "../../../types/registration";
 import { domicileOptions } from "../../../types/degreeAreas";
 import { Field, SelectInput, TextInput, TextareaInput, fieldGrid } from "./fields";
+import { CheckCircle2, Loader2 } from "lucide-react";
+import type { ContactFieldState } from "./RegistrationDetails";
 
 interface ContactInformationProps {
   formData: CandidateFormData;
@@ -11,12 +13,47 @@ interface ContactInformationProps {
       HTMLInputElement | HTMLSelectElement | HTMLTextAreaElement
     >
   ) => void;
+  /** Whether the server has said this value is free, as it is typed. */
+  emailState?: ContactFieldState;
+  phoneState?: ContactFieldState;
 }
+
+/**
+ * The line under the field while it is being checked.
+ *
+ * Nothing is shown for "unknown" or "taken": there is no news before the
+ * first answer, and a taken value is already reported as a field error in
+ * red - saying it twice, in two styles, reads as two problems.
+ */
+const ContactStatus: React.FC<{ state?: ContactFieldState; noun: string }> = ({
+  state,
+  noun,
+}) => {
+  if (state === "checking") {
+    return (
+      <p className="mt-1 flex items-center gap-1.5 text-xs text-gray-500">
+        <Loader2 className="h-3 w-3 animate-spin" />
+        Checking this {noun}…
+      </p>
+    );
+  }
+  if (state === "free") {
+    return (
+      <p className="mt-1 flex items-center gap-1.5 text-xs text-emerald-700">
+        <CheckCircle2 className="h-3 w-3" />
+        This {noun} is available
+      </p>
+    );
+  }
+  return null;
+};
 
 const ContactInformation: React.FC<ContactInformationProps> = ({
   formData,
   errors,
   handleInputChange,
+  emailState,
+  phoneState,
 }) => {
   return (
     <div className={fieldGrid}>
@@ -28,8 +65,9 @@ const ContactInformation: React.FC<ContactInformationProps> = ({
           value={formData.cand_email}
           onChange={handleInputChange}
           placeholder="Enter your email address"
-          hasError={Boolean(errors.cand_email)}
+          hasError={Boolean(errors.cand_email) || emailState === "taken"}
         />
+        <ContactStatus state={emailState} noun="email address" />
       </Field>
 
       <Field label="Phone no." htmlFor="cand_phone" required error={errors.cand_phone}>
@@ -40,8 +78,9 @@ const ContactInformation: React.FC<ContactInformationProps> = ({
           value={formData.cand_phone}
           onChange={handleInputChange}
           placeholder="Enter your phone number"
-          hasError={Boolean(errors.cand_phone)}
+          hasError={Boolean(errors.cand_phone) || phoneState === "taken"}
         />
+        <ContactStatus state={phoneState} noun="phone number" />
       </Field>
 
       <Field

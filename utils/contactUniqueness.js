@@ -61,6 +61,35 @@ const phoneMatches = (key) => ({
   [Op.like]: `%${key.slice(-PHONE_NARROW_DIGITS)}`,
 });
 
+/**
+ * One sentence covering however many conflicts there are.
+ *
+ * Written out rather than joined mechanically, because "That email address
+ * is already registered. That phone number is already registered." reads
+ * like a fault, and the applicant has to be told plainly what to change.
+ */
+const describeConflicts = (conflicts) => {
+  const fields = conflicts.map((conflict) => conflict.field);
+
+  if (fields.includes("email") && fields.includes("phone")) {
+    return (
+      "That email address and phone number are both already registered. " +
+      "Please use a different email address and a different phone number."
+    );
+  }
+  if (fields.includes("email")) {
+    return (
+      "That email address is already registered. Please use a different one."
+    );
+  }
+  if (fields.includes("phone")) {
+    return (
+      "That phone number is already registered. Please use a different one."
+    );
+  }
+  return "";
+};
+
 /** The comparison that decides it, once the formatting is gone. */
 const samePhone = (stored, key) => Boolean(key) && phoneKey(stored) === key;
 
@@ -72,7 +101,9 @@ const samePhone = (stored, key) => Boolean(key) && phoneKey(stored) === key;
  * @param {number} [ignore.user_id]
  * @param {number} [ignore.cand_id]
  * @param {number} [ignore.std_id]
- * @returns {Promise<{field: string, message: string}|null>}
+ * @returns {Promise<{field: string, message: string}|null>} the first
+ *   conflict, for callers that only need to refuse. Use
+ *   findContactConflicts when the person needs to fix all of them.
  */
 const findContactConflict = async (contact, ignore = {}) => {
   const email = normaliseEmail(contact.email);
@@ -147,8 +178,41 @@ const findContactConflict = async (contact, ignore = {}) => {
   return null;
 };
 
+/**
+ * Every conflict, not just the first.
+ *
+ * An applicant whose email AND phone are both taken was told about the
+ * email, changed it, and was then told about the phone - two rounds of a
+ * six-step form for something that could have been said once. This checks
+ * both and reports both.
+ *
+ * @returns {Promise<{conflicts: Array<{field: string, message: string}>,
+ *   fields: string[], message: string}>} `conflicts` is empty when the
+ *   details are free; `message` is the single sentence to show.
+ */
+const findContactConflicts = async (contact, ignore = {}) => {
+  const [email, phone] = await Promise.all([
+    contact.email
+      ? findContactConflict({ email: contact.email }, ignore)
+      : null,
+    contact.phone
+      ? findContactConflict({ phone: contact.phone }, ignore)
+      : null,
+  ]);
+
+  const conflicts = [email, phone].filter(Boolean);
+
+  return {
+    conflicts,
+    fields: conflicts.map((conflict) => conflict.field),
+    message: describeConflicts(conflicts),
+  };
+};
+
 module.exports = {
   findContactConflict,
+  findContactConflicts,
+  describeConflicts,
   normaliseEmail,
   phoneKey,
   samePhone,

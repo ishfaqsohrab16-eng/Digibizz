@@ -4,7 +4,7 @@ const Center = require("../models/center");
 const TrainingBatch = require("../models/trainingBatcheModel");
 const { validationResult } = require("express-validator");
 const { Op } = require("sequelize");
-const { findContactConflict } = require("../utils/contactUniqueness");
+const { findContactConflicts } = require("../utils/contactUniqueness");
 const db = require("../config/db"); // Add this line to import your database configuration
 const sequelize = db.sequelize;
 const Student = require("../models/studentModel");
@@ -142,14 +142,21 @@ exports.createCandidate = async (req, res) => {
     // were being checked. An applicant reached the insert before the
     // database refused it, and got a 500 mentioning Sequelize for what is
     // simply "that address is taken".
-    const conflict = await findContactConflict({
+    // Both are checked and both reported. Telling the applicant about the
+    // email, then about the phone after they fix it, is two rounds of a
+    // six-step form for something that could be said once.
+    const { conflicts, fields, message } = await findContactConflicts({
       email: candidateData.cand_email,
       phone: candidateData.cand_phone,
     });
-    if (conflict) {
-      return res
-        .status(409)
-        .json({ message: conflict.message, field: `cand_${conflict.field}` });
+    if (conflicts.length > 0) {
+      return res.status(409).json({
+        message,
+        // Both shapes: `field` for anything still reading the old one, and
+        // `fields` so the form can mark every offending input at once.
+        field: `cand_${fields[0]}`,
+        fields: fields.map((name) => `cand_${name}`),
+      });
     }
     
     const user_profile_photo = req.file
@@ -1195,19 +1202,35 @@ exports.checkContactAvailability = async (req, res) => {
         .json({ success: false, message: "Give an email address or a phone number" });
     }
 
-    const conflict = await findContactConflict({ email, phone });
+    const { conflicts, fields, message } = await findContactConflicts({
+      email,
+      phone,
+    });
 
     return res.json({
       success: true,
-      available: !conflict,
-      field: conflict?.field || null,
-      message: conflict?.message || null,
+      available: conflicts.length === 0,
+      // Per field, so the form can mark the email and leave the phone alone
+      // when only one of them is taken.
+      emailTaken: fields.includes("email"),
+      phoneTaken: fields.includes("phone"),
+      fields,
+      field: fields[0] || null,
+      message: message || null,
     });
   } catch (error) {
     console.error("Contact availability error:", error);
     // Fail open: this is a convenience check, and the submit path checks again
     // properly. Blocking a registration because a lookup hiccuped would be a
     // worse outcome than letting them find out a moment later.
-    return res.json({ success: true, available: true, field: null, message: null });
+    return res.json({
+      success: true,
+      available: true,
+      emailTaken: false,
+      phoneTaken: false,
+      fields: [],
+      field: null,
+      message: null,
+    });
   }
 };
