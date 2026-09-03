@@ -4,7 +4,7 @@ const Center = require("../models/center");
 const TrainingBatch = require("../models/trainingBatcheModel");
 const { validationResult } = require("express-validator");
 const { Op } = require("sequelize");
-const { findContactConflicts } = require("../utils/contactUniqueness");
+const { registrationConflicts } = require("../utils/contactUniqueness");
 const db = require("../config/db"); // Add this line to import your database configuration
 const sequelize = db.sequelize;
 const Student = require("../models/studentModel");
@@ -142,13 +142,21 @@ exports.createCandidate = async (req, res) => {
     // were being checked. An applicant reached the insert before the
     // database refused it, and got a 500 mentioning Sequelize for what is
     // simply "that address is taken".
-    // Both are checked and both reported. Telling the applicant about the
-    // email, then about the phone after they fix it, is two rounds of a
-    // six-step form for something that could be said once.
-    const { conflicts, fields, message } = await findContactConflicts({
-      email: candidateData.cand_email,
-      phone: candidateData.cand_phone,
-    });
+    // Scoped to THIS batch's applicants, plus everyone already enrolled.
+    // Previous batches are deliberately not consulted: somebody who applied
+    // last year and was not selected may apply again with the same details,
+    // and checking every batch ever run refused exactly those people.
+    //
+    // Both fields are checked and both reported - telling the applicant
+    // about the email, then about the phone once they fix it, is two rounds
+    // of a six-step form for something that could be said once.
+    const { conflicts, fields, message } = await registrationConflicts(
+      {
+        email: candidateData.cand_email,
+        phone: candidateData.cand_phone,
+      },
+      candidateData.tb_id
+    );
     if (conflicts.length > 0) {
       return res.status(409).json({
         message,
@@ -1195,6 +1203,7 @@ exports.checkContactAvailability = async (req, res) => {
   try {
     const email = String(req.query.email || "").trim();
     const phone = String(req.query.phone || "").trim();
+    const tb_id = req.query.tb_id || null;
 
     if (!email && !phone) {
       return res
@@ -1202,10 +1211,13 @@ exports.checkContactAvailability = async (req, res) => {
         .json({ success: false, message: "Give an email address or a phone number" });
     }
 
-    const { conflicts, fields, message } = await findContactConflicts({
-      email,
-      phone,
-    });
+    // The batch matters: the same address is free in a new batch even if it
+    // applied in an old one. Without it this would answer about the wrong
+    // question and block a returning applicant as they typed.
+    const { conflicts, fields, message } = await registrationConflicts(
+      { email, phone },
+      tb_id
+    );
 
     return res.json({
       success: true,

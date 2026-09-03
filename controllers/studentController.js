@@ -10,7 +10,7 @@ const User = require("../models/userModel");
 const bcrypt = require("bcryptjs");
 const { Op } = require("sequelize");
 const { sequelize } = require("../config/db");
-const { findContactConflict } = require("../utils/contactUniqueness");
+const { studentContactConflicts } = require("../utils/contactUniqueness");
 const MasterTrainer = require("../models/masterTrainersModel");
 const CenterDates = require("../models/centersDatesModel");
 const Attendance = require("../models/attendanceModel");
@@ -46,14 +46,29 @@ exports.registerStudent = async (req, res) => {
       special_case,
       special_case_comments,
     } = req.body;
-    const existingTrainer = await User.findOne({
-      where: {
-        user_email,
-        user_username,
-      },
+    // This matched on email AND username together, so it only fired when
+    // BOTH happened to be the same - a new student with a taken email but a
+    // different username sailed past it and failed on the unique index
+    // instead, as a 500.
+    const existingAccount = await User.findOne({ where: { user_email } });
+    if (existingAccount) {
+      return res.status(409).json({
+        success: false,
+        field: "user_email",
+        message:
+          "An account already exists with that email address. Please use a different one.",
+      });
+    }
+
+    // Enrolled students only, per the same rule the enrolment path follows.
+    // The phone was not checked here at all.
+    const { conflicts, fields, message } = await studentContactConflicts({
+      phone: std_phone,
     });
-    if (existingTrainer) {
-      return res.status(400).json({ message: "Student already exists" });
+    if (conflicts.length > 0) {
+      return res
+        .status(409)
+        .json({ success: false, field: fields[0], fields, message });
     }
     // Process profile photo
     const user_profile_photo = req.file
@@ -946,19 +961,24 @@ exports.updateStudentProfile = async (req, res) => {
     // Checked before the write, not left to the unique index. The raw
     // constraint error surfaced as a 500 with "user_email must be unique"
     // and a stack, which tells the person editing their profile nothing
-    // they can act on. Their own row is excluded, so saving an unchanged
-    // email is not a conflict with themselves.
-    if (user_email) {
-      const conflict = await findContactConflict(
-        { email: user_email },
-        { user_id: student.user_id }
+    // they can act on.
+    //
+    // Enrolled students only - applications are not consulted, because this
+    // student's own application still holds these details and would collide
+    // with them. Their own rows are excluded for the same reason, so saving
+    // an unchanged email or phone is not a conflict with themselves.
+    if (user_email || std_phone) {
+      const { conflicts, fields, message } = await studentContactConflicts(
+        { email: user_email, phone: std_phone },
+        { user_id: student.user_id, std_id: student.std_id }
       );
-      if (conflict) {
+      if (conflicts.length > 0) {
         await transaction.rollback();
         return res.status(409).json({
           success: false,
-          field: conflict.field,
-          message: conflict.message,
+          field: fields[0],
+          fields,
+          message,
         });
       }
     }

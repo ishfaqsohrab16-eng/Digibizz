@@ -2969,6 +2969,7 @@ export type BulkEnrollStatus =
   | "not_found"
   | "no_email"
   | "email_taken"
+  | "phone_taken"
   | "failed";
 
 export interface BulkEnrollRow {
@@ -3005,6 +3006,7 @@ export interface BulkEnrollSummary {
   not_found: number;
   no_email: number;
   email_taken: number;
+  phone_taken: number;
   unreadable: number;
 }
 
@@ -4110,6 +4112,12 @@ export const confirmEmailVerificationCode = async (
 export const checkContactAvailability = async (contact: {
   email?: string;
   phone?: string;
+  /**
+   * The batch being applied to. Without it the server cannot tell a
+   * returning applicant from a duplicate - the same details are free in a
+   * new batch even if they applied in an old one.
+   */
+  tb_id?: number | string;
 }) => {
   const response = await axios.get(
     `${API_URL}/candidateRoutes/contact-available`,

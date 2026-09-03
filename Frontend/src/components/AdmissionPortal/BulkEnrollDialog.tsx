@@ -46,6 +46,7 @@ const STATUS_STYLES: Record<BulkEnrollStatus, { label: string; className: string
   not_found: { label: "Not found", className: "bg-rose-100 text-rose-800" },
   no_email: { label: "No email", className: "bg-amber-100 text-amber-800" },
   email_taken: { label: "Email in use", className: "bg-amber-100 text-amber-800" },
+  phone_taken: { label: "Phone in use", className: "bg-amber-100 text-amber-800" },
   failed: { label: "Failed", className: "bg-rose-100 text-rose-800" },
 };
 

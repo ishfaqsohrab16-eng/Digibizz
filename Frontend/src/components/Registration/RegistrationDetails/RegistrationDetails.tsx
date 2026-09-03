@@ -414,6 +414,10 @@ const RegistrationDetails: React.FC<RegistrationDetailsProps> = ({
         const result = await checkContactAvailability({
           ...(askEmail ? { email } : {}),
           ...(askPhone ? { phone } : {}),
+          // The batch decides the answer: applying again in a new batch
+          // with the same details is allowed, applying twice in this one
+          // is not.
+          tb_id: batchId,
         });
 
         // A stale reply. See the note above.
@@ -454,6 +458,7 @@ const RegistrationDetails: React.FC<RegistrationDetailsProps> = ({
         const result = await checkContactAvailability({
           email: formData.cand_email,
           phone: formData.cand_phone,
+          tb_id: batchId,
         });
 
         if (!result.available) {

@@ -6,15 +6,21 @@ const User = require("../models/userModel");
 /**
  * Is this email address or phone number already spoken for?
  *
- * Three tables can hold the same person's contact details - user, student and
- * candidate - and until now only some of them were checked, in some of the
- * places that write them. The result was a registration that looked fine right
- * up to the insert, where the database refused it and the applicant got a 500
- * with the word "Sequelize" in it.
+ * Two different questions live here, and they have different answers:
+ *
+ *   REGISTERING as a candidate - is this already used by someone applying in
+ *   THIS batch, or by anyone already enrolled? Previous batches are
+ *   deliberately not consulted. Somebody who applied last year and was not
+ *   selected is entitled to apply again with the same email and phone, and
+ *   checking every batch ever ran refused exactly those people.
+ *
+ *   CREATING OR EDITING A STUDENT - is this already used by someone enrolled?
+ *   Candidates are not consulted at all. A student being enrolled IS the
+ *   candidate whose details these are, so checking applications would have
+ *   every enrolment collide with itself.
  *
  * One definition, asked by the registration form as the applicant types, again
- * when they submit, and by the profile editor. All three give the same answer,
- * which is the point.
+ * when they submit, by the enrolment path, and by the profile editor.
  */
 
 /** Addresses only ever differ by case; store and compare in one of them. */
@@ -37,21 +43,22 @@ const phoneKey = (value) => {
 /**
  * Narrow to rows worth comparing properly.
  *
- * A LIKE on the whole key does NOT work: the column holds whatever the
- * person typed, so `%001234567` never matches the stored `0300-1234567` -
- * the dash is in the way. That silently found no duplicates at all, which
- * is the worst way for a uniqueness check to fail.
+ * A LIKE on the whole key does NOT work: the column holds whatever the person
+ * typed, so `%001234567` never matches the stored `0300-1234567` - the dash is
+ * in the way. That silently found no duplicates at all, which is the worst way
+ * for a uniqueness check to fail.
  *
  * The last four digits are used instead. They are contiguous in every way a
- * number is written - nobody puts a separator inside the final block - so
- * this matches regardless of formatting, cuts the table down to a handful of
- * rows, and leaves the real comparison to phoneKey below, where the
- * formatting can actually be stripped.
+ * number is written - nobody puts a separator inside the final block - so this
+ * matches regardless of formatting, cuts the table down to a handful of rows,
+ * and leaves the real comparison to phoneKey, where the formatting can
+ * actually be stripped.
  */
 const PHONE_NARROW_DIGITS = 4;
 
 /**
  * How many same-ending rows to compare properly.
+ *
  * Four digits is one in ten thousand numbers; a cap this size will never be
  * reached in practice and stops a pathological column from loading a table.
  */
@@ -61,12 +68,21 @@ const phoneMatches = (key) => ({
   [Op.like]: `%${key.slice(-PHONE_NARROW_DIGITS)}`,
 });
 
+/** The comparison that decides it, once the formatting is gone. */
+const samePhone = (stored, key) => Boolean(key) && phoneKey(stored) === key;
+
+/** A phone shorter than this is a typo, not a number; it would match half the table. */
+const MIN_PHONE_DIGITS = 7;
+
+/** Removed students do not hold a place, so they do not hold their details either. */
+const LIVE_STUDENT = { std_lms_status: { [Op.ne]: 2 } };
+
 /**
  * One sentence covering however many conflicts there are.
  *
- * Written out rather than joined mechanically, because "That email address
- * is already registered. That phone number is already registered." reads
- * like a fault, and the applicant has to be told plainly what to change.
+ * Written out rather than joined mechanically, because "That email address is
+ * already registered. That phone number is already registered." reads like a
+ * fault, and the applicant has to be told plainly what to change.
  */
 const describeConflicts = (conflicts) => {
   const fields = conflicts.map((conflict) => conflict.field);
@@ -78,129 +94,147 @@ const describeConflicts = (conflicts) => {
     );
   }
   if (fields.includes("email")) {
-    return (
-      "That email address is already registered. Please use a different one."
-    );
+    return "That email address is already registered. Please use a different one.";
   }
   if (fields.includes("phone")) {
-    return (
-      "That phone number is already registered. Please use a different one."
-    );
+    return "That phone number is already registered. Please use a different one.";
   }
   return "";
 };
 
-/** The comparison that decides it, once the formatting is gone. */
-const samePhone = (stored, key) => Boolean(key) && phoneKey(stored) === key;
-
 /**
- * @param {object} contact
- * @param {string} [contact.email]
- * @param {string} [contact.phone]
- * @param {object} [ignore] rows belonging to the person being edited
- * @param {number} [ignore.user_id]
- * @param {number} [ignore.cand_id]
- * @param {number} [ignore.std_id]
- * @returns {Promise<{field: string, message: string}|null>} the first
- *   conflict, for callers that only need to refuse. Use
- *   findContactConflicts when the person needs to fix all of them.
+ * Is this email on an ENROLLED student's account?
+ *
+ * Two steps rather than a join, because there is no User->Student association
+ * defined and adding one to answer a yes/no question is a lot of blast radius.
+ * The email column is unique, so the first query returns at most one row.
+ *
+ * Note this asks about students specifically, not about users. A trainer or an
+ * administrator holding the address does not block an applicant.
  */
-const findContactConflict = async (contact, ignore = {}) => {
-  const email = normaliseEmail(contact.email);
-  const key = phoneKey(contact.phone);
+const emailBelongsToStudent = async (email, ignore) => {
+  const user = await User.findOne({
+    where: {
+      user_email: email,
+      ...(ignore.user_id ? { user_id: { [Op.ne]: ignore.user_id } } : {}),
+    },
+    attributes: ["user_id"],
+  });
+  if (!user) return false;
 
-  if (email) {
-    const [user, candidate] = await Promise.all([
-      User.findOne({
-        where: {
-          user_email: email,
-          ...(ignore.user_id ? { user_id: { [Op.ne]: ignore.user_id } } : {}),
-        },
-        attributes: ["user_id"],
-      }),
-      Candidate.findOne({
-        where: {
-          cand_email: email,
-          ...(ignore.cand_id ? { cand_id: { [Op.ne]: ignore.cand_id } } : {}),
-        },
-        attributes: ["cand_id"],
-      }),
-    ]);
+  const student = await Student.findOne({
+    where: {
+      user_id: user.user_id,
+      ...LIVE_STUDENT,
+      ...(ignore.std_id ? { std_id: { [Op.ne]: ignore.std_id } } : {}),
+    },
+    attributes: ["std_id"],
+  });
 
-    if (user || candidate) {
-      return {
-        field: "email",
-        message:
-          "That email address is already registered. Please use a different one.",
-      };
-    }
-  }
+  return Boolean(student);
+};
 
-  // A phone number shorter than this is a typo, not a number, and matching on
-  // it would collide with half the table.
-  if (key.length >= 7) {
-    // findAll, not findOne: the LIKE above only narrows by the last four
-    // digits, so the first row it happens to return may be a different
-    // number that merely ends the same way. The rows are then compared
-    // properly, with the formatting stripped.
-    const [candidates, students] = await Promise.all([
-      Candidate.findAll({
-        where: {
-          cand_phone: phoneMatches(key),
-          ...(ignore.cand_id ? { cand_id: { [Op.ne]: ignore.cand_id } } : {}),
-        },
-        attributes: ["cand_id", "cand_phone"],
-        limit: PHONE_CANDIDATE_LIMIT,
-      }),
-      Student.findAll({
-        where: {
-          std_phone: phoneMatches(key),
-          ...(ignore.std_id ? { std_id: { [Op.ne]: ignore.std_id } } : {}),
-        },
-        attributes: ["std_id", "std_phone"],
-        limit: PHONE_CANDIDATE_LIMIT,
-      }),
-    ]);
+/** Is this email on an application in the given batch? */
+const emailBelongsToCandidate = async (email, tb_id, ignore) => {
+  const candidate = await Candidate.findOne({
+    where: {
+      cand_email: email,
+      tb_id,
+      ...(ignore.cand_id ? { cand_id: { [Op.ne]: ignore.cand_id } } : {}),
+    },
+    attributes: ["cand_id"],
+  });
+  return Boolean(candidate);
+};
 
-    const taken =
-      candidates.some((row) => samePhone(row.cand_phone, key)) ||
-      students.some((row) => samePhone(row.std_phone, key));
+const phoneBelongsToStudent = async (key, ignore) => {
+  const students = await Student.findAll({
+    where: {
+      std_phone: phoneMatches(key),
+      ...LIVE_STUDENT,
+      ...(ignore.std_id ? { std_id: { [Op.ne]: ignore.std_id } } : {}),
+    },
+    attributes: ["std_id", "std_phone"],
+    limit: PHONE_CANDIDATE_LIMIT,
+  });
+  return students.some((row) => samePhone(row.std_phone, key));
+};
 
-    if (taken) {
-      return {
-        field: "phone",
-        message:
-          "That phone number is already registered. Please use a different one.",
-      };
-    }
-  }
-
-  return null;
+const phoneBelongsToCandidate = async (key, tb_id, ignore) => {
+  const candidates = await Candidate.findAll({
+    where: {
+      cand_phone: phoneMatches(key),
+      tb_id,
+      ...(ignore.cand_id ? { cand_id: { [Op.ne]: ignore.cand_id } } : {}),
+    },
+    attributes: ["cand_id", "cand_phone"],
+    limit: PHONE_CANDIDATE_LIMIT,
+  });
+  return candidates.some((row) => samePhone(row.cand_phone, key));
 };
 
 /**
  * Every conflict, not just the first.
  *
- * An applicant whose email AND phone are both taken was told about the
- * email, changed it, and was then told about the phone - two rounds of a
- * six-step form for something that could have been said once. This checks
- * both and reports both.
+ * An applicant whose email AND phone are both taken was told about the email,
+ * changed it, and was then told about the phone - two rounds of a six-step form
+ * for something that could have been said once.
  *
+ * @param {object} contact
+ * @param {string} [contact.email]
+ * @param {string} [contact.phone]
+ * @param {object} [options]
+ * @param {number|string|null} [options.candidatesInBatch] check applications in
+ *   this batch, and only this batch. Omit to skip applications entirely.
+ * @param {boolean} [options.students] check people already enrolled. Default true.
+ * @param {object} [options.ignore] rows belonging to the person being edited.
  * @returns {Promise<{conflicts: Array<{field: string, message: string}>,
- *   fields: string[], message: string}>} `conflicts` is empty when the
- *   details are free; `message` is the single sentence to show.
+ *   fields: string[], message: string}>}
  */
-const findContactConflicts = async (contact, ignore = {}) => {
-  const [email, phone] = await Promise.all([
-    contact.email
-      ? findContactConflict({ email: contact.email }, ignore)
-      : null,
-    contact.phone
-      ? findContactConflict({ phone: contact.phone }, ignore)
-      : null,
+const findContactConflicts = async (contact, options = {}) => {
+  const {
+    candidatesInBatch = null,
+    students = true,
+    ignore = {},
+  } = options;
+
+  const email = normaliseEmail(contact.email);
+  const key = phoneKey(contact.phone);
+  const checkPhone = key.length >= MIN_PHONE_DIGITS;
+
+  const [
+    emailOnStudent,
+    emailOnCandidate,
+    phoneOnStudent,
+    phoneOnCandidate,
+  ] = await Promise.all([
+    email && students ? emailBelongsToStudent(email, ignore) : false,
+    email && candidatesInBatch
+      ? emailBelongsToCandidate(email, candidatesInBatch, ignore)
+      : false,
+    checkPhone && students ? phoneBelongsToStudent(key, ignore) : false,
+    checkPhone && candidatesInBatch
+      ? phoneBelongsToCandidate(key, candidatesInBatch, ignore)
+      : false,
   ]);
 
-  const conflicts = [email, phone].filter(Boolean);
+  const conflicts = [];
+  if (emailOnStudent || emailOnCandidate) {
+    conflicts.push({
+      field: "email",
+      message:
+        "That email address is already registered. Please use a different one.",
+      where: emailOnStudent ? "student" : "candidate",
+    });
+  }
+  if (phoneOnStudent || phoneOnCandidate) {
+    conflicts.push({
+      field: "phone",
+      message:
+        "That phone number is already registered. Please use a different one.",
+      where: phoneOnStudent ? "student" : "candidate",
+    });
+  }
 
   return {
     conflicts,
@@ -209,9 +243,45 @@ const findContactConflicts = async (contact, ignore = {}) => {
   };
 };
 
+/** The first conflict, for callers that only need to refuse. */
+const findContactConflict = async (contact, options = {}) => {
+  const { conflicts } = await findContactConflicts(contact, options);
+  return conflicts[0] || null;
+};
+
+/**
+ * Registering an application.
+ *
+ * This batch's applicants and everyone already enrolled. Previous batches are
+ * not consulted: somebody who applied last year and was not selected may apply
+ * again with the same details, and they were being refused for it.
+ */
+const registrationConflicts = (contact, tb_id, ignore = {}) =>
+  findContactConflicts(contact, {
+    candidatesInBatch: tb_id,
+    students: true,
+    ignore,
+  });
+
+/**
+ * Creating, enrolling or editing a student.
+ *
+ * Enrolled students only. A candidate being enrolled IS the person whose
+ * details these are, so consulting applications would make every enrolment
+ * collide with itself.
+ */
+const studentContactConflicts = (contact, ignore = {}) =>
+  findContactConflicts(contact, {
+    candidatesInBatch: null,
+    students: true,
+    ignore,
+  });
+
 module.exports = {
   findContactConflict,
   findContactConflicts,
+  registrationConflicts,
+  studentContactConflicts,
   describeConflicts,
   normaliseEmail,
   phoneKey,

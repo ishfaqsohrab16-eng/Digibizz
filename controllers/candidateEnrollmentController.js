@@ -8,6 +8,7 @@ const TrainingBatch = require("../models/trainingBatcheModel");
 const { Op } = require("sequelize");
 const { sendEmail, escapeHtml } = require("../servec/emailConfig");
 const { enrolmentConfirmed } = require("../servec/emailTemplates");
+const { studentContactConflicts } = require("../utils/contactUniqueness");
 
 /**
  * Required lazily: this controller is loaded by scripts and tests that have
@@ -200,6 +201,10 @@ const findBlocker = async (
     return { status: "no_email", message: "Candidate has no email address" };
   }
 
+  // The account table's user_email is UNIQUE across everybody - trainers and
+  // administrators included - so this has to stay broader than "enrolled
+  // students". Without it the INSERT fails on the constraint and the admin
+  // gets a database error instead of a sentence.
   const existingUser = await User.findOne({
     where: { user_email: email },
     attributes: ["user_id"],
@@ -209,6 +214,21 @@ const findBlocker = async (
     return {
       status: "email_taken",
       message: `A user account already exists with ${email}`,
+    };
+  }
+
+  // The phone was never checked at enrolment at all, so two students could
+  // end up sharing a number with nothing to show it had happened. Scoped to
+  // people already enrolled: this candidate's own application holds these
+  // details, so consulting applications would make every enrolment collide
+  // with itself.
+  const { conflicts } = await studentContactConflicts({
+    phone: candidate.cand_phone,
+  });
+  if (conflicts.length > 0) {
+    return {
+      status: "phone_taken",
+      message: `Another enrolled student already has the phone number ${candidate.cand_phone}`,
     };
   }
 
@@ -589,6 +609,7 @@ const summarise = (plan, skipped) => {
     not_found: counts.not_found || 0,
     no_email: counts.no_email || 0,
     email_taken: counts.email_taken || 0,
+    phone_taken: counts.phone_taken || 0,
     no_schedule: counts.no_schedule || 0,
     unreadable: skipped.length,
   };
