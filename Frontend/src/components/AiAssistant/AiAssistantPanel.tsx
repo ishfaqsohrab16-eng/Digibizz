@@ -2,6 +2,7 @@ import React, { useCallback, useEffect, useMemo, useRef, useState } from "react"
 import {
   AlertTriangle,
   BarChart3,
+  ChevronDown,
   Copy,
   Database,
   GraduationCap,
