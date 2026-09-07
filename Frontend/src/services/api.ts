@@ -2946,14 +2946,17 @@ export type AiVisual =
   | { type: "table"; title: string; queryIndex: number }
   | { type: "stat"; title: string; queryIndex: number; valueField: string }
   | {
-      type: "bar" | "line" | "area";
+      /** Anything plotted on x/y: one entry in yFields per series. */
+      type: "bar" | "hbar" | "stackedBar" | "line" | "area" | "radar" | "scatter";
       title: string;
       queryIndex: number;
       xField: string;
       yFields: string[];
+      labelField?: string;
     }
   | {
-      type: "pie";
+      /** One label and one number per row. */
+      type: "pie" | "donut" | "treemap" | "funnel" | "radial" | "list";
       title: string;
       queryIndex: number;
       labelField: string;
@@ -2977,15 +2980,34 @@ export interface AiAnswer {
   queries: AiQuery[];
   rounds: number;
   ms: number;
+  /** Which model actually answered - not always the one picked. */
+  model?: string;
+  /** True when the picked model was unavailable and another stood in. */
+  usedFallback?: boolean;
+}
+
+/** A model the panel may offer, and what it is good at. */
+export interface AiModel {
+  id: string;
+  label: string;
+  tagline: string;
+  detail: string;
+  speed: "fastest" | "fast";
+  recommended?: boolean;
 }
 
 export interface AiStatus {
   success: boolean;
   ready: boolean;
   model: string;
-  url: string;
+  provider?: string;
   /** True when queries run as a SELECT-only database account. */
   readOnlyAccount: boolean;
+  /** The prompt-injection classifier, when the key can reach it. */
+  screening?: string | null;
+  /** Models that can be picked: reachable, and able to call tools. */
+  catalogue?: AiModel[];
+  fallbacks?: string[];
   tables?: number;
   maxRows?: number;
   message: string | null;
@@ -3005,19 +3027,20 @@ export const askAiAssistant = async (
    * Identifies the train of thought, so data fetched for one question can
    * answer the next without querying again.
    */
-  conversationId?: string
+  conversationId?: string,
+  /** The model picked in the panel. Ignored if it is not in the catalogue. */
+  model?: string
 ) => {
   const response = await axios.post(
     `${API_URL}/ai-assistant/ask`,
-    { question, history, conversationId },
+    { question, history, conversationId, model },
     {
       headers: { Authorization: `Bearer ${getCurrentUserToken()}` },
-      // Ten minutes. On CPU-only hardware one round of an 8B model against
-      // this schema takes around 45 seconds, and a question that needs
-      // several rounds runs for minutes - so a shorter limit abandons work
-      // that was going to succeed. The panel shows a running count so the
-      // wait does not look like a hang.
-      timeout: 600000,
+      // Two minutes. Groq answers a round in well under a second, so a
+      // question taking this long is stuck rather than slow - the ten
+      // minutes this needed while the model ran locally on a CPU would now
+      // just be ten minutes of staring at a spinner.
+      timeout: 120000,
     }
   );
   return response.data as AiAnswer;

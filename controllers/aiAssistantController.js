@@ -1,4 +1,14 @@
-const { chat, health, MODEL, BASE_URL, OllamaError } = require("../servec/providers/ollama");
+const {
+  chat,
+  screenPrompt,
+  health,
+  ANALYST_MODEL,
+  SCREEN_MODEL,
+  CHAT_MODELS,
+  resolveModel,
+  isConfigured,
+  GroqError,
+} = require("../servec/providers/groq");
 const { checkSelect, MAX_ROWS } = require("../utils/sqlGuard");
 const { describeSchema } = require("../utils/dbSchema");
 const { runQuery, hasOwnAccount, missingPassword } = require("../utils/aiReadOnlyDb");
@@ -7,105 +17,202 @@ const { datasetsFor, remember } = require("../utils/aiConversations");
 /**
  * The data assistant.
  *
- * A Super Admin asks a question in English; the model writes SQL; the guard
- * decides whether it may run; the rows come back; the model reads them and
- * says what they mean. It may take several turns - most real questions need
- * more than one query, and comparing two numbers means fetching both.
+ * A Super Admin asks a question in English; the model asks for the data it
+ * needs; the guard decides whether each query may run; the rows come back; the
+ * model reads them and says what they mean, choosing tables and charts to suit.
  *
- * Three things shape the design:
+ * Built on TOOL CALLING rather than on asking the model to emit a JSON
+ * protocol. The protocol version worked, but every reply had to be recovered
+ * from markdown fences and explanatory sentences the model had been told not to
+ * write. With tools the shape is enforced by the API: a tool call is a tool
+ * call, and `finish_reason` says unambiguously which branch was taken.
+ *
+ * Four things shape the design:
  *
  *   The model is never trusted with the database. Every statement goes through
- *   utils/sqlGuard.js, and ideally runs as an account that only holds SELECT.
+ *   utils/sqlGuard.js and runs as an account that only holds SELECT.
+ *
+ *   The question is screened for prompt injection before the analyst sees it.
  *
  *   The model is never trusted with the presentation either. It proposes a
- *   chart; this checks the fields it named actually exist in the rows and
- *   falls back to a table when they do not, because a chart of a column that
- *   is not there renders as an empty box with a title.
+ *   chart; this checks the fields it named exist in the rows.
  *
- *   Everything it did is returned alongside the answer - the SQL, the row
- *   counts, the timings. An answer about your own data that you cannot check
- *   is worth very little.
+ *   Everything it did comes back with the answer - the SQL, the row counts,
+ *   the timings, which model answered. An answer about your own data that you
+ *   cannot check is worth very little.
  */
 
-/** How many query rounds before the assistant must answer with what it has. */
-const MAX_ROUNDS = Number(process.env.AI_MAX_ROUNDS) || 6;
+/** How many tool rounds before the assistant must answer with what it has. */
+const MAX_ROUNDS = Number(process.env.AI_MAX_ROUNDS) || 8;
 
-/** Conversation turns kept as context. Older ones are dropped. */
+/** Conversation turns kept as context. */
 const MAX_HISTORY = 12;
 
-/** Rows fed back to the model per query. It reasons over these, not over 500. */
-const ROWS_SHOWN_TO_MODEL = 60;
+/**
+ * Rows fed back to the model per query.
+ *
+ * Raised from 60 now that the analyst carries 131k tokens of context. The old
+ * limit was sized for a local 8B model and was throwing away detail these
+ * models can comfortably read and reason over.
+ */
+const ROWS_SHOWN_TO_MODEL = 150;
 
-const SYSTEM_PROMPT = `You are the data assistant for the Digibizz LMS, a training programme in Balochistan, Pakistan.
+/**
+ * The tools the analyst may call.
+ *
+ * Two, deliberately. Anything else it might want - more rows, a different
+ * grain, a different join - is another SELECT, and giving it exactly one way to
+ * reach the database keeps the guard the only door.
+ */
+const TOOLS = [
+  {
+    type: "function",
+    function: {
+      name: "run_sql",
+      description:
+        "Run one read-only MySQL SELECT against the LMS database and get the rows back. " +
+        "Call this as many times as you need, and call it again with a better query if " +
+        "the first result does not answer the question.",
+      parameters: {
+        type: "object",
+        properties: {
+          sql: {
+            type: "string",
+            description:
+              "A single SELECT statement. No semicolons in the middle, no comments, " +
+              "no writes of any kind. Alias every aggregate. Join to return readable " +
+              "names (center_name, course_name, tb_name) rather than ids.",
+          },
+          reason: {
+            type: "string",
+            description: "What this query tells you, in a few words.",
+          },
+        },
+        required: ["sql", "reason"],
+      },
+    },
+  },
+  {
+    type: "function",
+    function: {
+      name: "present_answer",
+      description:
+        "Give the final answer once you have the data. Call this exactly once, last.",
+      parameters: {
+        type: "object",
+        properties: {
+          summary: {
+            type: "string",
+            description:
+              "Plain text for someone who has not seen the numbers. Lead with the " +
+              "answer, then the notable detail, with the actual figures in it. Never " +
+              'say "the query returned"; say what is true about the programme.',
+          },
+          visuals: {
+            type: "array",
+            description:
+              "How to show the data. May be empty. Each entry points at a dataset by " +
+              "index: 0 is the first result available to you, and results carried over " +
+              "from earlier in the conversation keep their original indices.",
+            items: {
+              type: "object",
+              properties: {
+                type: {
+                  type: "string",
+                  enum: [
+                    "stat",
+                    "table",
+                    "list",
+                    "bar",
+                    "hbar",
+                    "stackedBar",
+                    "line",
+                    "area",
+                    "pie",
+                    "donut",
+                    "scatter",
+                    "radar",
+                    "radial",
+                    "treemap",
+                    "funnel",
+                  ],
+                  description:
+                    "stat: one headline number. table: detail read row by row. " +
+                    "list: a short ranked list. bar: a breakdown across categories. " +
+                    "hbar: the same when labels are long, like centre names. " +
+                    "stackedBar: parts of a whole across categories. line or area: " +
+                    "anything over time. pie or donut: shares of one total, up to " +
+                    "about six slices. scatter: two numbers against each other. " +
+                    "radar: several measures compared across a few subjects. " +
+                    "radial: progress towards a target. treemap: relative size " +
+                    "across many categories. funnel: stages that narrow, like " +
+                    "applied to interviewed to enrolled.",
+                },
+                title: { type: "string" },
+                queryIndex: { type: "integer" },
+                valueField: { type: "string", description: "stat and pie" },
+                labelField: { type: "string", description: "pie" },
+                xField: { type: "string", description: "bar, line, area" },
+                yFields: {
+                  type: "array",
+                  items: { type: "string" },
+                  description: "bar, line, area - one entry per series",
+                },
+              },
+              required: ["type", "title", "queryIndex"],
+            },
+          },
+        },
+        required: ["summary"],
+      },
+    },
+  },
+];
 
-You answer questions about the programme by querying its MySQL database and explaining what you find.
+const SYSTEM_PROMPT = `You are the data assistant for the Digibizz LMS, a digital skills training programme run across centres in Balochistan, Pakistan.
 
-HOW YOU WORK
-You reply with ONE JSON object and nothing else. No prose outside it, no markdown fences.
-
-To look something up:
-{"action":"query","sql":"SELECT ...","reason":"what this tells you"}
-
-To answer, once you have what you need:
-{"action":"answer","summary":"...","visuals":[...]}
-
-You may query several times before answering. Use that: fetch each piece
-separately rather than forcing one enormous join, and compare numbers by
-fetching both.
+You answer questions about the programme by querying its MySQL database with the run_sql tool, then explaining what you found with present_answer.
 
 WORK OUT WHAT IS BEING ASKED BEFORE YOU QUERY
 Read the question for what the person wants to know, not for keywords.
-- "compare X and Y" needs both, in one result, side by side.
-- "top" or "best" or "worst" needs ORDER BY and LIMIT.
-- "how many" is one number; "which" is a list; "trend" or "over time" is a
-  series ordered by date.
-- "why" cannot be answered by a database. Give the numbers that bear on it
-  and say what they do and do not show.
-If the first result does not actually answer the question - it is empty, it
-is at the wrong grain, it lumps together things that should be separate -
-query again with a better one. That is expected, not a failure.
+- "compare X and Y" needs both, in one result, side by side, so they can be charted together.
+- "top", "best", "worst" need ORDER BY and LIMIT.
+- "how many" is one number; "which" is a list; "trend" or "over time" is a series ordered by date.
+- "students" and "applicants" are different tables. Re-read the glossary before assuming which one is meant.
+- "why" cannot be answered by a database. Give the numbers that bear on it and say what they do and do not show.
+If the question is genuinely ambiguous, pick the most useful reading, answer it, and say in one sentence which reading you took.
+
+LOOK BEFORE YOU ANSWER
+Do not write one big query from the schema and trust it. The schema tells you what columns exist; it does not tell you what is IN them, and a query against a wrong assumption returns a confident, wrong number.
+So when a question touches anything you have not already looked at this conversation, orient first with one or two small, cheap queries:
+- what the distinct values of a column actually are, before filtering on one
+  (SELECT DISTINCT std_gender FROM students LIMIT 20)
+- how many rows a filter actually matches, before building a report on it
+- whether a join returns what you expect, at the grain you expect, on a few rows
+  (add LIMIT 5 and read them)
+These cost nothing and they are what stops an answer being wrong in a way nobody notices. Once you know the shape, write the real query.
+
+QUERY UNTIL YOU CAN ACTUALLY ANSWER
+Call run_sql as many times as you need. If a result is empty, at the wrong grain, or lumps together things that should be separate, query again with a better one - that is expected, not a failure. Fetch each piece separately rather than forcing one enormous join, and when comparing, fetch both sides.
+An empty result is a finding, not a dead end: check whether the filter was wrong before reporting zero.
+
+WRITING SQL
+- SELECT only. No INSERT, UPDATE, DELETE, DDL, or anything that changes state.
+- One statement per call. No semicolons in the middle, no comments at all.
+- Name the columns you want; do not use SELECT *.
+- Alias every aggregate: COUNT(*) AS total.
+- Join to return readable names - center_name, course_name, tb_name - not raw ids.
+- For a comparison, return one row per category with a column per series, so it charts directly: center_name, males, females.
 
 DATA YOU ALREADY HAVE
-Results from earlier in this conversation are listed below the schema, each
-with an index. They are still live. If a follow-up can be answered from one
-- showing it as a table instead of a chart, reading a different number out
-of it, sorting it differently - then ANSWER FROM IT and reference its index
-in a visual. Do not re-run a query for data you already have; it is slow and
-the answer is already here.
-Query again only when the follow-up genuinely needs something you have not
-fetched.
+Results from earlier in this conversation are listed after the schema, with their indices. They are still live. If a follow-up can be answered from one - showing it as a table instead of a chart, reading a different number out of it, sorting it differently - answer from it and reference its index. Do not re-run a query for data you already have.
 
-RULES FOR SQL
-- SELECT only. No INSERT, UPDATE, DELETE, DDL, or anything that changes state.
-- One statement per query. No semicolons in the middle, no comments at all.
-- Name the columns you want. Avoid SELECT *.
-- Always alias aggregates: COUNT(*) AS total, not COUNT(*).
-- Add ORDER BY when order is meaningful, and LIMIT when a question implies "top".
-- Prefer readable names over ids in the output: join to get center_name,
-  course_name, tb_name rather than returning center_id.
+ANSWERING
+Call present_answer exactly once, at the end. Choose visuals that suit the data; a table alongside a chart is often right. Only reference fields that exist in that dataset.
 
-WRITING THE ANSWER
-"summary" is plain text for a person who has not seen the numbers. Lead with
-the answer, then the notable detail. Never say "the query returned"; say what
-is true about the programme. Include the actual figures.
+If a question cannot be answered from the database, say so plainly with no visuals. Never invent a number, and never present a figure you did not query.
 
-"visuals" is a list, and may be empty. Each entry points at one of your query
-results by its index (0 for your first query, 1 for the second, and so on):
-
-{"type":"stat","title":"Enrolled students","queryIndex":0,"valueField":"total"}
-{"type":"table","title":"By centre","queryIndex":1}
-{"type":"bar","title":"Students per centre","queryIndex":1,"xField":"center_name","yFields":["students"]}
-{"type":"line","title":"Applications by month","queryIndex":2,"xField":"month","yFields":["applications"]}
-{"type":"pie","title":"Gender split","queryIndex":3,"labelField":"std_gender","valueField":"total"}
-
-Choose the form that suits the data: a single number is a stat, a breakdown
-across categories is a bar or pie, anything over time is a line, and detail
-that people will read row by row is a table. A table alongside a chart is
-often right. Only reference fields that exist in that query's results.
-
-If a question cannot be answered from the database, say so plainly in an
-answer with no visuals. Do not invent numbers, and never present a figure you
-did not query.`;
+If something in the data looks wrong - a count far larger than the batch, a category you did not expect, a total that does not add up - say so in the summary rather than presenting it flatly. Being told a figure looks odd is more useful than being given it without comment.`;
 
 /** The rows the model sees, trimmed so a wide result does not fill its context. */
 const summariseRows = (rows) => {
@@ -120,38 +227,14 @@ const summariseRows = (rows) => {
   return `${JSON.stringify(shown)}${note}`;
 };
 
-/**
- * Pull the JSON object out of whatever the model actually said.
- *
- * Asked for JSON and told not to wrap it, models still return fenced blocks and
- * add a sentence of introduction. Recovering the object is cheaper than
- * spending a round telling it off.
- */
-const parseReply = (raw) => {
-  const text = String(raw || "").trim();
-
-  const attempts = [
-    text,
-    // ```json ... ```
-    text.replace(/^```(?:json)?\s*/i, "").replace(/\s*```$/, ""),
-    // The first {...} in a sentence.
-    (() => {
-      const start = text.indexOf("{");
-      const end = text.lastIndexOf("}");
-      return start >= 0 && end > start ? text.slice(start, end + 1) : "";
-    })(),
-  ];
-
-  for (const attempt of attempts) {
-    if (!attempt) continue;
-    try {
-      const parsed = JSON.parse(attempt);
-      if (parsed && typeof parsed === "object") return parsed;
-    } catch {
-      // Try the next shape.
-    }
+/** Tool arguments arrive as a JSON string, and are not always valid. */
+const parseArguments = (raw) => {
+  try {
+    const parsed = JSON.parse(String(raw || "{}"));
+    return parsed && typeof parsed === "object" ? parsed : null;
+  } catch {
+    return null;
   }
-  return null;
 };
 
 /**
@@ -162,6 +245,34 @@ const parseReply = (raw) => {
  * dropping those, they become a table of the same data - the information the
  * model wanted to show is still shown.
  */
+/**
+ * The exact spelling each chart type must have by the time it reaches the
+ * browser, keyed by its lower-cased form.
+ *
+ * Models are inconsistent about casing - stackedbar, StackedBar, stacked_bar
+ * all turn up - and the renderer switches on an exact string.
+ */
+const CANONICAL_TYPES = {
+  stat: "stat",
+  table: "table",
+  list: "list",
+  bar: "bar",
+  hbar: "hbar",
+  horizontalbar: "hbar",
+  stackedbar: "stackedBar",
+  stacked_bar: "stackedBar",
+  line: "line",
+  area: "area",
+  pie: "pie",
+  donut: "donut",
+  doughnut: "donut",
+  scatter: "scatter",
+  radar: "radar",
+  radial: "radial",
+  treemap: "treemap",
+  funnel: "funnel",
+};
+
 const repairVisuals = (visuals, results) => {
   if (!Array.isArray(visuals)) return [];
 
@@ -177,7 +288,12 @@ const repairVisuals = (visuals, results) => {
     const columns = Object.keys(result.rows[0] || {});
     const has = (field) => Boolean(field) && columns.includes(field);
     const title = String(visual.title || "").slice(0, 120);
-    const type = String(visual.type || "table").toLowerCase();
+
+    // Matched case-insensitively, then mapped back to the exact name the
+    // renderer expects. Comparing the lower-cased value directly turned
+    // "stackedBar" into "stackedbar", which matched nothing and quietly
+    // demoted every stacked bar chart to a table.
+    const type = CANONICAL_TYPES[String(visual.type || "table").toLowerCase()] || "table";
 
     const asTable = { type: "table", title, queryIndex: index };
 
@@ -192,10 +308,10 @@ const repairVisuals = (visuals, results) => {
       continue;
     }
 
-    if (type === "pie") {
+    if (type === "pie" || type === "donut") {
       if (has(visual.labelField) && has(visual.valueField)) {
         kept.push({
-          type: "pie",
+          type,
           title,
           queryIndex: index,
           labelField: visual.labelField,
@@ -207,7 +323,44 @@ const repairVisuals = (visuals, results) => {
       continue;
     }
 
-    if (type === "bar" || type === "line" || type === "area") {
+    // Same shape as a pie: one label, one number.
+    if (type === "treemap" || type === "funnel" || type === "radial" || type === "list") {
+      const labelField = has(visual.labelField) ? visual.labelField : columns[0];
+      const valueField = has(visual.valueField) ? visual.valueField : columns[1];
+      if (labelField && valueField) {
+        kept.push({ type, title, queryIndex: index, labelField, valueField });
+      } else {
+        kept.push(asTable);
+      }
+      continue;
+    }
+
+    if (type === "scatter") {
+      const yFields = (Array.isArray(visual.yFields) ? visual.yFields : [visual.yField])
+        .filter(has);
+      if (has(visual.xField) && yFields.length > 0) {
+        kept.push({
+          type,
+          title,
+          queryIndex: index,
+          xField: visual.xField,
+          yFields,
+          ...(has(visual.labelField) ? { labelField: visual.labelField } : {}),
+        });
+      } else {
+        kept.push(asTable);
+      }
+      continue;
+    }
+
+    if (
+      type === "bar" ||
+      type === "hbar" ||
+      type === "stackedBar" ||
+      type === "line" ||
+      type === "area" ||
+      type === "radar"
+    ) {
       const yFields = (Array.isArray(visual.yFields) ? visual.yFields : [visual.yField])
         .filter(has);
 
@@ -225,61 +378,48 @@ const repairVisuals = (visuals, results) => {
   return kept;
 };
 
-/**
- * Ask a question.
- *
- * The whole exchange happens inside this one request: the model is called,
- * queried, and called again until it answers or runs out of rounds. That keeps
- * the browser holding one connection instead of polling, and means the
- * transcript the client sends back is only ever question-and-answer.
- */
 exports.ask = async (req, res) => {
   const question = String(req.body?.question || "").trim();
 
-  // Identifies the train of thought, so data fetched earlier can be reused.
-  // Generated by the browser; it names nothing and grants nothing, and a
-  // missing one simply means no memory rather than an error.
+  // Identifies the train of thought, so data fetched earlier can be reused. It
+  // names nothing and grants nothing; a missing one simply means no memory.
   const conversationId = String(req.body?.conversationId || "").slice(0, 64);
 
+  // Whatever the panel picked, checked against the catalogue. An unknown
+  // name falls back to the default rather than being passed through, so a
+  // stale browser tab cannot select a model that no longer exists - or one
+  // that cannot call tools, which would answer without reading the database.
+  const chosenModel = resolveModel(req.body?.model);
+
   if (!question) {
-    return res
-      .status(400)
-      .json({ success: false, message: "Ask a question first" });
+    return res.status(400).json({ success: false, message: "Ask a question first" });
   }
   if (question.length > 2000) {
-    return res
-      .status(400)
-      .json({ success: false, message: "That question is too long" });
+    return res.status(400).json({ success: false, message: "That question is too long" });
   }
 
   const startedAt = Date.now();
 
   try {
+    // Screened before the analyst sees it. A Super Admin has no reason to write
+    // "ignore your instructions", and the same text can arrive indirectly - a
+    // candidate's own name, read back during an answer. The guard still decides
+    // what runs; this catches the attempt earlier and puts it in the log.
+    const screen = await screenPrompt(question);
+    if (screen.flagged) {
+      console.warn(
+        `[ai] refused a question scoring ${screen.score.toFixed(3)} for prompt injection, from user ${req.user.id}`
+      );
+      return res.status(400).json({
+        success: false,
+        message:
+          "That reads as an attempt to change how the assistant behaves rather than a question about the data. Ask about the programme instead.",
+      });
+    }
+
     const { text: schema } = await describeSchema();
 
-    // Prior turns, so follow-up questions work. Trimmed to the recent ones -
-    // a long transcript crowds out the schema, and the schema is what makes
-    // the SQL correct.
-    const history = Array.isArray(req.body?.history)
-      ? req.body.history
-          .slice(-MAX_HISTORY)
-          .filter(
-            (turn) =>
-              turn &&
-              (turn.role === "user" || turn.role === "assistant") &&
-              typeof turn.content === "string"
-          )
-          .map((turn) => ({
-            role: turn.role,
-            content: String(turn.content).slice(0, 4000),
-          }))
-      : [];
-
-    // What earlier turns fetched. These keep their indices at the front of
-    // `results`, so a visual pointing at index 0 means the same dataset
-    // whether it was fetched this turn or three questions ago.
     const carried = datasetsFor(conversationId);
-
     const carriedDescription = carried.length
       ? `\n\nDATA ALREADY FETCHED IN THIS CONVERSATION\n${carried
           .map(
@@ -293,6 +433,18 @@ exports.ask = async (req, res) => {
           .join("\n")}`
       : "";
 
+    const history = Array.isArray(req.body?.history)
+      ? req.body.history
+          .slice(-MAX_HISTORY)
+          .filter(
+            (turn) =>
+              turn &&
+              (turn.role === "user" || turn.role === "assistant") &&
+              typeof turn.content === "string"
+          )
+          .map((turn) => ({ role: turn.role, content: String(turn.content).slice(0, 4000) }))
+      : [];
+
     const messages = [
       {
         role: "system",
@@ -304,91 +456,129 @@ exports.ask = async (req, res) => {
 
     /**
      * Everything available to this answer: what earlier turns fetched, then
-     * whatever this turn adds. Indices are stable across the whole array,
-     * which is what lets a follow-up chart data it did not just query.
+     * whatever this turn adds. Indices are stable across the whole array, which
+     * is what lets a follow-up chart data it did not just query.
      */
     const results = [...carried];
     const fetchedNow = [];
+
     let answer = null;
     let rounds = 0;
+    let modelUsed = ANALYST_MODEL;
+    let usedFallback = false;
 
     while (rounds < MAX_ROUNDS) {
       rounds += 1;
 
-      const raw = await chat(messages, { json: true });
-      const reply = parseReply(raw);
+      const reply = await chat(messages, { tools: TOOLS, model: chosenModel });
+      modelUsed = reply.model;
+      usedFallback = usedFallback || reply.usedFallback;
 
-      if (!reply) {
-        messages.push({ role: "assistant", content: raw });
-        messages.push({
-          role: "user",
-          content:
-            'That was not valid JSON. Reply with a single JSON object: {"action":"query",...} or {"action":"answer",...}',
-        });
-        continue;
-      }
+      const calls = reply.message.tool_calls || [];
 
-      if (reply.action === "answer") {
-        answer = reply;
+      if (calls.length === 0) {
+        // No tool call. Either it answered in prose - which is usable - or it
+        // has nothing to say. Either way the loop is over.
+        const content = String(reply.message.content || "").trim();
+        if (content) answer = { summary: content, visuals: [] };
         break;
       }
 
-      if (reply.action !== "query" || !reply.sql) {
-        messages.push({ role: "assistant", content: JSON.stringify(reply) });
-        messages.push({
-          role: "user",
-          content:
-            'Unrecognised action. Use {"action":"query","sql":"..."} or {"action":"answer","summary":"...","visuals":[]}',
-        });
-        continue;
+      messages.push(reply.message);
+
+      let presented = false;
+
+      // Several calls can arrive at once, which is exactly what a question
+      // needing two independent figures should do.
+      for (const call of calls) {
+        const name = call.function?.name;
+        const args = parseArguments(call.function?.arguments);
+
+        if (!args) {
+          messages.push({
+            role: "tool",
+            tool_call_id: call.id,
+            content: "Those arguments were not valid JSON. Try again.",
+          });
+          continue;
+        }
+
+        if (name === "present_answer") {
+          answer = args;
+          presented = true;
+          messages.push({
+            role: "tool",
+            tool_call_id: call.id,
+            content: "Answer delivered.",
+          });
+          continue;
+        }
+
+        if (name !== "run_sql") {
+          messages.push({
+            role: "tool",
+            tool_call_id: call.id,
+            content: `Unknown tool "${name}". Use run_sql or present_answer.`,
+          });
+          continue;
+        }
+
+        const verdict = checkSelect(args.sql);
+
+        if (!verdict.ok) {
+          // Refusals go back to the model rather than ending the request: it
+          // usually rewrites the query correctly, and an operator does not care
+          // that the first attempt used a reserved word.
+          console.warn(
+            `[ai] refused a query: ${verdict.reason} | ${String(args.sql).slice(0, 200)}`
+          );
+          messages.push({
+            role: "tool",
+            tool_call_id: call.id,
+            content: `Refused: ${verdict.reason}. Rewrite it as a single read-only SELECT.`,
+          });
+          continue;
+        }
+
+        try {
+          const { rows, ms } = await runQuery(verdict.sql);
+
+          const dataset = {
+            sql: verdict.sql,
+            reason: String(args.reason || "").slice(0, 300),
+            rowCount: rows.length,
+            ms,
+            rows,
+          };
+          results.push(dataset);
+          fetchedNow.push(dataset);
+
+          messages.push({
+            role: "tool",
+            tool_call_id: call.id,
+            content: `Dataset ${results.length - 1}: ${summariseRows(rows)}`,
+          });
+        } catch (error) {
+          // A failed query is information too - usually a column that does not
+          // exist, which the model can correct from the message.
+          console.warn(`[ai] query failed: ${error.message}`);
+          messages.push({
+            role: "tool",
+            tool_call_id: call.id,
+            content: `That query failed: ${String(error.message).slice(
+              0,
+              300
+            )}. Check the names against the schema and try again.`,
+          });
+        }
       }
 
-      const verdict = checkSelect(reply.sql);
-
-      if (!verdict.ok) {
-        // Refusals go back to the model rather than ending the request: it
-        // usually rewrites the query correctly, and an operator does not care
-        // that the first attempt used a reserved word.
-        console.warn(
-          `[ai] refused a query from the model: ${verdict.reason} | ${String(reply.sql).slice(0, 200)}`
-        );
-        messages.push({ role: "assistant", content: JSON.stringify(reply) });
-        messages.push({
-          role: "user",
-          content: `That query was refused: ${verdict.reason}. Rewrite it as a single read-only SELECT.`,
-        });
-        continue;
-      }
-
-      try {
-        const { rows, ms } = await runQuery(verdict.sql);
-
-        const dataset = {
-          sql: verdict.sql,
-          reason: String(reply.reason || "").slice(0, 300),
-          rowCount: rows.length,
-          ms,
-          rows,
-        };
-        results.push(dataset);
-        fetchedNow.push(dataset);
-
-        messages.push({ role: "assistant", content: JSON.stringify(reply) });
-        messages.push({
-          role: "user",
-          content: `Result of query ${results.length - 1}: ${summariseRows(rows)}`,
-        });
-      } catch (error) {
-        // A query that fails is information too - usually a column that does
-        // not exist, which the model can correct from the message.
-        console.warn(`[ai] query failed: ${error.message}`);
-        messages.push({ role: "assistant", content: JSON.stringify(reply) });
-        messages.push({
-          role: "user",
-          content: `That query failed: ${String(error.message).slice(0, 300)}. Check the column and table names against the schema and try again.`,
-        });
-      }
+      if (presented) break;
     }
+
+    // Only what this turn fetched is added; the carried datasets are already
+    // remembered and re-storing them would push out the rest.
+    remember(conversationId, fetchedNow);
 
     if (!answer) {
       return res.status(200).json({
@@ -401,19 +591,18 @@ exports.ask = async (req, res) => {
         visuals: [],
         queries: results,
         rounds,
+        model: modelUsed,
+        usedFallback,
         ms: Date.now() - startedAt,
       });
     }
-
-    // Only what this turn fetched is added; the carried datasets are
-    // already remembered and re-storing them would push out the rest.
-    remember(conversationId, fetchedNow);
 
     const visuals = repairVisuals(answer.visuals, results);
 
     console.log(
       `[ai] "${question.slice(0, 80)}" answered in ${rounds} round(s), ` +
-        `${results.length} quer(ies), ${Date.now() - startedAt}ms, by user ${req.user.id}`
+        `${fetchedNow.length} new quer(ies), ${Date.now() - startedAt}ms, ` +
+        `by ${modelUsed}${usedFallback ? " (fallback)" : ""}, user ${req.user.id}`
     );
 
     return res.json({
@@ -423,15 +612,14 @@ exports.ask = async (req, res) => {
       visuals,
       queries: results,
       rounds,
+      model: modelUsed,
+      usedFallback,
       ms: Date.now() - startedAt,
     });
   } catch (error) {
-    if (error instanceof OllamaError) {
-      console.error("[ai] ollama:", error.message);
-      return res.status(503).json({
-        success: false,
-        message: error.message,
-      });
+    if (error instanceof GroqError) {
+      console.error("[ai] groq:", error.message);
+      return res.status(503).json({ success: false, message: error.message });
     }
 
     console.error("[ai] assistant failed:", error);
@@ -450,44 +638,57 @@ exports.ask = async (req, res) => {
  * on the screen rather than in a log file.
  */
 exports.status = async (_req, res) => {
+  const base = {
+    success: true,
+    model: ANALYST_MODEL,
+    provider: "groq",
+    readOnlyAccount: hasOwnAccount,
+  };
+
+  if (!isConfigured) {
+    return res.json({
+      ...base,
+      ready: false,
+      catalogue: CHAT_MODELS,
+      message: "GROQ_API_KEY is not set. Add it to the environment and restart.",
+    });
+  }
+
+  if (missingPassword) {
+    return res.json({
+      ...base,
+      ready: false,
+      message:
+        "AI_DB_USER is set but AI_DB_PASSWORD is empty. Set the password for that database account, or remove both variables.",
+    });
+  }
+
   try {
     const info = await health();
     const schema = await describeSchema();
 
     return res.json({
-      success: true,
-      // Half-configured counts as not ready. Saying so here is what stops
-      // an authentication failure being read as a problem with the model.
-      ready: info.present && !missingPassword,
-      model: MODEL,
-      url: BASE_URL,
-      readOnlyAccount: hasOwnAccount,
+      ...base,
+      ready: info.present,
+      screening: info.screenAvailable ? SCREEN_MODEL : null,
+      fallbacks: info.fallbacks,
+      // Only models this key can reach AND that can call tools.
+      catalogue: info.catalogue,
       tables: schema.tables.length,
       maxRows: MAX_ROWS,
-      message: missingPassword
-        ? "AI_DB_USER is set but AI_DB_PASSWORD is empty. Set the password for " +
-          "that database account, or remove both variables."
-        : info.present
+      message: info.present
         ? null
-        : info.nearMiss
-        ? `Ollama has "${info.nearMiss}" but OLLAMA_MODEL is set to "${MODEL}". ` +
-          `Set OLLAMA_MODEL=${info.nearMiss} - a bare name only resolves to :latest.`
-        : `Ollama is running but has no model called "${MODEL}". ` +
-          `Run: ollama pull ${MODEL}`,
+        : `Your Groq key cannot use "${ANALYST_MODEL}". Available: ${info.models
+            .slice(0, 8)
+            .join(", ")}`,
     });
   } catch (error) {
-    return res.status(200).json({
-      success: true,
+    return res.json({
+      ...base,
       ready: false,
-      model: MODEL,
-      url: BASE_URL,
-      readOnlyAccount: hasOwnAccount,
-      message:
-        error instanceof OllamaError
-          ? error.message
-          : `Could not reach Ollama at ${BASE_URL}`,
+      message: error instanceof GroqError ? error.message : "Could not reach Groq",
     });
   }
 };
 
-exports._internals = { parseReply, repairVisuals, summariseRows, SYSTEM_PROMPT };
+exports._internals = { parseArguments, repairVisuals, summariseRows, TOOLS, SYSTEM_PROMPT };

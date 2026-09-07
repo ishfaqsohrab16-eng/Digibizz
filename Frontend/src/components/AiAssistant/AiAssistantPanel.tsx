@@ -6,6 +6,7 @@ import {
   ChevronDown,
   Copy,
   Database,
+  GraduationCap,
   Loader2,
   RefreshCw,
   Send,
@@ -13,10 +14,14 @@ import {
   ShieldCheck,
   Sparkles,
   Table2,
+  TrendingUp,
+  Users,
+  Zap,
 } from "lucide-react";
 import { toast } from "sonner";
 import {
   AiAnswer,
+  AiModel,
   AiStatus,
   askAiAssistant,
   getAiStatus,
@@ -30,40 +35,46 @@ interface Turn {
   question: string;
   answer: AiAnswer | null;
   error: string | null;
-  /** Seconds the question took, kept so it does not reset when others run. */
+  /** Seconds this question took, kept so it does not reset when others run. */
   seconds: number;
 }
 
 /**
  * Questions worth starting from.
  *
- * A blank box invites "hello", which on CPU-only hardware costs a minute and
- * teaches nobody anything. These are real questions about real tables.
+ * A blank box invites "hello". These are real questions about real tables, and
+ * grouped so the categories themselves say what the assistant can reach.
  */
 const SUGGESTIONS = [
   {
-    label: "Enrolment by centre",
+    icon: Users,
+    label: "Enrolment",
     text: "How many students are enrolled at each centre in the current batch?",
   },
   {
+    icon: BarChart3,
     label: "Gender split",
     text: "Compare male and female enrolment across centres",
   },
   {
+    icon: TrendingUp,
     label: "Applications over time",
     text: "Show applications per month this year as a line chart",
   },
   {
+    icon: GraduationCap,
     label: "Interview outcomes",
     text: "Which courses have the most applicants who were not recommended?",
   },
   {
-    label: "Assignment engagement",
+    icon: Table2,
+    label: "Assignments",
     text: "Which centres have the lowest assignment submission rates?",
   },
   {
-    label: "Attendance gaps",
-    text: "List students with no attendance marked in the last two weeks",
+    icon: Database,
+    label: "Funnel",
+    text: "Show the funnel from applied to recommended to enrolled for this batch",
   },
 ];
 
@@ -88,6 +99,8 @@ const AiAssistantPanel: React.FC = () => {
   const [elapsed, setElapsed] = useState(0);
   const [openSql, setOpenSql] = useState<Record<string, boolean>>({});
   const [copied, setCopied] = useState<string | null>(null);
+  const [model, setModel] = useState<string>("");
+  const [modelMenuOpen, setModelMenuOpen] = useState(false);
 
   const endRef = useRef<HTMLDivElement>(null);
   const inputRef = useRef<HTMLTextAreaElement>(null);
@@ -106,13 +119,23 @@ const AiAssistantPanel: React.FC = () => {
 
   const loadStatus = useCallback(() => {
     getAiStatus()
-      .then(setStatus)
+      .then((next) => {
+        setStatus(next);
+        // Default to whichever the server recommends, so the picker is a
+        // refinement rather than a decision you have to make first.
+        setModel(
+          (previous) =>
+            previous ||
+            next.catalogue?.find((entry) => entry.recommended)?.id ||
+            next.model ||
+            ""
+        );
+      })
       .catch(() =>
         setStatus({
           success: false,
           ready: false,
           model: "",
-          url: "",
           readOnlyAccount: false,
           message: "Could not check whether the assistant is available.",
         })
@@ -123,13 +146,7 @@ const AiAssistantPanel: React.FC = () => {
     if (canUse) loadStatus();
   }, [canUse, loadStatus]);
 
-  /**
-   * A running count of seconds while a question is out.
-   *
-   * On CPU-only hardware an answer takes a minute or more, and a spinner with
-   * no number on it is indistinguishable from a hung page. A ticking counter is
-   * the difference between waiting and giving up.
-   */
+  /** A running count while a question is out, so waiting never looks like hanging. */
   useEffect(() => {
     if (!asking) return;
     setElapsed(0);
@@ -144,6 +161,15 @@ const AiAssistantPanel: React.FC = () => {
   useEffect(() => {
     endRef.current?.scrollIntoView({ behavior: "smooth" });
   }, [turns, asking]);
+
+  // Any click outside closes the model menu. Without this it stays open behind
+  // whatever you clicked next.
+  useEffect(() => {
+    if (!modelMenuOpen) return;
+    const close = () => setModelMenuOpen(false);
+    window.addEventListener("click", close);
+    return () => window.removeEventListener("click", close);
+  }, [modelMenuOpen]);
 
   const copy = (text: string, key: string) => {
     navigator.clipboard?.writeText(text).then(
@@ -171,10 +197,10 @@ const AiAssistantPanel: React.FC = () => {
       setAsking(true);
 
       try {
-        // Only the questions and summaries travel as history. The ROWS stay on
-        // the server against the conversation id - sending them back would
-        // refill the model's context with data it has already read and crowd
-        // out the schema, which is what keeps its SQL correct.
+        // Only questions and summaries travel as history. The ROWS stay on the
+        // server against the conversation id - sending them back would refill
+        // the model's context with data it has already read and crowd out the
+        // schema, which is what keeps its SQL correct.
         const history = turns.flatMap((turn) =>
           turn.answer
             ? [
@@ -184,7 +210,7 @@ const AiAssistantPanel: React.FC = () => {
             : []
         );
 
-        const answer = await askAiAssistant(trimmed, history, conversationId);
+        const answer = await askAiAssistant(trimmed, history, conversationId, model);
         setTurns((previous) =>
           previous.map((turn) =>
             turn.id === id
@@ -196,7 +222,7 @@ const AiAssistantPanel: React.FC = () => {
         const message =
           error?.response?.data?.message ||
           (error?.code === "ECONNABORTED"
-            ? "That took longer than the assistant is allowed to wait. Try a narrower question, or a smaller model."
+            ? "That took longer than the assistant is allowed to wait. Try a narrower question."
             : "Could not reach the assistant.");
 
         setTurns((previous) =>
@@ -212,18 +238,18 @@ const AiAssistantPanel: React.FC = () => {
         inputRef.current?.focus();
       }
     },
-    [asking, turns, conversationId]
+    [asking, turns, conversationId, model]
   );
 
   if (!canUse) {
     return (
       <div className="flex min-h-[60vh] items-center justify-center px-4">
-        <div className="max-w-md rounded-xl border border-amber-200 bg-amber-50 p-6 text-center">
-          <ShieldAlert className="mx-auto h-8 w-8 text-amber-600" />
+        <div className="max-w-md rounded-2xl border border-amber-200 bg-amber-50 p-8 text-center shadow-sm">
+          <ShieldAlert className="mx-auto h-9 w-9 text-amber-600" />
           <h2 className="mt-3 text-lg font-semibold text-amber-900">
             Super Admin only
           </h2>
-          <p className="mt-1 text-sm text-amber-800">
+          <p className="mt-1.5 text-sm text-amber-800">
             This assistant answers across every centre, batch and student with no
             scoping by role, so it is limited to Super Admins.
           </p>
@@ -233,15 +259,17 @@ const AiAssistantPanel: React.FC = () => {
   }
 
   const blocked = !status?.ready;
+  const catalogue: AiModel[] = status?.catalogue || [];
+  const active = catalogue.find((entry) => entry.id === model);
 
   return (
     // Fills the viewport under the app chrome and manages its own scrolling, so
     // the composer stays put while a long answer scrolls behind it.
-    <div className="flex h-[calc(100vh-4rem)] flex-col bg-gradient-to-b from-emerald-50/40 to-white">
-      <header className="shrink-0 border-b border-slate-200 bg-white/80 px-4 py-3 backdrop-blur sm:px-6">
-        <div className="mx-auto flex max-w-5xl items-center justify-between gap-4">
+    <div className="flex h-[calc(100vh-4rem)] flex-col bg-slate-50">
+      <header className="shrink-0 border-b border-slate-200 bg-white px-4 py-3 sm:px-6">
+        <div className="mx-auto flex max-w-6xl flex-wrap items-center justify-between gap-3">
           <div className="flex items-center gap-3">
-            <span className="flex h-9 w-9 items-center justify-center rounded-lg bg-emerald-600">
+            <span className="flex h-10 w-10 items-center justify-center rounded-xl bg-gradient-to-br from-emerald-500 to-emerald-700 shadow-sm">
               <Sparkles className="h-5 w-5 text-white" />
             </span>
             <div>
@@ -254,21 +282,68 @@ const AiAssistantPanel: React.FC = () => {
             </div>
           </div>
 
-          <div className="flex items-center gap-2">
+          <div className="flex flex-wrap items-center gap-2">
             {status?.readOnlyAccount && (
               <span
-                className="hidden items-center gap-1.5 rounded-full bg-emerald-50 px-3 py-1 text-xs font-medium text-emerald-800 sm:inline-flex"
+                className="inline-flex items-center gap-1.5 rounded-full bg-emerald-50 px-3 py-1.5 text-xs font-medium text-emerald-800 ring-1 ring-inset ring-emerald-200"
                 title="Queries run as a database account that only holds SELECT"
               >
                 <ShieldCheck className="h-3.5 w-3.5" />
                 Read-only
               </span>
             )}
-            {status?.model && (
-              <span className="hidden rounded-full bg-slate-100 px-3 py-1 text-xs text-slate-600 md:inline-block">
-                {status.model}
-              </span>
+
+            {/* Which model answers. Each option says what it is FOR, because
+                "20B or 120B" is not a question anyone can answer without it. */}
+            {catalogue.length > 0 && (
+              <div className="relative" onClick={(event) => event.stopPropagation()}>
+                <button
+                  onClick={() => setModelMenuOpen((open) => !open)}
+                  disabled={asking}
+                  className="inline-flex items-center gap-2 rounded-lg border border-slate-300 bg-white px-3 py-1.5 text-xs font-medium text-slate-700 transition hover:border-emerald-400 hover:bg-emerald-50 disabled:opacity-40"
+                >
+                  <Zap className="h-3.5 w-3.5 text-emerald-600" />
+                  {active?.label || "Model"}
+                  <ChevronDown className="h-3.5 w-3.5 text-slate-400" />
+                </button>
+
+                {modelMenuOpen && (
+                  <div className="absolute right-0 z-30 mt-2 w-80 overflow-hidden rounded-xl border border-slate-200 bg-white shadow-xl">
+                    {catalogue.map((entry) => (
+                      <button
+                        key={entry.id}
+                        onClick={() => {
+                          setModel(entry.id);
+                          setModelMenuOpen(false);
+                        }}
+                        className={`flex w-full flex-col gap-0.5 border-b border-slate-100 px-4 py-3 text-left transition last:border-0 hover:bg-emerald-50 ${
+                          entry.id === model ? "bg-emerald-50/60" : ""
+                        }`}
+                      >
+                        <span className="flex items-center gap-2 text-sm font-semibold text-slate-900">
+                          {entry.label}
+                          {entry.recommended && (
+                            <span className="rounded bg-emerald-600 px-1.5 py-0.5 text-[10px] font-bold uppercase tracking-wide text-white">
+                              Recommended
+                            </span>
+                          )}
+                          {entry.id === model && (
+                            <Check className="ml-auto h-4 w-4 text-emerald-600" />
+                          )}
+                        </span>
+                        <span className="text-xs font-medium text-emerald-700">
+                          {entry.tagline}
+                        </span>
+                        <span className="text-xs leading-relaxed text-slate-500">
+                          {entry.detail}
+                        </span>
+                      </button>
+                    ))}
+                  </div>
+                )}
+              </div>
             )}
+
             {turns.length > 0 && (
               <button
                 onClick={() => {
@@ -276,7 +351,7 @@ const AiAssistantPanel: React.FC = () => {
                   setOpenSql({});
                 }}
                 disabled={asking}
-                className="inline-flex items-center gap-1.5 rounded-md border border-slate-300 px-2.5 py-1.5 text-xs font-medium text-slate-600 hover:bg-slate-50 disabled:opacity-40"
+                className="inline-flex items-center gap-1.5 rounded-lg border border-slate-300 bg-white px-3 py-1.5 text-xs font-medium text-slate-600 transition hover:bg-slate-50 disabled:opacity-40"
               >
                 <RefreshCw className="h-3.5 w-3.5" />
                 New chat
@@ -288,9 +363,9 @@ const AiAssistantPanel: React.FC = () => {
 
       {(blocked || (status?.ready && !status.readOnlyAccount)) && (
         <div className="shrink-0 px-4 pt-3 sm:px-6">
-          <div className="mx-auto max-w-5xl">
+          <div className="mx-auto max-w-6xl">
             {blocked && (
-              <div className="flex items-start gap-2 rounded-lg border border-amber-200 bg-amber-50 p-3 text-sm text-amber-900">
+              <div className="flex items-start gap-2.5 rounded-xl border border-amber-200 bg-amber-50 p-3.5 text-sm text-amber-900">
                 <AlertTriangle className="mt-0.5 h-4 w-4 shrink-0" />
                 <div className="flex-1">
                   <p className="font-medium">The assistant is not available yet.</p>
@@ -298,7 +373,7 @@ const AiAssistantPanel: React.FC = () => {
                 </div>
                 <button
                   onClick={loadStatus}
-                  className="shrink-0 rounded border border-amber-300 px-2 py-1 text-xs font-medium hover:bg-amber-100"
+                  className="shrink-0 rounded-lg border border-amber-300 px-2.5 py-1 text-xs font-medium hover:bg-amber-100"
                 >
                   Re-check
                 </button>
@@ -306,7 +381,7 @@ const AiAssistantPanel: React.FC = () => {
             )}
 
             {status?.ready && !status.readOnlyAccount && (
-              <div className="flex items-start gap-2 rounded-lg border border-slate-200 bg-white p-3 text-xs text-slate-600">
+              <div className="flex items-start gap-2.5 rounded-xl border border-slate-200 bg-white p-3.5 text-xs text-slate-600">
                 <Database className="mt-0.5 h-4 w-4 shrink-0" />
                 <span>
                   Running on the application's own database connection. Queries are
@@ -321,34 +396,42 @@ const AiAssistantPanel: React.FC = () => {
       )}
 
       <div className="flex-1 overflow-y-auto px-4 py-6 sm:px-6">
-        <div className="mx-auto max-w-5xl">
+        <div className="mx-auto max-w-6xl">
           {turns.length === 0 && (
             <div className="py-8">
-              <h2 className="text-center text-xl font-semibold text-slate-800">
-                What would you like to know?
-              </h2>
-              <p className="mx-auto mt-1 max-w-lg text-center text-sm text-slate-500">
-                Ask in plain English. Follow-ups work — once something has been
-                fetched it stays available, so “show that as a table” is instant.
-              </p>
+              <div className="text-center">
+                <h2 className="text-2xl font-semibold text-slate-800">
+                  What would you like to know?
+                </h2>
+                <p className="mx-auto mt-2 max-w-xl text-sm text-slate-500">
+                  Ask in plain English. It looks at the data before answering, and
+                  follow-ups reuse what it already fetched — so “show that as a
+                  table” is instant.
+                </p>
+              </div>
 
-              <div className="mt-6 grid gap-2 sm:grid-cols-2 lg:grid-cols-3">
-                {SUGGESTIONS.map((suggestion) => (
-                  <button
-                    key={suggestion.label}
-                    onClick={() => ask(suggestion.text)}
-                    disabled={asking || blocked}
-                    className="group rounded-xl border border-slate-200 bg-white p-3.5 text-left transition hover:border-emerald-400 hover:shadow-sm disabled:cursor-not-allowed disabled:opacity-50"
-                  >
-                    <span className="flex items-center gap-1.5 text-xs font-semibold text-emerald-700">
-                      <BarChart3 className="h-3.5 w-3.5" />
-                      {suggestion.label}
-                    </span>
-                    <span className="mt-1.5 block text-sm text-slate-600">
-                      {suggestion.text}
-                    </span>
-                  </button>
-                ))}
+              <div className="mt-8 grid gap-3 sm:grid-cols-2 lg:grid-cols-3">
+                {SUGGESTIONS.map((suggestion) => {
+                  const Icon = suggestion.icon;
+                  return (
+                    <button
+                      key={suggestion.label}
+                      onClick={() => ask(suggestion.text)}
+                      disabled={asking || blocked}
+                      className="group rounded-2xl border border-slate-200 bg-white p-4 text-left shadow-sm transition hover:-translate-y-0.5 hover:border-emerald-400 hover:shadow-md disabled:cursor-not-allowed disabled:opacity-50 disabled:hover:translate-y-0"
+                    >
+                      <span className="flex h-9 w-9 items-center justify-center rounded-lg bg-emerald-50 text-emerald-700 transition group-hover:bg-emerald-600 group-hover:text-white">
+                        <Icon className="h-4.5 w-4.5" />
+                      </span>
+                      <span className="mt-3 block text-xs font-semibold uppercase tracking-wide text-emerald-700">
+                        {suggestion.label}
+                      </span>
+                      <span className="mt-1 block text-sm leading-snug text-slate-600">
+                        {suggestion.text}
+                      </span>
+                    </button>
+                  );
+                })}
               </div>
             </div>
           )}
@@ -356,7 +439,7 @@ const AiAssistantPanel: React.FC = () => {
           {turns.map((turn) => (
             <div key={turn.id} className="mb-8">
               <div className="flex justify-end">
-                <p className="max-w-[85%] rounded-2xl rounded-br-md bg-emerald-600 px-4 py-2.5 text-sm text-white shadow-sm">
+                <p className="max-w-[85%] rounded-2xl rounded-br-md bg-gradient-to-br from-emerald-600 to-emerald-700 px-4 py-2.5 text-sm text-white shadow-sm">
                   {turn.question}
                 </p>
               </div>
@@ -368,25 +451,18 @@ const AiAssistantPanel: React.FC = () => {
               )}
 
               {!turn.answer && !turn.error && (
-                <div className="mt-3 flex items-center gap-3 rounded-xl border border-slate-200 bg-white px-4 py-3 text-sm text-slate-600">
+                <div className="mt-3 flex items-center gap-3 rounded-xl border border-slate-200 bg-white px-4 py-3.5 text-sm text-slate-600 shadow-sm">
                   <Loader2 className="h-4 w-4 animate-spin text-emerald-600" />
                   <span>
-                    Working it out
-                    <span className="ml-2 tabular-nums text-slate-400">
-                      {elapsed}s
-                    </span>
+                    Looking at the data
+                    <span className="ml-2 tabular-nums text-slate-400">{elapsed}s</span>
                   </span>
-                  {elapsed > 25 && (
-                    <span className="text-xs text-slate-400">
-                      Without a GPU this normally takes a minute or two.
-                    </span>
-                  )}
                 </div>
               )}
 
               {turn.answer && (
                 <div className="mt-3">
-                  <div className="rounded-2xl rounded-bl-md border border-slate-200 bg-white px-4 py-3.5 shadow-sm">
+                  <div className="rounded-2xl rounded-bl-md border border-slate-200 bg-white px-5 py-4 shadow-sm">
                     <p className="whitespace-pre-wrap text-[0.95rem] leading-relaxed text-slate-800">
                       {turn.answer.summary}
                     </p>
@@ -402,40 +478,54 @@ const AiAssistantPanel: React.FC = () => {
 
                   {turn.answer.queries.length > 0 && (
                     <div className="mt-3">
-                      <button
-                        onClick={() =>
-                          setOpenSql((previous) => ({
-                            ...previous,
-                            [turn.id]: !previous[turn.id],
-                          }))
-                        }
-                        className="inline-flex items-center gap-1.5 rounded-md px-2 py-1 text-xs font-medium text-slate-500 hover:bg-slate-100 hover:text-slate-700"
-                      >
-                        <ChevronDown
-                          className={`h-3.5 w-3.5 transition-transform ${
-                            openSql[turn.id] ? "rotate-180" : ""
-                          }`}
-                        />
-                        <Table2 className="h-3.5 w-3.5" />
-                        {turn.answer.queries.length}{" "}
-                        {turn.answer.queries.length === 1 ? "dataset" : "datasets"} ·{" "}
-                        {turn.seconds}s
-                      </button>
+                      <div className="flex flex-wrap items-center gap-2">
+                        <button
+                          onClick={() =>
+                            setOpenSql((previous) => ({
+                              ...previous,
+                              [turn.id]: !previous[turn.id],
+                            }))
+                          }
+                          className="inline-flex items-center gap-1.5 rounded-lg px-2 py-1 text-xs font-medium text-slate-500 transition hover:bg-slate-200/60 hover:text-slate-700"
+                        >
+                          <ChevronDown
+                            className={`h-3.5 w-3.5 transition-transform ${
+                              openSql[turn.id] ? "rotate-180" : ""
+                            }`}
+                          />
+                          <Table2 className="h-3.5 w-3.5" />
+                          {turn.answer.queries.length}{" "}
+                          {turn.answer.queries.length === 1 ? "dataset" : "datasets"} ·{" "}
+                          {turn.seconds}s
+                        </button>
+
+                        {turn.answer.model && (
+                          <span className="rounded-full bg-slate-200/70 px-2 py-0.5 text-[11px] text-slate-600">
+                            {turn.answer.model.split("/").pop()}
+                            {/* Worth saying: "why is this answer worse than
+                                usual" is sometimes "it was the fallback". */}
+                            {turn.answer.usedFallback && " · fallback"}
+                          </span>
+                        )}
+                      </div>
 
                       {openSql[turn.id] && (
                         <div className="mt-2 space-y-2">
                           {turn.answer.queries.map((query, index) => (
                             <div
                               key={index}
-                              className="rounded-lg border border-slate-200 bg-slate-900 p-3"
+                              className="overflow-hidden rounded-xl border border-slate-700 bg-slate-900"
                             >
-                              <div className="mb-1.5 flex items-start justify-between gap-3">
+                              <div className="flex items-start justify-between gap-3 border-b border-slate-800 px-3 py-2">
                                 <p className="text-xs text-slate-400">
-                                  [{index}] {query.reason || "query"}
+                                  <span className="mr-1.5 rounded bg-slate-800 px-1.5 py-0.5 font-mono text-emerald-400">
+                                    {index}
+                                  </span>
+                                  {query.reason || "query"}
                                 </p>
                                 <button
                                   onClick={() => copy(query.sql, `${turn.id}-${index}`)}
-                                  className="shrink-0 rounded p-1 text-slate-400 hover:bg-slate-800 hover:text-slate-200"
+                                  className="shrink-0 rounded p-1 text-slate-400 transition hover:bg-slate-800 hover:text-slate-200"
                                   title="Copy SQL"
                                 >
                                   {copied === `${turn.id}-${index}` ? (
@@ -445,10 +535,10 @@ const AiAssistantPanel: React.FC = () => {
                                   )}
                                 </button>
                               </div>
-                              <pre className="overflow-x-auto whitespace-pre-wrap break-words font-mono text-xs text-emerald-300">
+                              <pre className="overflow-x-auto whitespace-pre-wrap break-words px-3 py-2.5 font-mono text-xs leading-relaxed text-emerald-300">
                                 {query.sql}
                               </pre>
-                              <p className="mt-1.5 text-xs text-slate-500">
+                              <p className="border-t border-slate-800 px-3 py-1.5 text-xs text-slate-500">
                                 {query.rowCount} row(s) · {query.ms}ms
                               </p>
                             </div>
@@ -472,34 +562,31 @@ const AiAssistantPanel: React.FC = () => {
             event.preventDefault();
             ask(question);
           }}
-          className="mx-auto flex max-w-5xl items-end gap-2"
+          className="mx-auto flex max-w-6xl items-end gap-2"
         >
-          <div className="relative flex-1">
-            <textarea
-              ref={inputRef}
-              value={question}
-              onChange={(event) => setQuestion(event.target.value)}
-              onKeyDown={(event) => {
-                // Enter sends, Shift+Enter is a newline: the convention every
-                // chat box uses, and the one people try first.
-                if (event.key === "Enter" && !event.shiftKey) {
-                  event.preventDefault();
-                  ask(question);
-                }
-              }}
-              rows={1}
-              disabled={asking || blocked}
-              placeholder={
-                blocked
-                  ? "The assistant is not available"
-                  : turns.length > 0
-                  ? "Ask a follow-up…"
-                  : "Ask anything about the programme's data…"
+          <textarea
+            ref={inputRef}
+            value={question}
+            onChange={(event) => setQuestion(event.target.value)}
+            onKeyDown={(event) => {
+              // Enter sends, Shift+Enter is a newline: the convention every chat
+              // box uses, and the one people try first.
+              if (event.key === "Enter" && !event.shiftKey) {
+                event.preventDefault();
+                ask(question);
               }
-              className="max-h-40 w-full resize-none rounded-xl border border-slate-300 px-4 py-3 pr-3 text-sm outline-none transition focus:border-emerald-500 focus:ring-2 focus:ring-emerald-100 disabled:bg-slate-100"
-              style={{ minHeight: "48px" }}
-            />
-          </div>
+            }}
+            rows={1}
+            disabled={asking || blocked}
+            placeholder={
+              blocked
+                ? "The assistant is not available"
+                : turns.length > 0
+                ? "Ask a follow-up…"
+                : "Ask anything about the programme's data…"
+            }
+            className="max-h-40 min-h-[48px] flex-1 resize-none rounded-xl border border-slate-300 px-4 py-3 text-sm shadow-sm outline-none transition focus:border-emerald-500 focus:ring-2 focus:ring-emerald-100 disabled:bg-slate-100"
+          />
           <button
             type="submit"
             disabled={asking || !question.trim() || blocked}
@@ -513,9 +600,9 @@ const AiAssistantPanel: React.FC = () => {
             {asking ? `${elapsed}s` : "Ask"}
           </button>
         </form>
-        <p className="mx-auto mt-2 max-w-5xl text-center text-[11px] text-slate-400">
+        <p className="mx-auto mt-2 max-w-6xl text-center text-[11px] text-slate-400">
           Reads the database only — it can never change anything. Every query it
-          ran is shown under the answer.
+          ran is shown under the answer, and any table can be downloaded as Excel.
         </p>
       </div>
     </div>

@@ -20,8 +20,8 @@ const {
  */
 router.use(isAdminAuthenticated, requireRoles(ROLES.SUPER_ADMIN));
 
-// Whether Ollama is up and has the model, so the panel can say what is wrong
-// instead of just failing when the first question is asked.
+// Whether Groq is reachable and the model is usable, so the panel can say
+// what is wrong instead of failing when the first question is asked.
 router.get("/status", controller.status);
 
 router.post("/ask", controller.ask);
