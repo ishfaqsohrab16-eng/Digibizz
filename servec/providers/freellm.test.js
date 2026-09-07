@@ -83,15 +83,60 @@ check(
   exhausted.message
 );
 
-// Only reachable by setting FREELLM_MODEL to something not in the catalogue.
-// The fix is to unset it, so the message says exactly that.
+// Two clocks: the router's request window, and the upstream provider's limit.
+// Quoting ours alongside theirs produced "about 61s" next to "reset ~39s" in
+// the same sentence, so theirs wins whenever they give one.
+const bothClocks = errorFor({
+  status: 429,
+  body: {
+    error: {
+      message: "All models exhausted: 318 routes checked (8 rate-limited or on cooldown). Soonest reset ~39s.",
+    },
+  },
+  headers: {},
+});
+check(
+  "the router's own reset estimate is not contradicted with ours",
+  !/about \d+s/.test(bothClocks.message),
+  bothClocks.message
+);
+check("and its estimate survives", /~39s/.test(bothClocks.message));
+
+// A 404 means two different things and they need different messages. This one
+// is a provider withdrawing a model between the router's catalog sync and the
+// request - seen live, while asking for "auto". Telling someone to unset a
+// variable they never set is worse than saying nothing, and it is not their
+// mistake to fix: asking again picks a different route.
+const stale = errorFor({
+  status: 404,
+  body: {
+    error: {
+      message: "Every routed provider reports the model as not found or removed upstream (1 attempt(s)).",
+    },
+  },
+  headers: {},
+});
+check("a withdrawn upstream model is not blamed on configuration", stale.code === "STALE_ROUTE");
+check(
+  "and does not tell anyone to unset a variable",
+  !/FREELLM_MODEL/.test(stale.message),
+  stale.message
+);
+check("and is retryable", stale.retryable === true);
+
+// The other kind: FREELLM_MODEL genuinely names something not in the
+// catalogue. Retrying cannot help, so it says what to change instead.
 const noModel = errorFor({
   status: 404,
   body: { error: { message: "Model 'claude-haiku-4-5' is not in the catalog." } },
   headers: {},
 });
-check("404 names the setting to change", /FREELLM_MODEL/.test(noModel.message), noModel.message);
-check("and recommends auto", /auto/.test(noModel.message));
+const namedModel = freellm.MODEL !== "auto";
+check(
+  namedModel ? "404 names the setting to change" : "with MODEL=auto even a catalog 404 reads as upstream",
+  namedModel ? /FREELLM_MODEL/.test(noModel.message) : noModel.code === "STALE_ROUTE",
+  noModel.message
+);
 
 // The router is up but its dashboard has no provider keys. Waiting will not
 // fix it and neither will retrying.

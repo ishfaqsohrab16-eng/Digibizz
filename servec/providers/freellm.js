@@ -231,21 +231,41 @@ const errorFor = ({ status, body, headers }) => {
     );
   }
 
-  // Asking for a model the router does not carry. Only reachable by setting
-  // FREELLM_MODEL to something that is not in the catalog, and the fix is to
-  // unset it - "auto" always works.
+  // A 404 means two very different things, and telling someone to unset a
+  // variable they never set is worse than saying nothing.
+  //
+  //   FREELLM_MODEL names something not in the catalog  -> their mistake.
+  //   the route the router picked has gone upstream     -> nobody's mistake.
+  //
+  // The second is real and was seen in testing: "Every routed provider reports
+  // the model as not found or removed upstream (1 attempt(s))" while asking
+  // for "auto". A provider retired a model between the router's catalog sync
+  // and the request. Asking again picks a different route.
   if (status === 404) {
-    return new FreeLlmError(
-      `The model router has no model called "${MODEL}". Unset FREELLM_MODEL to use "auto". (${detail})`,
-      { status, retryable: true, code: "NO_MODEL" }
-    );
+    const upstream = MODEL === "auto" || /upstream|removed|routed provider/i.test(detail);
+
+    return upstream
+      ? new FreeLlmError(
+          `A model the router tried has been withdrawn by its provider. (${detail})`,
+          { status, retryable: true, code: "STALE_ROUTE" }
+        )
+      : new FreeLlmError(
+          `The model router has no model called "${MODEL}". Unset FREELLM_MODEL to use "auto". (${detail})`,
+          { status, retryable: false, code: "NO_MODEL" }
+        );
   }
 
   // Every provider the router could route to is rate limited or cooling down.
   // This is the one that matters day to day, and the message is the router's
   // own because it says how many routes it tried.
   if (status === 429) {
-    const wait = secondsUntilReset();
+    // The router's own estimate wins when it gives one. It knows when the
+    // upstream provider's limit lifts; secondsUntilReset only knows when the
+    // router's request window rolls over, which is a different clock - quoting
+    // both produced an answer saying 61s next to the router saying 39s.
+    const routerSaysWhen = /reset\s*~?\s*\d/i.test(detail);
+    const wait = routerSaysWhen ? 0 : secondsUntilReset();
+
     return new FreeLlmError(
       wait > 0
         ? `Every free model the router can reach is busy. Capacity returns in about ${wait}s. (${detail})`
@@ -283,6 +303,16 @@ const errorFor = ({ status, body, headers }) => {
  * Returns the raw assistant message so the caller can see both `content` and
  * `tool_calls` - the loop needs to know which the model chose.
  */
+/**
+ * Failures where asking again lands on a different route and simply works.
+ *
+ * Not a general retry: a rate limit means every route was already tried, and
+ * repeating it only makes the wait longer. These are the two where the router
+ * itself would have succeeded on a second pass - a model withdrawn upstream
+ * between its catalog sync and the request, and a fault in one backend.
+ */
+const RETRY_ONCE = new Set(["STALE_ROUTE", "ROUTER_FAULT"]);
+
 const chat = async (messages, { tools, toolChoice = "auto", temperature = 0 } = {}) => {
   if (!isConfigured) {
     throw new FreeLlmError("FREELLM_API_KEY is not set", {
@@ -291,15 +321,26 @@ const chat = async (messages, { tools, toolChoice = "auto", temperature = 0 } = 
     });
   }
 
-  const response = await request(CHAT_PATH, {
+  const payload = {
     model: MODEL,
     messages,
     // Zero: this writes SQL and reports numbers. Invention is not a feature.
     temperature,
     ...(tools ? { tools, tool_choice: toolChoice } : {}),
-  });
+  };
 
+  let response = await request(CHAT_PATH, payload);
   noteQuota(response.headers || {});
+
+  if (response.status < 200 || response.status >= 300) {
+    const error = errorFor(response);
+
+    if (!RETRY_ONCE.has(error.code)) throw error;
+
+    console.warn(`[ai] ${error.message} Retrying once.`);
+    response = await request(CHAT_PATH, payload);
+    noteQuota(response.headers || {});
+  }
 
   if (response.status < 200 || response.status >= 300) {
     throw errorFor(response);
