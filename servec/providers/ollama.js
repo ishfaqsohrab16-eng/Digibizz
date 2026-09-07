@@ -27,11 +27,14 @@ const MODEL = process.env.OLLAMA_MODEL || "llama3.1";
 /**
  * How long to wait for a reply.
  *
- * Generous, because a local model on a busy machine is genuinely slow and the
- * alternative to waiting is a half-written answer. The request is abandoned
- * cleanly at the end of it rather than hanging.
+ * Five minutes, because the target deployment has no GPU. Measured there, a
+ * single round of an 8B model against this schema takes about 45 seconds,
+ * and a question needing three rounds takes over two minutes - so a timeout
+ * that felt generous on a GPU box abandons work that was going to succeed.
+ *
+ * The request is abandoned cleanly at the end of it rather than hanging.
  */
-const TIMEOUT_MS = Number(process.env.OLLAMA_TIMEOUT_MS) || 120000;
+const TIMEOUT_MS = Number(process.env.OLLAMA_TIMEOUT_MS) || 300000;
 
 const isConfigured = Boolean(BASE_URL);
 

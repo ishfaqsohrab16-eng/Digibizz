@@ -3000,17 +3000,24 @@ export const getAiStatus = async () => {
 
 export const askAiAssistant = async (
   question: string,
-  history: Array<{ role: "user" | "assistant"; content: string }>
+  history: Array<{ role: "user" | "assistant"; content: string }>,
+  /**
+   * Identifies the train of thought, so data fetched for one question can
+   * answer the next without querying again.
+   */
+  conversationId?: string
 ) => {
   const response = await axios.post(
     `${API_URL}/ai-assistant/ask`,
-    { question, history },
+    { question, history, conversationId },
     {
       headers: { Authorization: `Bearer ${getCurrentUserToken()}` },
-      // A local model on a busy machine is genuinely slow, and several
-      // queries may run before it answers. The default would abandon a
-      // request that is still working.
-      timeout: 180000,
+      // Ten minutes. On CPU-only hardware one round of an 8B model against
+      // this schema takes around 45 seconds, and a question that needs
+      // several rounds runs for minutes - so a shorter limit abandons work
+      // that was going to succeed. The panel shows a running count so the
+      // wait does not look like a hang.
+      timeout: 600000,
     }
   );
   return response.data as AiAnswer;

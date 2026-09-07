@@ -31,18 +31,25 @@ import { AiQuery, AiVisual } from "../../services/api";
 /**
  * Chart colours.
  *
- * Taken from the program's own green rather than a library default, so a chart
- * the assistant produced does not look like it came from somewhere else.
+ * The first version was five shades of the program's green in a row, which
+ * looked tidy and was unreadable: a male/female bar pair came out as two
+ * greens a few percent apart, and the legend was the only way to tell them
+ * apart.
+ *
+ * Series are distinguished by HUE, not by lightness. The programme's green
+ * leads so a chart still looks like it belongs here, and every colour after
+ * it is a clearly different one. They also stay distinguishable in the two
+ * common forms of colour blindness, which shades of a single hue do not.
  */
 const COLOURS = [
-  "#006537",
-  "#2f7d4f",
-  "#57a773",
-  "#84c99b",
-  "#b3e0c2",
-  "#0f766e",
-  "#0ea5e9",
-  "#6366f1",
+  "#006537", // programme green
+  "#e07a1f", // orange - the strongest contrast against the green
+  "#2563eb", // blue
+  "#a21caf", // purple
+  "#0891b2", // teal
+  "#b45309", // amber
+  "#be123c", // rose
+  "#4d7c0f", // olive
 ];
 
 /**
