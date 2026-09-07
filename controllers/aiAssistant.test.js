@@ -76,7 +76,8 @@ console.log("\nRows shown to the model\n");
 check("no rows says so", summariseRows([]) === "no rows");
 check(
   "a small result is passed whole",
-  summariseRows([{ a: 1 }]) === '[{"a":1}]'
+  summariseRows([{ a: 1 }]).startsWith('[{"a":1}]'),
+  summariseRows([{ a: 1 }])
 );
 
 const many = Array.from({ length: 200 }, (_, i) => ({ i }));
@@ -88,8 +89,32 @@ check(
 );
 check(
   "and the model is told how many there really were",
-  /200 rows in total/.test(summarised),
-  summarised.slice(-80)
+  /200 rows/.test(summarised),
+  summarised.slice(-120)
+);
+
+// The guarantee the statistics exist for. A model shown 30 of 200 rows will
+// add up the 30 unless it is given the real figure and told which to trust -
+// and an answer wrong by a factor of six looks exactly like a right one.
+check(
+  "the sample is labelled as a sample",
+  /SAMPLE \(\d+ of 200 rows\)/.test(summarised),
+  summarised.slice(0, 60)
+);
+check(
+  "statistics over every row are included",
+  /OVERALL, across ALL 200 rows/.test(summarised),
+  summarised.slice(-200)
+);
+check(
+  "and they are the true totals, not the sample's",
+  // 0 + 1 + ... + 199. The sample of 30 would total 435.
+  /total 19900/.test(summarised),
+  summarised.slice(-200)
+);
+check(
+  "the model is told not to count the sample",
+  /do not count the sample/.test(summarised)
 );
 
 console.log("\nRepairing the charts it asks for\n");

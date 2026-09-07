@@ -18,10 +18,17 @@ import {
   Zap,
 } from "lucide-react";
 import { toast } from "sonner";
-import { AiAnswer, AiStatus, askAiAssistant, getAiStatus } from "../../services/api";
+import {
+  AiAnswer,
+  AiQuery,
+  AiStatus,
+  askAiAssistant,
+  getAiStatus,
+} from "../../services/api";
 import { useBatch } from "../../context/BatchContext";
 import { isRole, ROLE } from "../../utils/roles";
 import ResultVisual from "./ResultVisual";
+import DataProfile from "./DataProfile";
 
 interface Turn {
   id: number;
@@ -70,6 +77,27 @@ const SUGGESTIONS = [
     text: "Show the funnel from applied to recommended to enrolled for this batch",
   },
 ];
+
+/**
+ * The result worth profiling.
+ *
+ * A question runs several queries and most of them are orientation - the
+ * distinct values of a column, a row count, five rows to check a join. Their
+ * statistics are noise. The one people want to see the shape of is the biggest
+ * result the answer drew a visual from, falling back to the biggest overall.
+ */
+const largestQuery = (answer: AiAnswer): AiQuery | undefined => {
+  const charted = answer.visuals
+    .map((visual) => answer.queries[visual.queryIndex])
+    .filter(Boolean);
+
+  const candidates = charted.length > 0 ? charted : answer.queries;
+
+  return candidates.reduce<AiQuery | undefined>(
+    (best, query) => (!best || query.rowCount > best.rowCount ? query : best),
+    undefined
+  );
+};
 
 /**
  * Ask questions about the programme's data in plain English.
@@ -408,6 +436,13 @@ const AiAssistantPanel: React.FC = () => {
                       query={turn.answer!.queries[visual.queryIndex]}
                     />
                   ))}
+
+                  {/* The statistics behind the answer, for the dataset the
+                      answer actually leans on. Shown for the largest result
+                      rather than for every query, because the orienting
+                      queries - "what are the distinct values of this column"
+                      - have nothing worth profiling. */}
+                  <DataProfile profile={largestQuery(turn.answer)?.profile} />
 
                   {turn.answer.queries.length > 0 && (
                     <div className="mt-3">

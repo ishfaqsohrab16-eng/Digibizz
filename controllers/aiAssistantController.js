@@ -10,6 +10,7 @@ const { checkSelect, MAX_ROWS } = require("../utils/sqlGuard");
 const { describeSchema, describeTables } = require("../utils/dbSchema");
 const { runQuery, hasOwnAccount, missingPassword } = require("../utils/aiReadOnlyDb");
 const { datasetsFor, remember } = require("../utils/aiConversations");
+const { profileRows, describeProfile } = require("../utils/resultProfile");
 
 /**
  * The data assistant.
@@ -57,18 +58,22 @@ const MAX_HISTORY = 12;
 /**
  * Rows fed back to the model per query.
  *
- * Budgeted by SIZE, not by a row count. A flat 150 rows is meaningless when
- * one result is 150 pairs of (name, count) and the next is 150 rows of thirty
- * columns each: the same number costs a few hundred tokens or several
- * thousand. Every round carries the whole conversation so far, so an
- * unbounded result does not cost once, it costs on every round after it.
+ * A SAMPLE, plus statistics over the whole result - see utils/resultProfile.js.
+ * It used to be 150 raw rows and nothing else, which was both expensive and
+ * wrong: the guard allows a query to return 500 rows, so a total or an average
+ * the model stated was quietly computed over the third of them it could see.
  *
- * Wide results are therefore cut to fewer rows, narrow ones to more, and the
- * model is always told the true total so it never mistakes the sample for the
- * answer.
+ * Now it gets a couple of dozen rows to see the shape of, and the true count,
+ * range, sum, mean and commonest values of every column. That is more accurate
+ * AND several times cheaper, which matters because every round of the
+ * conversation carries it again.
+ *
+ * Budgeted by SIZE rather than by a row count, because one result is pairs of
+ * (name, count) and the next is thirty columns wide, and the same number of
+ * rows costs a few hundred tokens or several thousand.
  */
-const ROWS_SHOWN_TO_MODEL = 150;
-const ROW_CHARS_SHOWN_TO_MODEL = 6000;
+const ROWS_SHOWN_TO_MODEL = 30;
+const ROW_CHARS_SHOWN_TO_MODEL = 2500;
 
 /**
  * The tools the analyst may call.
@@ -232,6 +237,12 @@ So when a question touches anything you have not already looked at this conversa
 This is what stops an answer being wrong in a way nobody notices. Once you know the shape, write the real query.
 Rounds are not free, so put every query you already know you need into ONE reply - several run_sql calls at once - rather than one per round. Orienting queries especially: ask for the distinct values, the row count and the sample together.
 
+READING A RESULT
+Each result comes back as a SAMPLE of rows plus OVERALL statistics computed over every row, including the ones not shown. The statistics are the truth about the data; the sample is only there to show you its shape.
+So take totals, averages, ranges and counts from OVERALL. Never add up the sample rows and present that as the answer - if the result had 500 rows and you were shown 30, doing so is wrong by a factor of sixteen and nothing in your answer would say so.
+The row count is the number of ROWS, not a total of anything in them. If each row is a centre and a count, "500 rows" means 500 centres, and the number of students is the total of that column. Read the column names before deciding which number answers the question.
+If you need a figure the statistics do not give - a median, a per-group total, the top five - ask the database for it with GROUP BY, ORDER BY and LIMIT. That is what SQL is for, and it is always cheaper and more accurate than reasoning over rows.
+
 QUERY UNTIL YOU CAN ACTUALLY ANSWER
 Call run_sql as many times as you need. If a result is empty, at the wrong grain, or lumps together things that should be separate, query again with a better one - that is expected, not a failure. Fetch each piece separately rather than forcing one enormous join, and when comparing, fetch both sides.
 An empty result is a finding, not a dead end: check whether the filter was wrong before reporting zero.
@@ -248,13 +259,29 @@ DATA YOU ALREADY HAVE
 Results from earlier in this conversation are listed after the schema, with their indices. They are still live. If a follow-up can be answered from one - showing it as a table instead of a chart, reading a different number out of it, sorting it differently - answer from it and reference its index. Do not re-run a query for data you already have.
 
 ANSWERING
-Call present_answer exactly once, at the end. Choose visuals that suit the data; a table alongside a chart is often right. Only reference fields that exist in that dataset.
+Call present_answer exactly once, at the end.
+
+SHOW THE DATA, DO NOT JUST DESCRIBE IT. Give two or three visuals for anything with structure to it, chosen for the shape of the result rather than out of habit:
+- one headline number -> stat
+- shares of a single total, up to about six parts -> pie or donut
+- a value across categories -> bar, or hbar when the labels are long like centre names
+- two series across the same categories, like male and female -> stackedBar, or bar with two yFields
+- anything over time -> line or area
+- many categories at once, where relative size is the point -> treemap
+- a short ranking -> list, with the table underneath for the detail
+- stages that narrow, like applied to interviewed to enrolled -> funnel
+- progress towards a target -> radial
+- several measures compared across a few subjects -> radar
+- two numbers against each other -> scatter
+- the rows themselves, so the figures can be checked and exported -> table
+
+A stat or a chart PLUS a table is usually the right answer: the chart makes the shape obvious and the table lets someone check it. Only reference fields that exist in that dataset.
 
 If a question cannot be answered from the database, say so plainly with no visuals. Never invent a number, and never present a figure you did not query.
 
 If something in the data looks wrong - a count far larger than the batch, a category you did not expect, a total that does not add up - say so in the summary rather than presenting it flatly. Being told a figure looks odd is more useful than being given it without comment.`;
 
-/** The rows the model sees, trimmed so a wide result does not fill its context. */
+/** What the model is told about a result: a sample, and the whole picture. */
 const summariseRows = (rows, budget = ROW_CHARS_SHOWN_TO_MODEL) => {
   if (rows.length === 0) return "no rows";
 
@@ -267,12 +294,64 @@ const summariseRows = (rows, budget = ROW_CHARS_SHOWN_TO_MODEL) => {
     shown = shown.slice(0, Math.floor(shown.length / 2));
   }
 
-  const note =
-    rows.length > shown.length
-      ? `\n(${rows.length} rows in total; the first ${shown.length} are shown)`
-      : "";
+  // The statistics cover every row, including the ones not shown. Said
+  // explicitly, because a model given a sample will otherwise count it.
+  const overall = describeProfile(profileRows(rows));
 
-  return `${JSON.stringify(shown)}${note}`;
+  if (rows.length <= shown.length) {
+    return `${JSON.stringify(shown)}\nOVERALL: ${overall}`;
+  }
+
+  return (
+    `SAMPLE (${shown.length} of ${rows.length} rows): ${JSON.stringify(shown)}\n` +
+    `OVERALL, across ALL ${rows.length} rows - use these figures, do not count the sample:\n${overall}`
+  );
+};
+
+/**
+ * The assistant's own reply, stripped back to what every provider accepts.
+ *
+ * The conversation is replayed in full on every round, so each reply the model
+ * makes is sent back to whichever model answers next - and through the router
+ * that is frequently a DIFFERENT provider, chosen by whoever has capacity.
+ *
+ * Providers decorate their replies. Groq attaches `reasoning`; Google wants a
+ * `thought_signature` on a replayed tool call and complains when it is missing;
+ * the compound models add `executed_tools`. Handing one provider's decorations
+ * to another is rejected outright:
+ *
+ *   The model router refused the request (400): Invalid request:
+ *   messages.2: Invalid input
+ *
+ * messages.2 is the first assistant turn. So only the three fields the API
+ * actually defines are kept, and a question stops failing the moment the router
+ * moves it to a different provider mid-conversation.
+ *
+ * Content is coerced to a string because a reply that is only a tool call has
+ * `content: null`, which some providers reject in a replayed turn.
+ */
+const normaliseAssistantMessage = (message) => {
+  const normalised = {
+    role: "assistant",
+    content: typeof message?.content === "string" ? message.content : "",
+  };
+
+  if (Array.isArray(message?.tool_calls) && message.tool_calls.length > 0) {
+    normalised.tool_calls = message.tool_calls.map((call) => ({
+      id: call.id,
+      type: "function",
+      function: {
+        name: call.function?.name,
+        // Always a string on the wire, whatever the provider handed back.
+        arguments:
+          typeof call.function?.arguments === "string"
+            ? call.function.arguments
+            : JSON.stringify(call.function?.arguments ?? {}),
+      },
+    }));
+  }
+
+  return normalised;
 };
 
 /** Tool arguments arrive as a JSON string, and are not always valid. */
@@ -445,12 +524,16 @@ exports.ask = async (req, res) => {
 
   // When this question has to be finished, one way or the other.
   //
-  // Every free provider being busy for a few seconds is the normal state of
-  // a free tier, and the router says how long it will last - so the provider
-  // waits rather than giving up. This is the budget it waits inside. The
-  // browser gives up at 120s, so finishing at 100 leaves room to send back a
-  // real answer, or a real explanation, rather than a connection that died.
-  const deadline = startedAt + (Number(process.env.AI_QUESTION_BUDGET_MS) || 100000);
+  // Every free provider being busy for a while is the normal state of a free
+  // tier, and the router says how long it will last - so the provider waits
+  // rather than giving up. This is the budget it waits inside.
+  //
+  // The browser gives up at 300s, so finishing at 270 leaves room to send back
+  // a real answer, or a real explanation, rather than a connection that died
+  // mid-sentence. It was 100s against a 120s browser timeout, and a question
+  // that sat out two short rate limits reached the browser's limit first -
+  // which is the one failure that tells the person nothing at all.
+  const deadline = startedAt + (Number(process.env.AI_QUESTION_BUDGET_MS) || 270000);
 
   try {
     // Screened before the analyst sees it. A Super Admin has no reason to write
@@ -544,7 +627,7 @@ exports.ask = async (req, res) => {
         break;
       }
 
-      messages.push(reply.message);
+      messages.push(normaliseAssistantMessage(reply.message));
 
       let presented = false;
 
@@ -619,6 +702,10 @@ exports.ask = async (req, res) => {
             rowCount: rows.length,
             ms,
             rows,
+            // The same figures the model was given, so the panel shows what
+            // the answer was actually based on rather than recomputing it in
+            // the browser and risking a different number.
+            profile: profileRows(rows),
           };
           results.push(dataset);
           fetchedNow.push(dataset);
@@ -769,4 +856,11 @@ exports.status = async (_req, res) => {
   }
 };
 
-exports._internals = { parseArguments, repairVisuals, summariseRows, TOOLS, SYSTEM_PROMPT };
+exports._internals = {
+  parseArguments,
+  repairVisuals,
+  summariseRows,
+  normaliseAssistantMessage,
+  TOOLS,
+  SYSTEM_PROMPT,
+};

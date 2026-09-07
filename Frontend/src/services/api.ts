@@ -2963,6 +2963,38 @@ export type AiVisual =
       valueField: string;
     };
 
+/** One column of a result, summarised over every row of it. */
+export interface AiColumnProfile {
+  name: string;
+  type: "number" | "text" | "date";
+  missing: number;
+  present: number;
+  /** number */
+  min?: number;
+  max?: number;
+  sum?: number;
+  mean?: number;
+  /** date */
+  earliest?: string;
+  latest?: string;
+  /** text */
+  distinct?: number;
+  top?: Array<{ value: string; count: number }>;
+}
+
+/**
+ * The statistics the answer was based on.
+ *
+ * Computed on the server over the whole result and sent here, rather than
+ * recomputed in the browser - two implementations of "the average" would
+ * eventually disagree, and the one on screen has to be the one the model was
+ * given.
+ */
+export interface AiProfile {
+  rowCount: number;
+  columns: AiColumnProfile[];
+}
+
 /** What it ran to get there. Shown so the answer can be checked. */
 export interface AiQuery {
   sql: string;
@@ -2970,6 +3002,7 @@ export interface AiQuery {
   rowCount: number;
   ms: number;
   rows: Array<Record<string, any>>;
+  profile?: AiProfile;
 }
 
 export interface AiAnswer {
@@ -3042,11 +3075,13 @@ export const askAiAssistant = async (
     { question, history, conversationId },
     {
       headers: { Authorization: `Bearer ${getCurrentUserToken()}` },
-      // Two minutes. Groq answers a round in well under a second, so a
-      // question taking this long is stuck rather than slow - the ten
-      // minutes this needed while the model ran locally on a CPU would now
-      // just be ten minutes of staring at a spinner.
-      timeout: 120000,
+      // Five minutes, and it is the server that decides when to stop, not
+      // this. A question can now sit out a short rate limit rather than
+      // failing - every free provider being busy for twenty seconds is the
+      // normal state of a free tier - and it makes up to eight model calls.
+      // The server's own budget is 270s, so anything reaching this timeout is
+      // genuinely stuck rather than merely slow.
+      timeout: 300000,
     }
   );
   return response.data as AiAnswer;

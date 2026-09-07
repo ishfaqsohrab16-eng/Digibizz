@@ -380,7 +380,7 @@ const RETRY_ONCE = new Set(["STALE_ROUTE", "ROUTER_FAULT", "BAD_TOOL_CALL"]);
  * eight rounds each waiting the maximum would outlast the browser and the
  * person would be shown a timeout instead of an answer.
  */
-const MAX_WAIT_MS = Number(process.env.FREELLM_MAX_WAIT_MS) || 25000;
+const MAX_WAIT_MS = Number(process.env.FREELLM_MAX_WAIT_MS) || 45000;
 
 const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
 
