@@ -175,12 +175,26 @@ const health = async () => {
   }
 
   const models = (response.body?.models || []).map((entry) => entry.name);
-  // Ollama reports "llama3.1:latest" for a model pulled as "llama3.1".
-  const present = models.some(
-    (name) => name === MODEL || name.split(":")[0] === MODEL.split(":")[0]
-  );
 
-  return { ok: true, model: MODEL, present, models };
+  // Ollama resolves a bare name to `name:latest`, and to nothing else. Pulling
+  // `llama3.1:8b` therefore does NOT give you `llama3.1` - asking for it
+  // answers 404.
+  //
+  // Comparing only the part before the colon called that a match, so the panel
+  // reported itself ready and then failed on the first question. Matching the
+  // way Ollama actually resolves is the difference between a wrong green light
+  // and a message naming the tag to use.
+  const wanted = MODEL.includes(":") ? MODEL : `${MODEL}:latest`;
+  const present = models.includes(MODEL) || models.includes(wanted);
+
+  // A model from the same family under a different tag is the common case, and
+  // the fix is one environment variable - so say which one.
+  const family = MODEL.split(":")[0];
+  const nearMiss = present
+    ? null
+    : models.find((name) => name.split(":")[0] === family);
+
+  return { ok: true, model: MODEL, present, models, nearMiss };
 };
 
 module.exports = { chat, health, isConfigured, MODEL, BASE_URL, OllamaError };

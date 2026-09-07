@@ -404,7 +404,11 @@ exports.status = async (_req, res) => {
       maxRows: MAX_ROWS,
       message: info.present
         ? null
-        : `Ollama is running but has no model called "${MODEL}". Run: ollama pull ${MODEL}`,
+        : info.nearMiss
+        ? `Ollama has "${info.nearMiss}" but OLLAMA_MODEL is set to "${MODEL}". ` +
+          `Set OLLAMA_MODEL=${info.nearMiss} - a bare name only resolves to :latest.`
+        : `Ollama is running but has no model called "${MODEL}". ` +
+          `Run: ollama pull ${MODEL}`,
     });
   } catch (error) {
     return res.status(200).json({
