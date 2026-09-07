@@ -2,9 +2,10 @@ const {
   chat,
   screenPrompt,
   health,
-  budgetReport,
-  CATALOGUE,
-} = require("../servec/providers/analyst");
+  quotaReport,
+  MODEL,
+  SCREEN_MODEL,
+} = require("../servec/providers/freellm");
 const { checkSelect, MAX_ROWS } = require("../utils/sqlGuard");
 const { describeSchema, describeTables } = require("../utils/dbSchema");
 const { runQuery, hasOwnAccount, missingPassword } = require("../utils/aiReadOnlyDb");
@@ -38,8 +39,17 @@ const { datasetsFor, remember } = require("../utils/aiConversations");
  *   cannot check is worth very little.
  */
 
-/** How many tool rounds before the assistant must answer with what it has. */
-const MAX_ROUNDS = Number(process.env.AI_MAX_ROUNDS) || 4;
+/**
+ * How many tool rounds before the assistant must answer with what it has.
+ *
+ * Eight. It was cut to four while every question was competing for one key's
+ * 8,000 tokens a minute; through the router that pressure is gone, and four
+ * was too tight for the shape the assistant actually works in - a real
+ * question spends one round reading the tables, one or two orienting, one on
+ * the query that answers it, and one presenting. The live test used exactly
+ * four, which is no headroom at all for a question that needs a second look.
+ */
+const MAX_ROUNDS = Number(process.env.AI_MAX_ROUNDS) || 8;
 
 /** Conversation turns kept as context. */
 const MAX_HISTORY = 12;
@@ -50,8 +60,8 @@ const MAX_HISTORY = 12;
  * Budgeted by SIZE, not by a row count. A flat 150 rows is meaningless when
  * one result is 150 pairs of (name, count) and the next is 150 rows of thirty
  * columns each: the same number costs a few hundred tokens or several
- * thousand. The allowance is 8,000 tokens a minute, so the difference decides
- * whether the next round runs.
+ * thousand. Every round carries the whole conversation so far, so an
+ * unbounded result does not cost once, it costs on every round after it.
  *
  * Wide results are therefore cut to fewer rows, narrow ones to more, and the
  * model is always told the true total so it never mistakes the sample for the
@@ -68,10 +78,10 @@ const ROW_CHARS_SHOWN_TO_MODEL = 6000;
  * reach the database keeps the guard the only door.
  *
  * describe_tables is the exception, and it exists to buy back tokens. The
- * prompt used to carry all 47 tables and 477 columns, which is about 2,500
- * tokens on an allowance of 8,000 a minute; a question needing two rounds was
- * therefore over budget before anyone had typed it. Now the prompt carries the
- * table NAMES and the model asks for the columns of the four or five it needs.
+ * prompt used to carry all 47 tables and 477 columns - about 2,500 tokens on
+ * every round of every question, most of them about tables that question will
+ * never touch. Now the prompt carries the table NAMES and the model asks for
+ * the columns of the four or five it actually needs.
  */
 const TOOLS = [
   {
@@ -505,7 +515,6 @@ exports.ask = async (req, res) => {
     let rounds = 0;
     let modelUsed = null;
     let providerUsed = null;
-    let usedFallback = false;
 
     while (rounds < MAX_ROUNDS) {
       rounds += 1;
@@ -515,7 +524,6 @@ exports.ask = async (req, res) => {
       const reply = await chat(messages, { tools: TOOLS });
       modelUsed = reply.model;
       providerUsed = reply.provider;
-      usedFallback = usedFallback || reply.usedFallback;
 
       const calls = reply.message.tool_calls || [];
 
@@ -646,7 +654,6 @@ exports.ask = async (req, res) => {
         rounds,
         model: modelUsed,
         provider: providerUsed,
-        usedFallback,
         ms: Date.now() - startedAt,
       });
     }
@@ -656,7 +663,7 @@ exports.ask = async (req, res) => {
     console.log(
       `[ai] "${question.slice(0, 80)}" answered in ${rounds} round(s), ` +
         `${fetchedNow.length} new quer(ies), ${Date.now() - startedAt}ms, ` +
-        `by ${providerUsed}/${modelUsed}${usedFallback ? " (fallback)" : ""}, ` +
+        `by ${providerUsed}/${modelUsed}, ` +
         `user ${req.user.id}`
     );
 
@@ -669,21 +676,21 @@ exports.ask = async (req, res) => {
       rounds,
       model: modelUsed,
       provider: providerUsed,
-      usedFallback,
       ms: Date.now() - startedAt,
     });
   } catch (error) {
-    // Every model declining is a 429, not a fault: the message already says
-    // how long to wait, and the panel shows it as a wait rather than a crash.
-    if (error?.code === "RATE_LIMITED") {
+    // The router having nothing free to route to is a 429, not a fault: the
+    // message already says how long to wait, and the panel shows it as a wait
+    // rather than a crash.
+    if (error?.code === "EXHAUSTED" || error?.code === "RATE_LIMITED") {
       console.warn("[ai] no model available:", error.message);
       return res.status(429).json({ success: false, message: error.message });
     }
 
-    // A provider being unreachable or misconfigured. The message names which
-    // one and what to do, so it is worth showing rather than swallowing.
-    if (error?.name === "CerebrasError") {
-      console.error(`[ai] FreeLLM:`, error.message);
+    // The router being unreachable or misconfigured. The message names what
+    // to do, so it is worth showing rather than swallowing.
+    if (error?.name === "FreeLlmError") {
+      console.error("[ai] model router:", error.message);
       return res.status(503).json({ success: false, message: error.message });
     }
 
@@ -706,9 +713,11 @@ exports.status = async (_req, res) => {
   const base = {
     success: true,
     readOnlyAccount: hasOwnAccount,
-    // Every model the assistant may use, in the order it would try them.
-    // Informational now: there is no picker, and the router decides.
-    catalogue: CATALOGUE,
+    // There is no picker and no model list. The router is handed "auto" and
+    // chooses from its whole catalogue whichever free model is both usable
+    // right now and able to call tools - a decision it can make and this
+    // process cannot.
+    model: MODEL,
   };
 
   if (missingPassword) {
@@ -724,40 +733,29 @@ exports.status = async (_req, res) => {
     const info = await health();
     const schema = await describeSchema();
 
-    // One provider being out is not an outage - that is the point of having
-    // two - so it is reported as a note beside a working assistant rather
-    // than as a failure.
-    const notes = Object.entries(info.providers)
-      .filter(([, provider]) => provider.configured && provider.message)
-      .map(([name, provider]) => `${name}: ${provider.message}`);
-
-    const unconfigured = Object.entries(info.providers)
-      .filter(([, provider]) => !provider.configured)
-      .map(([name]) => `${name.toUpperCase()}_API_KEY`);
-
     return res.json({
       ...base,
       ready: info.present,
-      providers: info.providers,
-      screening: null,
-      // Only models a key can actually reach AND that can call tools.
-      catalogue: info.catalogue.length ? info.catalogue : CATALOGUE,
-      // What is left of each model's minute, so "why did that fail" has an
-      // answer on the screen rather than in a log.
-      budgets: budgetReport(),
+      // How many models the router has to choose from. Worth showing: it is
+      // the whole reason a free-tier assistant is usable at all.
+      routerModels: info.models,
+      screening: info.screenAvailable ? SCREEN_MODEL : null,
+      // Requests left in the router's current window, so "why did that fail"
+      // has an answer on the screen rather than in a log.
+      quota: quotaReport(),
       tables: schema.tables.length,
       maxRows: MAX_ROWS,
       message: info.present
-        ? notes.join("; ") || null
-        : unconfigured.length
-          ? `${unconfigured.join(" and ")} not set. Add one to the environment and restart.`
-          : `No provider could be reached. ${notes.join("; ")}`,
+        ? info.knows === false
+          ? `FREELLM_MODEL is set to "${MODEL}", which the router does not carry. Unset it to use "auto".`
+          : null
+        : info.reason || "The model router could not be reached.",
     });
   } catch (error) {
     return res.json({
       ...base,
       ready: false,
-      message: error?.message || "Could not reach any model provider",
+      message: error?.message || "Could not reach the model router",
     });
   }
 };

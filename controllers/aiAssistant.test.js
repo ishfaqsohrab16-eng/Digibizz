@@ -33,14 +33,14 @@ const check = (name, condition, detail) => {
   }
 };
 
-stub("../servec/providers/analyst", {
-  chat: async () => ({ message: {}, model: "test", provider: "groq" }),
-  screenPrompt: async () => ({ flagged: false, score: 0 }),
-  health: async () => ({ present: true, providers: {}, catalogue: [] }),
-  budgetReport: () => [],
-  CATALOGUE: [],
+stub("../servec/providers/freellm", {
+  chat: async () => ({ message: {}, model: "test", provider: "freellm:groq" }),
+  screenPrompt: async () => ({ flagged: false, score: 0, screened: true }),
+  health: async () => ({ present: true, models: 249, knows: true }),
+  quotaReport: () => ({ provider: "freellm", remaining: null, limit: null, resetsIn: 0 }),
+  MODEL: "auto",
+  SCREEN_MODEL: "llama-prompt-guard-2-86m",
 });
-stub("../servec/providers/groq", { SCREEN_MODEL: "guard" });
 stub("../utils/dbSchema", {
   describeSchema: async () => ({ text: "", index: "", tables: [] }),
   describeTables: async () => "",

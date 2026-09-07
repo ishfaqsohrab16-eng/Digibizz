@@ -2980,33 +2980,21 @@ export interface AiAnswer {
   queries: AiQuery[];
   rounds: number;
   ms: number;
-  /** Which model answered. Chosen by the server from whatever had capacity. */
+  /** Which model answered. The router chose it; nobody asked for it. */
   model?: string;
-  /** Which account it came from: "cerebras" or "groq". */
+  /** How the router reached it, as "freellm:<upstream provider>". */
   provider?: string;
-  /** True when the first choice was busy and another model stood in. */
-  usedFallback?: boolean;
 }
 
-/** A model the assistant may use, and what it is good at. */
-export interface AiModel {
-  id: string;
-  label: string;
-  tagline: string;
-  detail?: string;
-  speed?: "instant" | "fastest" | "fast";
-  provider?: string;
-  recommended?: boolean;
-}
-
-/** What is left of one model's per-minute token allowance. */
-export interface AiBudget {
+/** What is left of the router's own request allowance for this window. */
+export interface AiQuota {
   provider: string;
   model: string;
   remaining: number | null;
   limit: number | null;
   resetsIn: number;
-  unavailable?: string | null;
+  /** Requests, not tokens - the router meters its own traffic that way. */
+  unit?: string;
 }
 
 export interface AiStatus {
@@ -3014,20 +3002,17 @@ export interface AiStatus {
   ready: boolean;
   /** True when queries run as a SELECT-only database account. */
   readOnlyAccount: boolean;
-  /** The prompt-injection classifier, when the key can reach it. */
-  screening?: string | null;
   /**
-   * Every model the assistant may draw on. Informational: there is no picker,
-   * because the right model is whichever still has an allowance this minute
-   * and only the server can see that.
+   * Always "auto". There is no picker: the router is handed the question and
+   * picks whichever free model is both usable right now and able to call
+   * tools, which is a decision only it can make.
    */
-  catalogue?: AiModel[];
-  /** Per provider: whether it is configured, reachable, and usable. */
-  providers?: Record<
-    string,
-    { configured: boolean; reachable: boolean; usable: boolean; message: string | null }
-  >;
-  budgets?: AiBudget[];
+  model?: string;
+  /** How many models the router has to choose between. */
+  routerModels?: number;
+  /** The screening model, when the router can reach one. */
+  screening?: string | null;
+  quota?: AiQuota;
   tables?: number;
   maxRows?: number;
   message: string | null;

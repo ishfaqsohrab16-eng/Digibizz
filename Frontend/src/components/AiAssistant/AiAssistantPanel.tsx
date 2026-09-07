@@ -18,13 +18,7 @@ import {
   Zap,
 } from "lucide-react";
 import { toast } from "sonner";
-import {
-  AiAnswer,
-  AiModel,
-  AiStatus,
-  askAiAssistant,
-  getAiStatus,
-} from "../../services/api";
+import { AiAnswer, AiStatus, askAiAssistant, getAiStatus } from "../../services/api";
 import { useBatch } from "../../context/BatchContext";
 import { isRole, ROLE } from "../../utils/roles";
 import ResultVisual from "./ResultVisual";
@@ -235,7 +229,7 @@ const AiAssistantPanel: React.FC = () => {
   }
 
   const blocked = !status?.ready;
-  const catalogue: AiModel[] = status?.catalogue || [];
+  const routerModels = status?.routerModels || 0;
 
   return (
     // Fills the viewport under the app chrome and manages its own scrolling, so
@@ -268,20 +262,18 @@ const AiAssistantPanel: React.FC = () => {
               </span>
             )}
 
-            {/* Not a picker any more. Which model to use is not a question
-                anyone can answer from here: it is whichever still has a token
-                allowance this minute, across two accounts, and only the server
-                can see that. What is worth showing is how many are standing by,
-                because that is what makes a busy minute survivable. */}
-            {catalogue.length > 0 && (
+            {/* Not a picker. Which model to use is not a question anyone can
+                answer from here: it is whichever of the router's models is
+                free this minute AND can call tools, which only the router
+                knows. What is worth showing is how many it has to choose
+                between, because that is what makes a busy minute survivable. */}
+            {routerModels > 0 && (
               <span
                 className="inline-flex items-center gap-1.5 rounded-full bg-slate-100 px-3 py-1.5 text-xs font-medium text-slate-700 ring-1 ring-inset ring-slate-200"
-                title={`Asked in order until one answers: ${catalogue
-                  .map((entry) => entry.label)
-                  .join(", ")}`}
+                title="Each question goes to whichever free model is available and able to query the database. The one that answered is shown under the answer."
               >
                 <Zap className="h-3.5 w-3.5 text-amber-500" />
-                {catalogue.length} models
+                {routerModels} models
               </span>
             )}
 
@@ -443,18 +435,14 @@ const AiAssistantPanel: React.FC = () => {
                         {turn.answer.model && (
                           <span
                             className="rounded-full bg-slate-200/70 px-2 py-0.5 text-[11px] text-slate-600"
-                            title={
-                              turn.answer.usedFallback
-                                ? "The first model was out of allowance for the minute, so this one answered instead"
-                                : "The model that answered"
-                            }
+                            title="The model the router picked for this question, and the provider it reached it through"
                           >
                             {turn.answer.model.split("/").pop()}
                             {/* Which account, now that there are two. "Why is
                                 this answer worse than usual" is sometimes "the
                                 fast one was busy". */}
-                            {turn.answer.provider && ` · ${turn.answer.provider}`}
-                            {turn.answer.usedFallback && " · stood in"}
+                            {turn.answer.provider &&
+                              ` · ${turn.answer.provider.split(":").pop()}`}
                           </span>
                         )}
                       </div>
