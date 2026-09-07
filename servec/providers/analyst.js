@@ -104,7 +104,10 @@ const candidatesFor = (needed) => {
 
   const byPreference = (a, b) => a.rank - b.rank || b.headroom - a.headroom;
 
-  return [...affordable.sort(byPreference), ...rest.sort((a, b) => b.headroom - a.headroom)];
+  // Keep Cerebras ahead of Groq even when a Cerebras bucket is too small for
+  // this request. The next Cerebras model gets the first chance; Groq is the
+  // fallback only after Cerebras has no usable capacity left.
+  return [...affordable.sort(byPreference), ...rest.sort(byPreference)];
 };
 
 class NoModelAvailable extends Error {
