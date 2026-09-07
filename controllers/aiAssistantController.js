@@ -40,7 +40,7 @@ const { datasetsFor, remember } = require("../utils/aiConversations");
  */
 
 /** How many tool rounds before the assistant must answer with what it has. */
-const MAX_ROUNDS = Number(process.env.AI_MAX_ROUNDS) || 8;
+const MAX_ROUNDS = Number(process.env.AI_MAX_ROUNDS) || 4;
 
 /** Conversation turns kept as context. */
 const MAX_HISTORY = 12;

@@ -157,6 +157,8 @@ if (!isConfigured) {
  */
 const budgets = new Map();
 
+const MAX_COMPLETION_TOKENS = Number(process.env.AI_MAX_COMPLETION_TOKENS) || 800;
+
 
 const noteBudget = (model, headers) => {
   const remaining = Number(headers["x-ratelimit-remaining-tokens"]);
@@ -353,6 +355,7 @@ const chatOne = async (
   const response = await request(CHAT_PATH, {
     model,
     messages,
+    max_completion_tokens: MAX_COMPLETION_TOKENS,
     // Zero: this writes SQL and reports numbers. Invention is not a feature.
     temperature,
     ...(tools ? { tools, tool_choice: toolChoice } : {}),
@@ -450,6 +453,7 @@ const chat = async (
       const response = await request(CHAT_PATH, {
         model: candidate,
         messages,
+        max_completion_tokens: MAX_COMPLETION_TOKENS,
         // Zero: this writes SQL and reports numbers. Invention is not a feature.
         temperature,
         ...(tools ? { tools, tool_choice: toolChoice } : {}),

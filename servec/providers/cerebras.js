@@ -61,6 +61,7 @@ const CHAT_MODELS = [
 const MODEL_IDS = CHAT_MODELS.map((entry) => entry.id);
 
 const TIMEOUT_MS = Number(process.env.CEREBRAS_TIMEOUT_MS) || 60000;
+const MAX_COMPLETION_TOKENS = Number(process.env.AI_MAX_COMPLETION_TOKENS) || 800;
 
 const isConfigured = Boolean(API_KEY);
 
@@ -280,6 +281,7 @@ const chat = async (messages, { tools, toolChoice = "auto", temperature = 0, mod
   const response = await request(CHAT_PATH, {
     model,
     messages,
+    max_completion_tokens: MAX_COMPLETION_TOKENS,
     // Zero: this writes SQL and reports numbers. Invention is not a feature.
     temperature,
     ...(tools ? { tools, tool_choice: toolChoice } : {}),
