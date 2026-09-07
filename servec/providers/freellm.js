@@ -125,6 +125,30 @@ const noteQuota = (headers) => {
   };
 };
 
+/**
+ * How long the router says it will be until something is free.
+ *
+ * It ends an exhausted-capacity message with its own estimate, and that number
+ * is the difference between a wait and a dead end:
+ *
+ *   "... Add more API keys or wait for rate limits to reset. Soonest reset ~16s."
+ *   "... Soonest reset ~24h."
+ *
+ * Sixteen seconds is worth waiting for. Twenty-four hours is not. Returns
+ * seconds, or null when the router did not say.
+ */
+const parseSoonestReset = (detail) => {
+  const match = String(detail || "").match(/soonest reset\s*~?\s*(\d+(?:\.\d+)?)\s*(ms|s|m|h)/i);
+  if (!match) return null;
+
+  const value = Number(match[1]);
+  const unit = match[2].toLowerCase();
+  const seconds =
+    unit === "ms" ? value / 1000 : unit === "s" ? value : unit === "m" ? value * 60 : value * 3600;
+
+  return Number.isFinite(seconds) ? seconds : null;
+};
+
 /** Seconds until the router's window rolls over, or 0 if it already has. */
 const secondsUntilReset = () => {
   if (!quota.resetAt) return 0;
@@ -263,15 +287,20 @@ const errorFor = ({ status, body, headers }) => {
     // upstream provider's limit lifts; secondsUntilReset only knows when the
     // router's request window rolls over, which is a different clock - quoting
     // both produced an answer saying 61s next to the router saying 39s.
-    const routerSaysWhen = /reset\s*~?\s*\d/i.test(detail);
-    const wait = routerSaysWhen ? 0 : secondsUntilReset();
+    const routerWait = parseSoonestReset(detail);
+    const wait = routerWait === null ? secondsUntilReset() : 0;
 
-    return new FreeLlmError(
+    const error = new FreeLlmError(
       wait > 0
         ? `Every free model the router can reach is busy. Capacity returns in about ${wait}s. (${detail})`
         : `Every free model the router can reach is busy. (${detail})`,
       { status, retryable: true, code: "EXHAUSTED" }
     );
+
+    // How long until it is worth asking again, if the router said. Used to
+    // decide whether to wait rather than to give up - see waitAndRetry below.
+    error.retryAfterMs = (routerWait === null ? wait : routerWait) * 1000;
+    return error;
   }
 
   // The router is up but has no provider keys it can use - a dashboard problem,
@@ -338,7 +367,50 @@ const errorFor = ({ status, body, headers }) => {
  */
 const RETRY_ONCE = new Set(["STALE_ROUTE", "ROUTER_FAULT", "BAD_TOOL_CALL"]);
 
-const chat = async (messages, { tools, toolChoice = "auto", temperature = 0 } = {}) => {
+/**
+ * The longest this will sit and wait for capacity to come back.
+ *
+ * Every free provider being busy for a few seconds is the normal condition of
+ * a free tier, not a failure, and the router says how long it will last. A
+ * question that takes twenty seconds is a good outcome; the same question
+ * ending in "everything is busy" when the wait was sixteen seconds is not.
+ *
+ * Bounded twice over: no single wait longer than this, and never past the
+ * deadline the caller gave for the whole question. Without the second bound,
+ * eight rounds each waiting the maximum would outlast the browser and the
+ * person would be shown a timeout instead of an answer.
+ */
+const MAX_WAIT_MS = Number(process.env.FREELLM_MAX_WAIT_MS) || 25000;
+
+const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
+
+/**
+ * How long to wait before asking again, or 0 to give up now.
+ *
+ * Pure, and exported, because this is the decision that turns "everything is
+ * busy" into either a slightly slow answer or an error, and it is not
+ * reproducible on demand against the live router - the wait it offers is
+ * whatever its providers happen to be doing that second.
+ */
+const waitFor = (error, deadline, now = Date.now()) => {
+  if (error?.code !== "EXHAUSTED") return 0;
+
+  // A second of grace on top: the router's estimate is rounded, and asking one
+  // tick early only wastes the request.
+  const wait = (error.retryAfterMs || 0) + 1000;
+
+  if (wait <= 1000 || wait > MAX_WAIT_MS) return 0;
+
+  // Room for the wait AND for the request that follows it.
+  if (deadline && now + wait + 5000 >= deadline) return 0;
+
+  return wait;
+};
+
+const chat = async (
+  messages,
+  { tools, toolChoice = "auto", temperature = 0, deadline } = {}
+) => {
   if (!isConfigured) {
     throw new FreeLlmError("FREELLM_API_KEY is not set", {
       retryable: true,
@@ -360,9 +432,20 @@ const chat = async (messages, { tools, toolChoice = "auto", temperature = 0 } = 
   if (response.status < 200 || response.status >= 300) {
     const error = errorFor(response);
 
-    if (!RETRY_ONCE.has(error.code)) throw error;
+    // Capacity coming back shortly is worth waiting for; a daily limit is not.
+    const wait = waitFor(error, deadline);
 
-    console.warn(`[ai] ${error.message} Retrying once.`);
+    if (wait > 0) {
+      console.warn(
+        `[ai] every model is busy; waiting ${Math.round(wait / 1000)}s for capacity to return`
+      );
+      await sleep(wait);
+    } else if (!RETRY_ONCE.has(error.code)) {
+      throw error;
+    } else {
+      console.warn(`[ai] ${error.message} Retrying once.`);
+    }
+
     response = await request(CHAT_PATH, payload);
     noteQuota(response.headers || {});
   }
@@ -528,5 +611,13 @@ module.exports = {
   SCREEN_MODEL,
   BASE_URL,
   FreeLlmError,
-  _internals: { errorFor, noteQuota, quotaState: () => quota, RETRY_ONCE },
+  _internals: {
+    errorFor,
+    noteQuota,
+    quotaState: () => quota,
+    RETRY_ONCE,
+    parseSoonestReset,
+    waitFor,
+    MAX_WAIT_MS,
+  },
 };

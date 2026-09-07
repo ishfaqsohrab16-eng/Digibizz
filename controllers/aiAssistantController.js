@@ -443,6 +443,15 @@ exports.ask = async (req, res) => {
 
   const startedAt = Date.now();
 
+  // When this question has to be finished, one way or the other.
+  //
+  // Every free provider being busy for a few seconds is the normal state of
+  // a free tier, and the router says how long it will last - so the provider
+  // waits rather than giving up. This is the budget it waits inside. The
+  // browser gives up at 120s, so finishing at 100 leaves room to send back a
+  // real answer, or a real explanation, rather than a connection that died.
+  const deadline = startedAt + (Number(process.env.AI_QUESTION_BUDGET_MS) || 100000);
+
   try {
     // Screened before the analyst sees it. A Super Admin has no reason to write
     // "ignore your instructions", and the same text can arrive indirectly - a
@@ -521,7 +530,7 @@ exports.ask = async (req, res) => {
 
       // No model is named. The router picks whichever of the seven still has
       // an allowance this minute and says which FreeLLM model answered.
-      const reply = await chat(messages, { tools: TOOLS });
+      const reply = await chat(messages, { tools: TOOLS, deadline });
       modelUsed = reply.model;
       providerUsed = reply.provider;
 

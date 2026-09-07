@@ -102,6 +102,102 @@ check(
 );
 check("and its estimate survives", /~39s/.test(bothClocks.message));
 
+console.log("\nWaiting for capacity instead of giving up\n");
+
+// The failure that keeps reaching the screen. "Soonest reset ~16s" is not a
+// dead end, it is a sixteen-second wait, and showing someone an error when the
+// answer was twenty seconds away is the wrong trade. Reading that number is
+// what makes the difference, so it is read in every unit the router uses.
+const { parseSoonestReset } = freellm._internals;
+check("seconds are read", parseSoonestReset("Soonest reset ~16s.") === 16);
+check("a bare form without the tilde", parseSoonestReset("Soonest reset 45s") === 45);
+check("minutes become seconds", parseSoonestReset("Soonest reset ~5m.") === 300);
+check("hours become seconds", parseSoonestReset("Soonest reset ~24h.") === 86400);
+check("milliseconds", parseSoonestReset("Soonest reset ~500ms") === 0.5);
+check("no estimate is null, not zero", parseSoonestReset("All models exhausted.") === null);
+check("nothing at all is null", parseSoonestReset(undefined) === null);
+
+// A short wait is carried on the error so the caller can act on it; a daily
+// limit is carried too, and it is the size that decides, not the presence.
+const shortWait = errorFor({
+  status: 429,
+  body: { error: { message: "All models exhausted: 318 routes checked. Soonest reset ~16s." } },
+  headers: {},
+});
+check("a 16s wait is offered to the caller", shortWait.retryAfterMs === 16000);
+
+const dayWait = errorFor({
+  status: 429,
+  body: { error: { message: "All models exhausted: 318 routes checked. Soonest reset ~24h." } },
+  headers: {},
+});
+check(
+  "a 24h wait is far past anything worth sitting through",
+  dayWait.retryAfterMs === 86400000
+);
+check(
+  "and both still say what the router said",
+  /~24h/.test(dayWait.message) && /~16s/.test(shortWait.message)
+);
+
+// The decision itself. Pure, and tested here rather than against the live
+// router, because the wait it offers is whatever its providers happen to be
+// doing that second - in three runs it said 16s, 89s and 10m.
+const { waitFor, MAX_WAIT_MS } = freellm._internals;
+const now = 1_000_000;
+const plenty = now + 100000;
+
+check(
+  "a 16s reset is waited out rather than failed",
+  waitFor(shortWait, plenty, now) === 17000,
+  String(waitFor(shortWait, plenty, now))
+);
+check("a 24h reset is not", waitFor(dayWait, plenty, now) === 0);
+
+const tenMinutes = errorFor({
+  status: 429,
+  body: { error: { message: "All models exhausted. Soonest reset ~10m." } },
+  headers: {},
+});
+check("nor is the 10m one seen live", waitFor(tenMinutes, plenty, now) === 0);
+
+// The bound that stops eight rounds of waiting outlasting the browser. With
+// only ten seconds of budget left, a sixteen-second wait must be refused even
+// though it is otherwise short enough.
+check(
+  "a wait that would run past the question's deadline is refused",
+  waitFor(shortWait, now + 10000, now) === 0
+);
+check(
+  "and one that fits is allowed",
+  waitFor(shortWait, now + 30000, now) === 17000
+);
+check("no deadline means only the cap applies", waitFor(shortWait, undefined, now) === 17000);
+check(
+  "the cap is the outer bound",
+  waitFor(
+    errorFor({
+      status: 429,
+      body: { error: { message: `Soonest reset ~${Math.round(MAX_WAIT_MS / 1000) + 5}s.` } },
+      headers: {},
+    }),
+    plenty,
+    now
+  ) === 0
+);
+
+// Only exhausted capacity is waited for. A garbled tool call should be asked
+// again immediately, not slept on.
+check("other failures are not waited for", waitFor(badToolPlaceholder(), plenty, now) === 0);
+
+function badToolPlaceholder() {
+  return errorFor({
+    status: 400,
+    body: { error: { message: "Failed to parse tool call arguments as JSON" } },
+    headers: {},
+  });
+}
+
 // A 404 means two different things and they need different messages. This one
 // is a provider withdrawing a model between the router's catalog sync and the
 // request - seen live, while asking for "auto". Telling someone to unset a
