@@ -1,5 +1,4 @@
-const cerebras = require("./cerebras");
-const groq = require("./groq");
+const freellm = require("./cerebras");
 
 /**
  * One assistant, two accounts.
@@ -35,16 +34,12 @@ const groq = require("./groq");
  */
 
 /** The order models are tried in, best first, within each provider. */
-const CEREBRAS_MODELS = (
-  process.env.CEREBRAS_MODELS || cerebras.MODEL_IDS.join(",")
+const FREELLM_MODELS = (
+  process.env.FREELLM_MODELS || process.env.CEREBRAS_MODELS || freellm.MODEL_IDS.join(",")
 )
   .split(",")
   .map((name) => name.trim())
   .filter(Boolean);
-
-const GROQ_MODELS = [groq.ANALYST_MODEL, ...groq.FALLBACK_MODELS, ...groq.MODEL_IDS].filter(
-  (name, index, all) => all.indexOf(name) === index
-);
 
 /**
  * Every model this can use, in the order it would use them.
@@ -56,9 +51,15 @@ const GROQ_MODELS = [groq.ANALYST_MODEL, ...groq.FALLBACK_MODELS, ...groq.MODEL_
  * that was ever actually useful.
  */
 const CATALOGUE = [
-  ...cerebras.CHAT_MODELS.filter((entry) => CEREBRAS_MODELS.includes(entry.id)),
-  ...GROQ_MODELS.map((id) => groq.CHAT_MODELS.find((entry) => entry.id === id)).filter(
-    Boolean
+  ...FREELLM_MODELS.map(
+    (id) =>
+      freellm.CHAT_MODELS.find((entry) => entry.id === id) || {
+        id,
+        label: id,
+        tagline: "FreeLLM model",
+        speed: "fast",
+        provider: "freellm",
+      }
   ),
 ];
 
@@ -80,20 +81,11 @@ const estimateTokens = (messages, tools) =>
  */
 const candidatesFor = (needed) => {
   const scored = [
-    ...CEREBRAS_MODELS.map((id) => ({
+    ...FREELLM_MODELS.map((id) => ({
       id,
-      provider: "cerebras",
-      chat: cerebras.chat,
-      headroom: cerebras.headroomFor(id),
-      // Cerebras first at equal headroom, because it is several times faster.
-      rank: 0,
-    })),
-    ...GROQ_MODELS.map((id) => ({
-      id,
-      provider: "groq",
-      chat: groq.chatOne,
-      headroom: groq.headroomFor(id),
-      rank: 1,
+      provider: "freellm",
+      chat: freellm.chat,
+      headroom: freellm.headroomFor(id),
     })),
   ];
 
@@ -102,11 +94,8 @@ const candidatesFor = (needed) => {
   const affordable = scored.filter((entry) => entry.headroom >= needed);
   const rest = scored.filter((entry) => entry.headroom < needed && entry.headroom >= 0);
 
-  const byPreference = (a, b) => a.rank - b.rank || b.headroom - a.headroom;
+  const byPreference = (a, b) => b.headroom - a.headroom;
 
-  // Keep Cerebras ahead of Groq even when a Cerebras bucket is too small for
-  // this request. The next Cerebras model gets the first chance; Groq is the
-  // fallback only after Cerebras has no usable capacity left.
   return [...affordable.sort(byPreference), ...rest.sort(byPreference)];
 };
 
@@ -132,9 +121,9 @@ const chat = async (messages, { tools, toolChoice = "auto", temperature = 0 } = 
 
   if (candidates.length === 0) {
     throw new NoModelAvailable(
-      cerebras.isConfigured || groq.isConfigured
+      freellm.isConfigured
         ? "No model has any allowance left this minute. Try again shortly."
-        : "Neither CEREBRAS_API_KEY nor GROQ_API_KEY is set, so the assistant cannot answer anything."
+        : "FREELLM_API_KEY is not set, so the assistant cannot answer anything."
     );
   }
 
@@ -144,7 +133,7 @@ const chat = async (messages, { tools, toolChoice = "auto", temperature = 0 } = 
     // Re-checked as the queue is walked, not just when it was built. A 402 on
     // the first Cerebras model stands the whole account down, and asking its
     // other two would only collect the same answer twice more.
-    if (candidate.provider === "cerebras" && cerebras.headroomFor(candidate.id) < 0) {
+    if (freellm.headroomFor(candidate.id) < 0) {
       continue;
     }
 
@@ -194,7 +183,7 @@ const chat = async (messages, { tools, toolChoice = "auto", temperature = 0 } = 
 };
 
 /** What is left of every allowance, across both providers. */
-const budgetReport = () => [...cerebras.budgetReport(), ...groq.budgetReport()];
+const budgetReport = () => freellm.budgetReport();
 
 /**
  * Screening stays on Groq.
@@ -204,42 +193,33 @@ const budgetReport = () => [...cerebras.budgetReport(), ...groq.budgetReport()];
  * from the analyst - so screening never eats into the budget for answering.
  * It fails open, as it did before.
  */
-const screenPrompt = groq.screenPrompt;
+const screenPrompt = async () => ({ flagged: false, score: 0, screened: false });
 
 /** Is the assistant usable, and by what? */
 const health = async () => {
-  const [cerebrasHealth, groqHealth] = await Promise.all([
-    cerebras.health().catch((error) => ({ ok: false, present: false, reason: error.message })),
-    groq.health().catch((error) => ({ ok: false, present: false, reason: error.message })),
-  ]);
-
-  const catalogue = [
-    ...(cerebrasHealth.catalogue || []),
-    ...(groqHealth.catalogue || []),
-  ];
+  const info = await freellm.health().catch((error) => ({
+    ok: false,
+    present: false,
+    models: [],
+    reason: error.message,
+  }));
 
   return {
     // Ready if EITHER provider can answer. That is the whole point of having
     // two: Cerebras being out of quota is not an outage.
-    present: Boolean(cerebrasHealth.present || groqHealth.present),
+    present: Boolean(info.present),
     providers: {
-      cerebras: {
-        configured: cerebras.isConfigured,
-        reachable: Boolean(cerebrasHealth.present),
-        usable: cerebrasHealth.usable !== false,
-        message: cerebrasHealth.unavailable || cerebrasHealth.reason || null,
-      },
-      groq: {
-        configured: groq.isConfigured,
-        reachable: Boolean(groqHealth.present),
-        usable: true,
-        message: groqHealth.reason || null,
+      freellm: {
+        configured: freellm.isConfigured,
+        reachable: Boolean(info.present),
+        usable: info.usable !== false,
+        message: info.unavailable || info.reason || null,
       },
     },
-    screenAvailable: Boolean(groqHealth.screenAvailable),
-    catalogue,
+    screenAvailable: false,
+    catalogue: info.catalogue || CATALOGUE,
     budgets: budgetReport(),
-    models: [...(cerebrasHealth.models || []), ...(groqHealth.models || [])],
+    models: info.models || [],
   };
 };
 
@@ -250,5 +230,5 @@ module.exports = {
   budgetReport,
   CATALOGUE,
   NoModelAvailable,
-  _internals: { candidatesFor, estimateTokens, CEREBRAS_MODELS, GROQ_MODELS },
+  _internals: { candidatesFor, estimateTokens, FREELLM_MODELS },
 };

@@ -21,7 +21,9 @@ const { parseDuration } = require("./rateLimitHeaders");
  * and the request goes on to Groq, with one line in the log saying why.
  */
 
-const API_BASE_URL = process.env.CEREBRAS_API_BASE_URL || "https://api.cerebras.ai/v1";
+const API_BASE_URL =
+  process.env.FREELLM_API_BASE_URL ||
+  "https://digibizz-program-freellmapi.aeju8m.easypanel.host/v1";
 const API_ORIGIN = new URL(API_BASE_URL);
 const API_HOST = API_ORIGIN.hostname;
 const API_PORT = API_ORIGIN.port ? Number(API_ORIGIN.port) : undefined;
@@ -30,7 +32,7 @@ const API_PREFIX = API_ORIGIN.pathname.replace(/\/$/, "");
 const CHAT_PATH = `${API_PREFIX}/chat/completions`;
 const MODELS_PATH = `${API_PREFIX}/models`;
 
-const API_KEY = process.env.CEREBRAS_API_KEY || "";
+const API_KEY = process.env.FREELLM_API_KEY || "";
 
 /**
  * The models offered, best first.
@@ -42,28 +44,32 @@ const API_KEY = process.env.CEREBRAS_API_KEY || "";
 const CHAT_MODELS = [
   {
     id: "qwen-3.8-27b",
-    label: "Qwen3.8 27B (Cerebras)",
+    label: "Qwen3.8 27B (FreeLLM)",
     tagline: "Highest-capacity model for everyday questions",
     speed: "instant",
-    provider: "cerebras",
+    provider: "freellm",
   },
   {
     id: "gpt-oss-120b",
-    label: "GPT-OSS 120B (Cerebras)",
+    label: "GPT-OSS 120B (FreeLLM)",
     tagline: "Strong fallback for complex questions",
     speed: "instant",
-    provider: "cerebras",
+    provider: "freellm",
   },
   {
     id: "gemma-4-31b",
-    label: "Gemma 4 31B (Cerebras)",
+    label: "Gemma 4 31B (FreeLLM)",
     tagline: "The spare, for when the other two are spent",
     speed: "instant",
-    provider: "cerebras",
+    provider: "freellm",
   },
 ];
 
-const MODEL_IDS = CHAT_MODELS.map((entry) => entry.id);
+const MODEL_IDS = (process.env.FREELLM_MODELS || "")
+  .split(",")
+  .map((id) => id.trim())
+  .filter(Boolean);
+if (MODEL_IDS.length === 0) MODEL_IDS.push(...CHAT_MODELS.map((entry) => entry.id));
 
 const TIMEOUT_MS = Number(process.env.CEREBRAS_TIMEOUT_MS) || 60000;
 const MAX_COMPLETION_TOKENS = Number(process.env.AI_MAX_COMPLETION_TOKENS) || 800;
@@ -228,7 +234,7 @@ const errorFor = ({ status, body, headers }, model) => {
 
   if (status === 401) {
     return new CerebrasError(
-      `Cerebras rejected the API key. Check CEREBRAS_API_KEY. (${detail})`,
+      `FreeLLM rejected the API key. Check FREELLM_API_KEY. (${detail})`,
       { status, retryable: false, code: "BAD_KEY" }
     );
   }
@@ -282,7 +288,7 @@ const errorFor = ({ status, body, headers }, model) => {
  */
 const chat = async (messages, { tools, toolChoice = "auto", temperature = 0, model }) => {
   if (!isConfigured) {
-    throw new CerebrasError("CEREBRAS_API_KEY is not set", { retryable: true });
+    throw new CerebrasError("FREELLM_API_KEY is not set", { retryable: true });
   }
 
   const response = await request(CHAT_PATH, {
@@ -331,7 +337,7 @@ const chat = async (messages, { tools, toolChoice = "auto", temperature = 0, mod
 /** Is the key good, and which of the catalogue can it reach? */
 const health = async () => {
   if (!isConfigured) {
-    return { ok: false, present: false, models: [], reason: "CEREBRAS_API_KEY is not set" };
+    return { ok: false, present: false, models: [], reason: "FREELLM_API_KEY is not set" };
   }
 
   const response = await request(MODELS_PATH);
@@ -349,7 +355,16 @@ const health = async () => {
     present: models.some((id) => MODEL_IDS.includes(id)),
     usable: Date.now() >= unusableUntil,
     unavailable: Date.now() < unusableUntil ? unusableReason : null,
-    catalogue: CHAT_MODELS.filter((entry) => models.includes(entry.id)),
+    catalogue: MODEL_IDS.filter((id) => models.includes(id)).map(
+      (id) =>
+        CHAT_MODELS.find((entry) => entry.id === id) || {
+          id,
+          label: id,
+          tagline: "FreeLLM model",
+          speed: "fast",
+          provider: "freellm",
+        }
+    ),
     models,
   };
 };
@@ -363,5 +378,5 @@ module.exports = {
   CHAT_MODELS,
   MODEL_IDS,
   CerebrasError,
-  _internals: { parseDuration, noteBudget, budgets, errorFor },
+  _internals: { parseDuration, noteBudget, headroomFor, budgets, errorFor },
 };

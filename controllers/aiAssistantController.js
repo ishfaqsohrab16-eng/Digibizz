@@ -5,7 +5,6 @@ const {
   budgetReport,
   CATALOGUE,
 } = require("../servec/providers/analyst");
-const { SCREEN_MODEL } = require("../servec/providers/groq");
 const { checkSelect, MAX_ROWS } = require("../utils/sqlGuard");
 const { describeSchema, describeTables } = require("../utils/dbSchema");
 const { runQuery, hasOwnAccount, missingPassword } = require("../utils/aiReadOnlyDb");
@@ -512,7 +511,7 @@ exports.ask = async (req, res) => {
       rounds += 1;
 
       // No model is named. The router picks whichever of the seven still has
-      // an allowance this minute, Cerebras before Groq, and says which it was.
+      // an allowance this minute and says which FreeLLM model answered.
       const reply = await chat(messages, { tools: TOOLS });
       modelUsed = reply.model;
       providerUsed = reply.provider;
@@ -683,8 +682,8 @@ exports.ask = async (req, res) => {
 
     // A provider being unreachable or misconfigured. The message names which
     // one and what to do, so it is worth showing rather than swallowing.
-    if (error?.name === "GroqError" || error?.name === "CerebrasError") {
-      console.error(`[ai] ${error.name}:`, error.message);
+    if (error?.name === "CerebrasError") {
+      console.error(`[ai] FreeLLM:`, error.message);
       return res.status(503).json({ success: false, message: error.message });
     }
 
@@ -740,7 +739,7 @@ exports.status = async (_req, res) => {
       ...base,
       ready: info.present,
       providers: info.providers,
-      screening: info.screenAvailable ? SCREEN_MODEL : null,
+      screening: null,
       // Only models a key can actually reach AND that can call tools.
       catalogue: info.catalogue.length ? info.catalogue : CATALOGUE,
       // What is left of each model's minute, so "why did that fail" has an
