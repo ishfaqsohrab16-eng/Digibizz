@@ -21,9 +21,14 @@ const { parseDuration } = require("./rateLimitHeaders");
  * and the request goes on to Groq, with one line in the log saying why.
  */
 
-const API_HOST = "api.cerebras.ai";
-const CHAT_PATH = "/v1/chat/completions";
-const MODELS_PATH = "/v1/models";
+const API_BASE_URL = process.env.CEREBRAS_API_BASE_URL || "https://api.cerebras.ai/v1";
+const API_ORIGIN = new URL(API_BASE_URL);
+const API_HOST = API_ORIGIN.hostname;
+const API_PORT = API_ORIGIN.port ? Number(API_ORIGIN.port) : undefined;
+const API_PROTOCOL = API_ORIGIN.protocol;
+const API_PREFIX = API_ORIGIN.pathname.replace(/\/$/, "");
+const CHAT_PATH = `${API_PREFIX}/chat/completions`;
+const MODELS_PATH = `${API_PREFIX}/models`;
 
 const API_KEY = process.env.CEREBRAS_API_KEY || "";
 
@@ -152,6 +157,8 @@ const request = (path, payload) =>
     const req = https.request(
       {
         host: API_HOST,
+        port: API_PORT,
+        protocol: API_PROTOCOL,
         path,
         method: payload ? "POST" : "GET",
         headers: {
