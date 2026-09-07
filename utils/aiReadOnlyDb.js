@@ -25,12 +25,46 @@ const { STATEMENT_TIMEOUT_SECONDS } = require("./sqlGuard");
 const AI_DB_USER = process.env.AI_DB_USER;
 const AI_DB_PASSWORD = process.env.AI_DB_PASSWORD;
 
-const hasOwnAccount = Boolean(AI_DB_USER);
+/**
+ * Half-configured is its own state, and the worst one to handle silently.
+ *
+ * Setting AI_DB_USER without AI_DB_PASSWORD is almost always a forgotten
+ * variable. Connecting anyway fails on authentication and every question
+ * answers "the assistant could not answer that", which sends you looking at
+ * the model. Quietly falling back to the application's own connection would be
+ * worse: it would work, while dropping exactly the protection that setting
+ * AI_DB_USER was meant to add.
+ *
+ * So it is named as the misconfiguration it is, at boot and on the status
+ * endpoint, and the assistant refuses to run queries until it is fixed.
+ */
+const missingPassword = Boolean(AI_DB_USER) && !AI_DB_PASSWORD;
+
+const hasOwnAccount = Boolean(AI_DB_USER) && Boolean(AI_DB_PASSWORD);
+
+if (missingPassword) {
+  console.error(
+    `[ai] AI_DB_USER is set to "${AI_DB_USER}" but AI_DB_PASSWORD is empty.`,
+    "The assistant will not run any queries until both are set - it will not",
+    "fall back to the application's own connection, because that would silently",
+    "give it write access."
+  );
+}
 
 let readOnly = null;
 
 const connection = () => {
   if (readOnly) return readOnly;
+
+  if (missingPassword) {
+    const error = new Error(
+      `AI_DB_USER is set to "${AI_DB_USER}" but AI_DB_PASSWORD is empty. ` +
+        "Set the password for that account, or remove both to run on the " +
+        "application's own connection."
+    );
+    error.code = "EAICONFIG";
+    throw error;
+  }
 
   if (!hasOwnAccount) {
     console.warn(
@@ -114,4 +148,4 @@ const runQuery = async (sql) => {
   return { rows: Array.isArray(rows) ? rows : [rows], ms: Date.now() - startedAt };
 };
 
-module.exports = { runQuery, hasOwnAccount };
+module.exports = { runQuery, hasOwnAccount, missingPassword };

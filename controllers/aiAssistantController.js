@@ -1,7 +1,7 @@
 const { chat, health, MODEL, BASE_URL, OllamaError } = require("../servec/providers/ollama");
 const { checkSelect, MAX_ROWS } = require("../utils/sqlGuard");
 const { describeSchema } = require("../utils/dbSchema");
-const { runQuery, hasOwnAccount } = require("../utils/aiReadOnlyDb");
+const { runQuery, hasOwnAccount, missingPassword } = require("../utils/aiReadOnlyDb");
 
 /**
  * The data assistant.
@@ -396,13 +396,18 @@ exports.status = async (_req, res) => {
 
     return res.json({
       success: true,
-      ready: info.present,
+      // Half-configured counts as not ready. Saying so here is what stops
+      // an authentication failure being read as a problem with the model.
+      ready: info.present && !missingPassword,
       model: MODEL,
       url: BASE_URL,
       readOnlyAccount: hasOwnAccount,
       tables: schema.tables.length,
       maxRows: MAX_ROWS,
-      message: info.present
+      message: missingPassword
+        ? "AI_DB_USER is set but AI_DB_PASSWORD is empty. Set the password for " +
+          "that database account, or remove both variables."
+        : info.present
         ? null
         : info.nearMiss
         ? `Ollama has "${info.nearMiss}" but OLLAMA_MODEL is set to "${MODEL}". ` +
