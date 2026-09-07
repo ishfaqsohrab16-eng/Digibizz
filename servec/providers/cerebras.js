@@ -36,16 +36,16 @@ const API_KEY = process.env.CEREBRAS_API_KEY || "";
  */
 const CHAT_MODELS = [
   {
-    id: "gpt-oss-120b",
-    label: "GPT-OSS 120B (Cerebras)",
-    tagline: "Strongest, and the fastest of the three",
+    id: "qwen-3.8-27b",
+    label: "Qwen3.8 27B (Cerebras)",
+    tagline: "Highest-capacity model for everyday questions",
     speed: "instant",
     provider: "cerebras",
   },
   {
-    id: "qwen-3.8-27b",
-    label: "Qwen3.8 27B (Cerebras)",
-    tagline: "Different training, so a useful second opinion",
+    id: "gpt-oss-120b",
+    label: "GPT-OSS 120B (Cerebras)",
+    tagline: "Strong fallback for complex questions",
     speed: "instant",
     provider: "cerebras",
   },
