@@ -140,5 +140,96 @@ check(
   `${text.length} vs ${asJson.length}`
 );
 
+console.log("\nColumns that are labels, not quantities\n");
+
+// The cards showed "attempt_id - 3,510 total, mean 877.5" for four quiz
+// attempts. Both numbers are arithmetically correct and mean nothing: it is
+// the sum of four primary keys.
+profile = profileRows([
+  { attempt_id: 876, marks_obt: 100 },
+  { attempt_id: 877, marks_obt: 0 },
+  { attempt_id: 878, marks_obt: 90 },
+  { attempt_id: 879, marks_obt: 0 },
+]);
+const attemptId = profile.columns.find((column) => column.name === "attempt_id");
+const marksObt = profile.columns.find((column) => column.name === "marks_obt");
+
+check("an id column is recognised as an identifier", attemptId.role === "identifier");
+check("and is not totalled", attemptId.sum === undefined, String(attemptId.sum));
+check("nor averaged", attemptId.mean === undefined);
+check(
+  "its range is still shown, which is mildly useful",
+  attemptId.min === 876 && attemptId.max === 879
+);
+check(
+  "the real measure beside it is untouched",
+  marksObt.sum === 190 && marksObt.mean === 47.5
+);
+
+// The useful column has to come FIRST, or the four cards on screen are four
+// keys and the marks are hidden behind "8 more columns".
+check(
+  "measures are ordered ahead of identifiers",
+  profile.columns[0].name === "marks_obt",
+  profile.columns.map((c) => c.name).join(", ")
+);
+
+for (const name of ["std_id", "center_id", "std_cnic", "quiz_code", "std_rollno", "user_id"]) {
+  const only = profileRows([{ [name]: 1 }, { [name]: 2 }, { [name]: 3 }]).columns[0];
+  check(name + " is an identifier", only.role === "identifier", only.role);
+}
+
+// The other half: names that merely contain a keyword must stay measures, or
+// the totals people actually want disappear.
+for (const name of ["students", "student_count", "total_marks", "males", "females"]) {
+  const only = profileRows([{ [name]: 10 }, { [name]: 20 }]).columns[0];
+  check(name + " is still a measure", only.role === "measure", only.role);
+  check("and " + name + " keeps its total", only.sum === 30);
+}
+
+console.log("\nColumns with nothing to say\n");
+
+// std_cnic on one student's rows: a single value, repeated. It was drawn as
+// a bar at 100%, which is a chart of the fact that a filter worked.
+profile = profileRows([
+  { std_cnic: "56201-6232048-1", mark: 10 },
+  { std_cnic: "56201-6232048-1", mark: 20 },
+]);
+const cnic = profile.columns.find((column) => column.name === "std_cnic");
+check("one value for every row is a constant", cnic.role === "constant");
+check("and the value itself is what is reported", cnic.value === "56201-6232048-1");
+check("with no bar chart of a single category", cnic.top === undefined);
+
+// attempt_session: a different value on every row. Four bars at 25% each
+// told the reader that four rows are four rows.
+profile = profileRows([
+  { attempt_session: "QZ-a" },
+  { attempt_session: "QZ-b" },
+  { attempt_session: "QZ-c" },
+  { attempt_session: "QZ-d" },
+]);
+check("a value per row is unique, not categorical", profile.columns[0].role === "unique");
+check("and none of them are listed", profile.columns[0].top === undefined);
+check("but the count still is", profile.columns[0].distinct === 4);
+
+// A column that genuinely repeats is still worth breaking down.
+profile = profileRows([{ gender: "Male" }, { gender: "Male" }, { gender: "Female" }]);
+check("a repeating column stays categorical", profile.columns[0].role === "category");
+check("and keeps its breakdown", profile.columns[0].top.length === 2);
+
+console.log("\nWhat the model is told about them\n");
+
+const told = describeProfile(
+  profileRows([
+    { attempt_id: 876, std_cnic: "56201-6232048-1", marks_obt: 100 },
+    { attempt_id: 877, std_cnic: "56201-6232048-1", marks_obt: 0 },
+  ])
+);
+
+check("no total is offered for an id", !/attempt_id.*total/.test(told), told);
+check("it is named as an identifier instead", /attempt_id.*identifier/.test(told), told);
+check("a constant is stated once", /always "56201-6232048-1"/.test(told), told);
+check("the measure keeps its figures", /marks_obt.*total 100/.test(told), told);
+
 console.log(`\n${passed} passed, ${failed} failed`);
 process.exit(failed === 0 ? 0 : 1);

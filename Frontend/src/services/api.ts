@@ -2967,6 +2967,14 @@ export type AiVisual =
 export interface AiColumnProfile {
   name: string;
   type: "number" | "text" | "date";
+  /**
+   * What the column is FOR, which decides what is worth showing.
+   *
+   * A quantity gets a total; an identity does not, because the sum of four
+   * primary keys is a real number about nothing. Decided on the server so the
+   * card and the model agree.
+   */
+  role?: "measure" | "identifier" | "category" | "constant" | "unique" | "date";
   missing: number;
   present: number;
   /** number */
@@ -2980,6 +2988,8 @@ export interface AiColumnProfile {
   /** text */
   distinct?: number;
   top?: Array<{ value: string; count: number }>;
+  /** The single value, when every row shares one. */
+  value?: string;
 }
 
 /**

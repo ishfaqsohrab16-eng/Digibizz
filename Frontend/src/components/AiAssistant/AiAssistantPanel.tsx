@@ -29,6 +29,7 @@ import { useBatch } from "../../context/BatchContext";
 import { isRole, ROLE } from "../../utils/roles";
 import ResultVisual from "./ResultVisual";
 import DataProfile from "./DataProfile";
+import AnswerText from "./AnswerText";
 
 interface Turn {
   id: number;
@@ -424,9 +425,7 @@ const AiAssistantPanel: React.FC = () => {
               {turn.answer && (
                 <div className="mt-3">
                   <div className="rounded-2xl rounded-bl-md border border-slate-200 bg-white px-5 py-4 shadow-sm">
-                    <p className="whitespace-pre-wrap text-[0.95rem] leading-relaxed text-slate-800">
-                      {turn.answer.summary}
-                    </p>
+                    <AnswerText text={turn.answer.summary} />
                   </div>
 
                   {turn.answer.visuals.map((visual, index) => (

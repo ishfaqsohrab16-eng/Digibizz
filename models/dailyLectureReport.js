@@ -66,7 +66,14 @@ const DailyLectureReport = sequelize.define(
       allowNull: false,
     },
     dlr_challenges: {
-      type: DataTypes.STRING(255),
+      // TEXT, like dlr_topics beside it. This is a free-text account of what
+      // went wrong in a lecture, and 255 characters is about three sentences:
+      // a trainer describing a room with the fans off and students leaving
+      // early for their buses wrote 340 and the whole report was rejected
+      // with "Data too long for column 'dlr_challenges'". The report is the
+      // only record of that lecture, so losing it to a field width is the
+      // worst possible outcome.
+      type: DataTypes.TEXT,
       allowNull: false,
     },
     dlr_month: {

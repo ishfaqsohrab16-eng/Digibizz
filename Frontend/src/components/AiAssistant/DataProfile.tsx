@@ -1,5 +1,14 @@
 import React, { useState } from "react";
-import { BarChart3, CalendarRange, ChevronDown, Hash, Type } from "lucide-react";
+import {
+  BarChart3,
+  CalendarRange,
+  ChevronDown,
+  Fingerprint,
+  Hash,
+  Lock,
+  Shuffle,
+  Type,
+} from "lucide-react";
 import { AiColumnProfile, AiProfile } from "../../services/api";
 
 /**
@@ -52,16 +61,26 @@ const Share: React.FC<{ value: number; total: number; label: string; count: numb
   );
 };
 
-const Card: React.FC<{ column: AiColumnProfile; rowCount: number }> = ({ column, rowCount }) => {
-  const Icon =
-    column.type === "number" ? Hash : column.type === "date" ? CalendarRange : Type;
+/**
+ * Icon and colour per role, not per type.
+ *
+ * A key and a quantity are both numbers and want saying completely
+ * differently, which is the whole reason the server labels them.
+ */
+const LOOK: Record<string, { Icon: typeof Hash; tint: string }> = {
+  measure: { Icon: Hash, tint: "text-sky-600 bg-sky-50 ring-sky-100" },
+  date: { Icon: CalendarRange, tint: "text-violet-600 bg-violet-50 ring-violet-100" },
+  category: { Icon: Type, tint: "text-emerald-600 bg-emerald-50 ring-emerald-100" },
+  identifier: { Icon: Fingerprint, tint: "text-slate-500 bg-slate-100 ring-slate-200" },
+  constant: { Icon: Lock, tint: "text-amber-600 bg-amber-50 ring-amber-100" },
+  unique: { Icon: Shuffle, tint: "text-slate-500 bg-slate-100 ring-slate-200" },
+};
 
-  const tint =
-    column.type === "number"
-      ? "text-sky-600 bg-sky-50 ring-sky-100"
-      : column.type === "date"
-        ? "text-violet-600 bg-violet-50 ring-violet-100"
-        : "text-emerald-600 bg-emerald-50 ring-emerald-100";
+const Card: React.FC<{ column: AiColumnProfile; rowCount: number }> = ({ column, rowCount }) => {
+  const role =
+    column.role || (column.type === "number" ? "measure" : column.type === "date" ? "date" : "category");
+
+  const { Icon, tint } = LOOK[role] || LOOK.category;
 
   return (
     <div className="min-w-0 rounded-xl border border-slate-200 bg-white p-3 shadow-sm transition hover:border-slate-300 hover:shadow">
@@ -74,7 +93,8 @@ const Card: React.FC<{ column: AiColumnProfile; rowCount: number }> = ({ column,
         </p>
       </div>
 
-      {column.type === "number" && (
+      {/* A quantity. The total leads, because it is the figure people came for. */}
+      {role === "measure" && (
         <>
           <p className="mt-2 text-xl font-bold leading-none tracking-tight text-slate-900">
             {number(column.sum)}
@@ -97,14 +117,58 @@ const Card: React.FC<{ column: AiColumnProfile; rowCount: number }> = ({ column,
         </>
       )}
 
-      {column.type === "date" && (
+      {/* An identity. No total: "attempt_id - 3,510 total" was four primary
+          keys added together, correct arithmetic about nothing. How many there
+          are is the only honest thing to say. */}
+      {role === "identifier" && (
+        <>
+          <p className="mt-2 text-xl font-bold leading-none tracking-tight text-slate-900">
+            {number(column.distinct)}
+          </p>
+          <p className="text-[11px] text-slate-500">
+            distinct value{column.distinct === 1 ? "" : "s"}
+          </p>
+          {column.min !== undefined && (
+            <p className="mt-2 truncate border-t border-slate-100 pt-2 text-[11px] tabular-nums text-slate-500">
+              {number(column.min)} – {number(column.max)}
+            </p>
+          )}
+        </>
+      )}
+
+      {role === "date" && (
         <>
           <p className="mt-2 text-sm font-bold leading-tight text-slate-900">{column.earliest}</p>
           <p className="text-[11px] text-slate-500">to {column.latest}</p>
         </>
       )}
 
-      {column.type === "text" && (
+      {/* One value across every row. It was drawn as a single bar at 100%,
+          which is a chart of the fact that a filter worked. */}
+      {role === "constant" && (
+        <>
+          <p
+            className="mt-2 truncate text-sm font-bold leading-tight text-slate-900"
+            title={column.value}
+          >
+            {column.value}
+          </p>
+          <p className="text-[11px] text-slate-500">the same on every row</p>
+        </>
+      )}
+
+      {/* A different value on every row - a session key, a CNIC in a list of
+          people. Four bars at 25% each said only that four rows are four rows. */}
+      {role === "unique" && (
+        <>
+          <p className="mt-2 text-xl font-bold leading-none tracking-tight text-slate-900">
+            {number(column.distinct)}
+          </p>
+          <p className="text-[11px] text-slate-500">all different</p>
+        </>
+      )}
+
+      {role === "category" && (
         <>
           <p className="mt-2 text-xl font-bold leading-none tracking-tight text-slate-900">
             {number(column.distinct)}
@@ -113,9 +177,6 @@ const Card: React.FC<{ column: AiColumnProfile; rowCount: number }> = ({ column,
             distinct value{column.distinct === 1 ? "" : "s"}
           </p>
 
-          {/* Only drawn when the column is categorical enough for the shares to
-              mean something - the server leaves `top` off a column of 500 names
-              rather than listing four of them as if they were representative. */}
           {column.top && column.top.length > 0 && (
             <div className="mt-2 space-y-1.5 border-t border-slate-100 pt-2">
               {column.top.map((entry) => (

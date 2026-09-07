@@ -168,6 +168,32 @@ const REQUIRED_ENUM_VALUES = [
 ];
 
 /**
+ * Columns whose type is too small for what people actually put in them.
+ *
+ * sequelize.sync({alter:false}) creates missing tables but never reconciles a
+ * column that already exists, so widening one in the model changes nothing on
+ * a deployed database. The failure is silent until someone writes a long
+ * sentence and loses their work.
+ *
+ * Only ever WIDENS. The check is on the current type, so a column already at
+ * TEXT is left alone and one at VARCHAR is enlarged; nothing is ever narrowed,
+ * and no data can be truncated by running this.
+ */
+const REQUIRED_WIDER_COLUMNS = [
+  {
+    table: "daily_lecture_reports",
+    column: "dlr_challenges",
+    // Anything that is not already a *TEXT/BLOB type is too small.
+    tooSmall: (type) => !/text|blob/i.test(type),
+    definition: "TEXT NOT NULL",
+    reason:
+      "a trainer describing a lecture wrote 340 characters into a VARCHAR(255) " +
+      "and the whole daily report was rejected",
+    migration: "migration/024_widen_lecture_report_challenges.sql",
+  },
+];
+
+/**
  * Columns that must accept NULL.
  *
  * The email module was admissions-only: a campaign required a center and a
@@ -184,6 +210,39 @@ const REQUIRED_ENUM_VALUES = [
  * migration/019_email_module_list_only.sql is the same change written out.
  */
 const REQUIRED_NULLABLE_COLUMNS = [
+  // The audit log's scope columns. A change is tagged with the course, centre
+  // and batch it belongs to, and most changes belong to none of them - a
+  // document upload, a user's own profile - so all three are nullable in the
+  // model. The deployed table was created before that and still says NOT NULL,
+  // which sync({alter:false}) will never reconcile.
+  //
+  // The result is a log line per save, for every save, of every model that has
+  // no course:
+  //
+  //   [audit] could not record updated on StudentsDocs: Column 'course_id'
+  //   cannot be null
+  //
+  // The operation itself survives - auditing is deliberately non-fatal - but
+  // the change goes unrecorded, which is the one thing an audit log must not
+  // do quietly.
+  {
+    table: "activity_log",
+    column: "course_id",
+    definition:
+      "INT NULL DEFAULT NULL COMMENT 'Course this change belongs to, when it belongs to one.'",
+  },
+  {
+    table: "activity_log",
+    column: "center_id",
+    definition:
+      "INT NULL DEFAULT NULL COMMENT 'Centre this change belongs to, when it belongs to one.'",
+  },
+  {
+    table: "activity_log",
+    column: "tb_id",
+    definition:
+      "INT NULL DEFAULT NULL COMMENT 'Batch this change belongs to, when it belongs to one.'",
+  },
   {
     table: "email_campaigns",
     column: "tb_id",
@@ -271,6 +330,33 @@ const getColumnType = async (table, column) => {
   return rows?.[0]?.type || null;
 };
 
+const ensureWiderColumns = async () => {
+  for (const item of REQUIRED_WIDER_COLUMNS) {
+    try {
+      const columnType = await getColumnType(item.table, item.column);
+
+      // Absent entirely, or already big enough. Checking first keeps startup
+      // quiet on a database that is already correct.
+      if (!columnType || !item.tooSmall(columnType)) continue;
+
+      await sequelize.query(
+        `ALTER TABLE \`${item.table}\` MODIFY COLUMN \`${item.column}\` ${item.definition}`
+      );
+      console.log(
+        `[schema] widened ${item.table}.${item.column} from ${columnType} to ${item.definition}`
+      );
+    } catch (error) {
+      console.error(
+        `[schema] COULD NOT WIDEN ${item.table}.${item.column}: ${error.message}\n` +
+          `[schema] Saving will fail with "Data too long for column '${item.column}'" - ${item.reason}.\n` +
+          `[schema] Run it manually:\n` +
+          `[schema]   ALTER TABLE \`${item.table}\` MODIFY COLUMN \`${item.column}\` ${item.definition};\n` +
+          `[schema] (or apply ${item.migration})`
+      );
+    }
+  }
+};
+
 const ensureEnumValues = async () => {
   for (const item of REQUIRED_ENUM_VALUES) {
     try {
@@ -343,6 +429,7 @@ const ensureSchema = async () => {
   // the ENUMs are widened before NOT NULL is relaxed so the second MODIFY
   // carries the full value list rather than re-narrowing what the first fixed.
   await ensureEnumValues();
+  await ensureWiderColumns();
   await ensureNullableColumns();
 };
 
@@ -350,5 +437,6 @@ module.exports = {
   ensureSchema,
   REQUIRED_COLUMNS,
   REQUIRED_ENUM_VALUES,
+  REQUIRED_WIDER_COLUMNS,
   REQUIRED_NULLABLE_COLUMNS,
 };

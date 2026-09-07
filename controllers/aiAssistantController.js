@@ -11,6 +11,7 @@ const { describeSchema, describeTables } = require("../utils/dbSchema");
 const { runQuery, hasOwnAccount, missingPassword } = require("../utils/aiReadOnlyDb");
 const { datasetsFor, remember } = require("../utils/aiConversations");
 const { profileRows, describeProfile } = require("../utils/resultProfile");
+const { cleanAnswerText } = require("../utils/answerText");
 
 /**
  * The data assistant.
@@ -354,6 +355,26 @@ const normaliseAssistantMessage = (message) => {
   return normalised;
 };
 
+/**
+ * The tables a statement reads from.
+ *
+ * Used to answer an unknown-column error with the columns that DO exist, so
+ * the model corrects itself instead of guessing another name. Only FROM and
+ * JOIN, which is every table a SELECT can read; a name it gets wrong here
+ * simply comes back as "not found", which is itself useful.
+ */
+const tablesIn = (sql) => {
+  const names = new Set();
+
+  for (const [, name] of String(sql || "").matchAll(
+    /\b(?:from|join)\s+`?([a-z_][\w]*)`?/gi
+  )) {
+    names.add(name.toLowerCase());
+  }
+
+  return [...names].slice(0, 8);
+};
+
 /** Tool arguments arrive as a JSON string, and are not always valid. */
 const parseArguments = (raw) => {
   try {
@@ -609,6 +630,19 @@ exports.ask = async (req, res) => {
     let providerUsed = null;
 
     while (rounds < MAX_ROUNDS) {
+      // The budget is checked BETWEEN rounds too, not only inside a single
+      // call. The router sometimes picks a slow model - one question was
+      // answered by a local nemotron in 264 seconds across four rounds, no
+      // single one of which came near the per-request timeout. Stopping here
+      // returns the data already gathered instead of starting a fifth round
+      // that the browser will not wait for.
+      if (Date.now() > deadline) {
+        console.warn(
+          `[ai] out of time after ${rounds} round(s); answering with what was gathered`
+        );
+        break;
+      }
+
       rounds += 1;
 
       // No model is named. The router picks whichever of the seven still has
@@ -622,8 +656,13 @@ exports.ask = async (req, res) => {
       if (calls.length === 0) {
         // No tool call. Either it answered in prose - which is usable - or it
         // has nothing to say. Either way the loop is over.
-        const content = String(reply.message.content || "").trim();
-        if (content) answer = { summary: content, visuals: [] };
+        //
+        // Usable only after cleaning. A model that skips the tool tends to
+        // publish its reasoning with the answer, and to invent an XML protocol
+        // out of the tool's own field names; both reached a user's screen
+        // verbatim, monologue and </think> and all. See utils/answerText.js.
+        const salvaged = cleanAnswerText(reply.message.content);
+        if (salvaged.summary) answer = salvaged;
         break;
       }
 
@@ -647,7 +686,10 @@ exports.ask = async (req, res) => {
         }
 
         if (name === "present_answer") {
-          answer = args;
+          // Cleaned defensively. The tool asks for plain text, but a reasoning
+          // model will sometimes hand back its whole monologue in the summary
+          // field, and there is no second chance to notice.
+          answer = { ...args, summary: cleanAnswerText(args.summary).summary };
           presented = true;
           messages.push({
             role: "tool",
@@ -718,14 +760,28 @@ exports.ask = async (req, res) => {
         } catch (error) {
           // A failed query is information too - usually a column that does not
           // exist, which the model can correct from the message.
+          //
+          // But "Unknown column 'std_id' in 'where clause'" on its own is not
+          // enough to correct from, and one real question burned five rounds
+          // proving it: std_id, then std_cnic, then std_id again, guessing at
+          // tables it had never asked about. So the answer now carries the
+          // actual columns of the tables the query named. It costs a few
+          // hundred tokens on the round that failed, and saves the two or
+          // three rounds that guessing takes.
           console.warn(`[ai] query failed: ${error.message}`);
+
+          const help = /unknown column|no such column|unknown field/i.test(error.message)
+            ? await describeTables(tablesIn(verdict.sql)).catch(() => "")
+            : "";
+
           messages.push({
             role: "tool",
             tool_call_id: call.id,
-            content: `That query failed: ${String(error.message).slice(
-              0,
-              300
-            )}. Check the names against the schema and try again.`,
+            content:
+              `That query failed: ${String(error.message).slice(0, 300)}.` +
+              (help
+                ? `\n\nThe tables you referenced actually have these columns - use them, do not guess again:\n${help}`
+                : " Check the names against the schema and try again."),
           });
         }
       }
@@ -861,6 +917,7 @@ exports._internals = {
   repairVisuals,
   summariseRows,
   normaliseAssistantMessage,
+  tablesIn,
   TOOLS,
   SYSTEM_PROMPT,
 };
