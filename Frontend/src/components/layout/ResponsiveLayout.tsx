@@ -62,6 +62,7 @@ import LearningResourceForm from "../LearningResources/LearningResourceForm";
 import InterviewPortal from "../AdmissionPortal/InterviewPortal";
 import AdmissionControlPanel from "../AdmissionPortal/AdmissionControlPanel";
 import EmailCampaigns from "../EmailCampaign/EmailCampaigns";
+import AiAssistantPanel from "../AiAssistant/AiAssistantPanel";
 import { EMAIL_CAMPAIGNS_ENABLED } from "../../utils/features";
 import MasterTrainerDashboard from "../dashboards/MasterTrainerDashboard";
 import QuizResultTable from "../Quiz/QuizResultTable";
@@ -379,6 +380,10 @@ const ResponsiveLayout: React.FC = () => {
       // Currently switched off (utils/features.ts): the sidebar entry is
       // hidden, but this case still has to answer, because a bookmark or a
       // typed URL arrives here without ever touching the sidebar.
+      // Super Admin only; the component and both endpoints enforce that too.
+      case "AskTheData":
+        return <AiAssistantPanel />;
+
       case "EmailCampaigns":
         return EMAIL_CAMPAIGNS_ENABLED ? (
           <EmailCampaigns />

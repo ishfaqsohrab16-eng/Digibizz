@@ -15,6 +15,7 @@ import {
   TicketIcon,
   BookOpen,
   Mail,
+  Sparkles,
 } from "lucide-react";
 import { NavItem } from "../NavItem";
 import { useEffect, useState } from "react";
@@ -158,6 +159,17 @@ export const DashboardNav = ({
           used, but stays SuperAdmin-only - the block above also admits
           ContentAdmin, who must not be able to mail applicants.
           Currently switched off; see utils/features.ts. */}
+      {/* Answers across every centre, batch and student with no scoping by
+          role, so it is Super Admin only. The endpoints enforce the same. */}
+      {isRole(userType, ROLE.SUPER_ADMIN) && (
+        <NavItem
+          icon={<Sparkles size={20} />}
+          label="Ask the Data"
+          onClick={() => openForm("AskTheData")}
+          href={createNavUrl("/dashboard/AskTheData")}
+          isPermanentBorder
+        />
+      )}
       {EMAIL_CAMPAIGNS_ENABLED && isRole(userType, ROLE.SUPER_ADMIN) && (
         <NavItem
           icon={<Mail size={20} />}

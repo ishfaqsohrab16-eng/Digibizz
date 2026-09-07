@@ -2937,6 +2937,85 @@ export interface EnrollmentPreview {
   eligible: boolean;
 }
 
+// ---------------------------------------------------------------------------
+// Data assistant (Super Admin only)
+// ---------------------------------------------------------------------------
+
+/** One thing the assistant wants drawn, already checked against the rows. */
+export type AiVisual =
+  | { type: "table"; title: string; queryIndex: number }
+  | { type: "stat"; title: string; queryIndex: number; valueField: string }
+  | {
+      type: "bar" | "line" | "area";
+      title: string;
+      queryIndex: number;
+      xField: string;
+      yFields: string[];
+    }
+  | {
+      type: "pie";
+      title: string;
+      queryIndex: number;
+      labelField: string;
+      valueField: string;
+    };
+
+/** What it ran to get there. Shown so the answer can be checked. */
+export interface AiQuery {
+  sql: string;
+  reason: string;
+  rowCount: number;
+  ms: number;
+  rows: Array<Record<string, any>>;
+}
+
+export interface AiAnswer {
+  success: boolean;
+  answered: boolean;
+  summary: string;
+  visuals: AiVisual[];
+  queries: AiQuery[];
+  rounds: number;
+  ms: number;
+}
+
+export interface AiStatus {
+  success: boolean;
+  ready: boolean;
+  model: string;
+  url: string;
+  /** True when queries run as a SELECT-only database account. */
+  readOnlyAccount: boolean;
+  tables?: number;
+  maxRows?: number;
+  message: string | null;
+}
+
+export const getAiStatus = async () => {
+  const response = await axios.get(`${API_URL}/ai-assistant/status`, {
+    headers: { Authorization: `Bearer ${getCurrentUserToken()}` },
+  });
+  return response.data as AiStatus;
+};
+
+export const askAiAssistant = async (
+  question: string,
+  history: Array<{ role: "user" | "assistant"; content: string }>
+) => {
+  const response = await axios.post(
+    `${API_URL}/ai-assistant/ask`,
+    { question, history },
+    {
+      headers: { Authorization: `Bearer ${getCurrentUserToken()}` },
+      // A local model on a busy machine is genuinely slow, and several
+      // queries may run before it answers. The default would abandon a
+      // request that is still working.
+      timeout: 180000,
+    }
+  );
+  return response.data as AiAnswer;
+};
+
 /** Details for the confirmation popup shown before enrolling a candidate. */
 export const getEnrollmentPreview = async (
   candId: number
