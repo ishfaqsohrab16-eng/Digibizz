@@ -2980,34 +2980,54 @@ export interface AiAnswer {
   queries: AiQuery[];
   rounds: number;
   ms: number;
-  /** Which model actually answered - not always the one picked. */
+  /** Which model answered. Chosen by the server from whatever had capacity. */
   model?: string;
-  /** True when the picked model was unavailable and another stood in. */
+  /** Which account it came from: "cerebras" or "groq". */
+  provider?: string;
+  /** True when the first choice was busy and another model stood in. */
   usedFallback?: boolean;
 }
 
-/** A model the panel may offer, and what it is good at. */
+/** A model the assistant may use, and what it is good at. */
 export interface AiModel {
   id: string;
   label: string;
   tagline: string;
-  detail: string;
-  speed: "fastest" | "fast";
+  detail?: string;
+  speed?: "instant" | "fastest" | "fast";
+  provider?: string;
   recommended?: boolean;
+}
+
+/** What is left of one model's per-minute token allowance. */
+export interface AiBudget {
+  provider: string;
+  model: string;
+  remaining: number | null;
+  limit: number | null;
+  resetsIn: number;
+  unavailable?: string | null;
 }
 
 export interface AiStatus {
   success: boolean;
   ready: boolean;
-  model: string;
-  provider?: string;
   /** True when queries run as a SELECT-only database account. */
   readOnlyAccount: boolean;
   /** The prompt-injection classifier, when the key can reach it. */
   screening?: string | null;
-  /** Models that can be picked: reachable, and able to call tools. */
+  /**
+   * Every model the assistant may draw on. Informational: there is no picker,
+   * because the right model is whichever still has an allowance this minute
+   * and only the server can see that.
+   */
   catalogue?: AiModel[];
-  fallbacks?: string[];
+  /** Per provider: whether it is configured, reachable, and usable. */
+  providers?: Record<
+    string,
+    { configured: boolean; reachable: boolean; usable: boolean; message: string | null }
+  >;
+  budgets?: AiBudget[];
   tables?: number;
   maxRows?: number;
   message: string | null;
@@ -3027,13 +3047,14 @@ export const askAiAssistant = async (
    * Identifies the train of thought, so data fetched for one question can
    * answer the next without querying again.
    */
-  conversationId?: string,
-  /** The model picked in the panel. Ignored if it is not in the catalogue. */
-  model?: string
+  conversationId?: string
 ) => {
   const response = await axios.post(
     `${API_URL}/ai-assistant/ask`,
-    { question, history, conversationId, model },
+    // No model is named. The server picks whichever of its models still has a
+    // token allowance this minute, Cerebras before Groq, and reports which
+    // one answered.
+    { question, history, conversationId },
     {
       headers: { Authorization: `Bearer ${getCurrentUserToken()}` },
       // Two minutes. Groq answers a round in well under a second, so a

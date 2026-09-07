@@ -2,15 +2,12 @@ const {
   chat,
   screenPrompt,
   health,
-  ANALYST_MODEL,
-  SCREEN_MODEL,
-  CHAT_MODELS,
-  resolveModel,
-  isConfigured,
-  GroqError,
-} = require("../servec/providers/groq");
+  budgetReport,
+  CATALOGUE,
+} = require("../servec/providers/analyst");
+const { SCREEN_MODEL } = require("../servec/providers/groq");
 const { checkSelect, MAX_ROWS } = require("../utils/sqlGuard");
-const { describeSchema } = require("../utils/dbSchema");
+const { describeSchema, describeTables } = require("../utils/dbSchema");
 const { runQuery, hasOwnAccount, missingPassword } = require("../utils/aiReadOnlyDb");
 const { datasetsFor, remember } = require("../utils/aiConversations");
 
@@ -51,20 +48,54 @@ const MAX_HISTORY = 12;
 /**
  * Rows fed back to the model per query.
  *
- * Raised from 60 now that the analyst carries 131k tokens of context. The old
- * limit was sized for a local 8B model and was throwing away detail these
- * models can comfortably read and reason over.
+ * Budgeted by SIZE, not by a row count. A flat 150 rows is meaningless when
+ * one result is 150 pairs of (name, count) and the next is 150 rows of thirty
+ * columns each: the same number costs a few hundred tokens or several
+ * thousand. The allowance is 8,000 tokens a minute, so the difference decides
+ * whether the next round runs.
+ *
+ * Wide results are therefore cut to fewer rows, narrow ones to more, and the
+ * model is always told the true total so it never mistakes the sample for the
+ * answer.
  */
 const ROWS_SHOWN_TO_MODEL = 150;
+const ROW_CHARS_SHOWN_TO_MODEL = 6000;
 
 /**
  * The tools the analyst may call.
  *
- * Two, deliberately. Anything else it might want - more rows, a different
+ * Three. Anything the model might want from the data - more rows, a different
  * grain, a different join - is another SELECT, and giving it exactly one way to
  * reach the database keeps the guard the only door.
+ *
+ * describe_tables is the exception, and it exists to buy back tokens. The
+ * prompt used to carry all 47 tables and 477 columns, which is about 2,500
+ * tokens on an allowance of 8,000 a minute; a question needing two rounds was
+ * therefore over budget before anyone had typed it. Now the prompt carries the
+ * table NAMES and the model asks for the columns of the four or five it needs.
  */
 const TOOLS = [
+  {
+    type: "function",
+    function: {
+      name: "describe_tables",
+      description:
+        "Get the columns, types and join keys of specific tables. Call this " +
+        "first, for every table you intend to query, before writing any SQL. " +
+        "Guessing a column name costs a failed query; asking costs nothing.",
+      parameters: {
+        type: "object",
+        properties: {
+          tables: {
+            type: "array",
+            items: { type: "string" },
+            description: "Up to 8 table names, exactly as listed in THE DATABASE.",
+          },
+        },
+        required: ["tables"],
+      },
+    },
+  },
   {
     type: "function",
     function: {
@@ -137,26 +168,22 @@ const TOOLS = [
                     "funnel",
                   ],
                   description:
-                    "stat: one headline number. table: detail read row by row. " +
-                    "list: a short ranked list. bar: a breakdown across categories. " +
-                    "hbar: the same when labels are long, like centre names. " +
-                    "stackedBar: parts of a whole across categories. line or area: " +
-                    "anything over time. pie or donut: shares of one total, up to " +
-                    "about six slices. scatter: two numbers against each other. " +
-                    "radar: several measures compared across a few subjects. " +
-                    "radial: progress towards a target. treemap: relative size " +
-                    "across many categories. funnel: stages that narrow, like " +
-                    "applied to interviewed to enrolled.",
+                    "stat one number; table detail; list short ranking; bar by " +
+                    "category; hbar same with long labels; stackedBar parts of a " +
+                    "whole; line/area over time; pie/donut shares of one total " +
+                    "(max ~6); scatter two numbers; radar few subjects, several " +
+                    "measures; radial progress to a target; treemap many " +
+                    "categories by size; funnel narrowing stages.",
                 },
                 title: { type: "string" },
                 queryIndex: { type: "integer" },
-                valueField: { type: "string", description: "stat and pie" },
-                labelField: { type: "string", description: "pie" },
-                xField: { type: "string", description: "bar, line, area" },
+                valueField: { type: "string", description: "stat, pie, donut, treemap, funnel, radial, list" },
+                labelField: { type: "string", description: "pie, donut, treemap, funnel, radial, list" },
+                xField: { type: "string", description: "bar, hbar, stackedBar, line, area, radar, scatter" },
                 yFields: {
                   type: "array",
                   items: { type: "string" },
-                  description: "bar, line, area - one entry per series",
+                  description: "one per series, for the x-axis types",
                 },
               },
               required: ["type", "title", "queryIndex"],
@@ -172,6 +199,9 @@ const TOOLS = [
 const SYSTEM_PROMPT = `You are the data assistant for the Digibizz LMS, a digital skills training programme run across centres in Balochistan, Pakistan.
 
 You answer questions about the programme by querying its MySQL database with the run_sql tool, then explaining what you found with present_answer.
+
+FIND THE COLUMNS BEFORE YOU WRITE SQL
+You are given the table NAMES, not their columns. Before your first query, call describe_tables with every table the question is likely to touch - including the ones you will join through - and read what comes back. A guessed column name is a failed query and a wasted round. If a name you expected is not in the list, look at the list again: the table you want may be spelled differently.
 
 WORK OUT WHAT IS BEING ASKED BEFORE YOU QUERY
 Read the question for what the person wants to know, not for keywords.
@@ -190,7 +220,8 @@ So when a question touches anything you have not already looked at this conversa
 - how many rows a filter actually matches, before building a report on it
 - whether a join returns what you expect, at the grain you expect, on a few rows
   (add LIMIT 5 and read them)
-These cost nothing and they are what stops an answer being wrong in a way nobody notices. Once you know the shape, write the real query.
+This is what stops an answer being wrong in a way nobody notices. Once you know the shape, write the real query.
+Rounds are not free, so put every query you already know you need into ONE reply - several run_sql calls at once - rather than one per round. Orienting queries especially: ask for the distinct values, the row count and the sample together.
 
 QUERY UNTIL YOU CAN ACTUALLY ANSWER
 Call run_sql as many times as you need. If a result is empty, at the wrong grain, or lumps together things that should be separate, query again with a better one - that is expected, not a failure. Fetch each piece separately rather than forcing one enormous join, and when comparing, fetch both sides.
@@ -215,10 +246,18 @@ If a question cannot be answered from the database, say so plainly with no visua
 If something in the data looks wrong - a count far larger than the batch, a category you did not expect, a total that does not add up - say so in the summary rather than presenting it flatly. Being told a figure looks odd is more useful than being given it without comment.`;
 
 /** The rows the model sees, trimmed so a wide result does not fill its context. */
-const summariseRows = (rows) => {
+const summariseRows = (rows, budget = ROW_CHARS_SHOWN_TO_MODEL) => {
   if (rows.length === 0) return "no rows";
 
-  const shown = rows.slice(0, ROWS_SHOWN_TO_MODEL);
+  let shown = rows.slice(0, ROWS_SHOWN_TO_MODEL);
+
+  // Drop rows until the sample fits the budget. Halving rather than stepping
+  // one row at a time: a result of thirty columns needs to lose most of its
+  // rows, and re-serialising it row by row to find that out is wasteful.
+  while (shown.length > 1 && JSON.stringify(shown).length > budget) {
+    shown = shown.slice(0, Math.floor(shown.length / 2));
+  }
+
   const note =
     rows.length > shown.length
       ? `\n(${rows.length} rows in total; the first ${shown.length} are shown)`
@@ -385,11 +424,6 @@ exports.ask = async (req, res) => {
   // names nothing and grants nothing; a missing one simply means no memory.
   const conversationId = String(req.body?.conversationId || "").slice(0, 64);
 
-  // Whatever the panel picked, checked against the catalogue. An unknown
-  // name falls back to the default rather than being passed through, so a
-  // stale browser tab cannot select a model that no longer exists - or one
-  // that cannot call tools, which would answer without reading the database.
-  const chosenModel = resolveModel(req.body?.model);
 
   if (!question) {
     return res.status(400).json({ success: false, message: "Ask a question first" });
@@ -417,20 +451,26 @@ exports.ask = async (req, res) => {
       });
     }
 
-    const { text: schema } = await describeSchema();
+    // The INDEX, not the full listing: table names and sizes only. The columns
+    // are fetched per table through describe_tables, which is what keeps a
+    // question inside the minute's token allowance.
+    const { index: schema } = await describeSchema();
 
+    // Listed, not reproduced. Carrying eight sample rows of every dataset from
+    // earlier in the conversation was costing more than the schema did, and the
+    // model does not need to re-read rows it has already reasoned about - it
+    // needs to know they are there and what is in them.
     const carried = datasetsFor(conversationId);
     const carriedDescription = carried.length
       ? `\n\nDATA ALREADY FETCHED IN THIS CONVERSATION\n${carried
           .map(
             (dataset, index) =>
-              `[${index}] ${dataset.reason || dataset.sql}\n` +
-              `    columns: ${Object.keys(dataset.rows[0] || {}).join(", ") || "none"}\n` +
-              `    ${dataset.rowCount} row(s); first rows: ${summariseRows(
-                dataset.rows.slice(0, 8)
-              )}`
+              `[${index}] ${(dataset.reason || dataset.sql).slice(0, 140)}` +
+              ` - ${dataset.rowCount} row(s): ${
+                Object.keys(dataset.rows[0] || {}).join(", ") || "no columns"
+              }`
           )
-          .join("\n")}`
+          .join("\n")}\nAsk for any of these again with run_sql only if you need the rows themselves; to chart or tabulate one, just reference its index.`
       : "";
 
     const history = Array.isArray(req.body?.history)
@@ -448,7 +488,7 @@ exports.ask = async (req, res) => {
     const messages = [
       {
         role: "system",
-        content: `${SYSTEM_PROMPT}\n\nTHE DATABASE\n${schema}${carriedDescription}`,
+        content: `${SYSTEM_PROMPT}\n\nTHE DATABASE (table names, with approximate row counts - call describe_tables for columns)\n${schema}${carriedDescription}`,
       },
       ...history,
       { role: "user", content: question },
@@ -464,14 +504,18 @@ exports.ask = async (req, res) => {
 
     let answer = null;
     let rounds = 0;
-    let modelUsed = ANALYST_MODEL;
+    let modelUsed = null;
+    let providerUsed = null;
     let usedFallback = false;
 
     while (rounds < MAX_ROUNDS) {
       rounds += 1;
 
-      const reply = await chat(messages, { tools: TOOLS, model: chosenModel });
+      // No model is named. The router picks whichever of the seven still has
+      // an allowance this minute, Cerebras before Groq, and says which it was.
+      const reply = await chat(messages, { tools: TOOLS });
       modelUsed = reply.model;
+      providerUsed = reply.provider;
       usedFallback = usedFallback || reply.usedFallback;
 
       const calls = reply.message.tool_calls || [];
@@ -514,11 +558,21 @@ exports.ask = async (req, res) => {
           continue;
         }
 
+        if (name === "describe_tables") {
+          const asked = Array.isArray(args.tables) ? args.tables : [args.tables];
+          messages.push({
+            role: "tool",
+            tool_call_id: call.id,
+            content: await describeTables(asked),
+          });
+          continue;
+        }
+
         if (name !== "run_sql") {
           messages.push({
             role: "tool",
             tool_call_id: call.id,
-            content: `Unknown tool "${name}". Use run_sql or present_answer.`,
+            content: `Unknown tool "${name}". Use describe_tables, run_sql or present_answer.`,
           });
           continue;
         }
@@ -592,6 +646,7 @@ exports.ask = async (req, res) => {
         queries: results,
         rounds,
         model: modelUsed,
+        provider: providerUsed,
         usedFallback,
         ms: Date.now() - startedAt,
       });
@@ -602,7 +657,8 @@ exports.ask = async (req, res) => {
     console.log(
       `[ai] "${question.slice(0, 80)}" answered in ${rounds} round(s), ` +
         `${fetchedNow.length} new quer(ies), ${Date.now() - startedAt}ms, ` +
-        `by ${modelUsed}${usedFallback ? " (fallback)" : ""}, user ${req.user.id}`
+        `by ${providerUsed}/${modelUsed}${usedFallback ? " (fallback)" : ""}, ` +
+        `user ${req.user.id}`
     );
 
     return res.json({
@@ -613,12 +669,22 @@ exports.ask = async (req, res) => {
       queries: results,
       rounds,
       model: modelUsed,
+      provider: providerUsed,
       usedFallback,
       ms: Date.now() - startedAt,
     });
   } catch (error) {
-    if (error instanceof GroqError) {
-      console.error("[ai] groq:", error.message);
+    // Every model declining is a 429, not a fault: the message already says
+    // how long to wait, and the panel shows it as a wait rather than a crash.
+    if (error?.code === "RATE_LIMITED") {
+      console.warn("[ai] no model available:", error.message);
+      return res.status(429).json({ success: false, message: error.message });
+    }
+
+    // A provider being unreachable or misconfigured. The message names which
+    // one and what to do, so it is worth showing rather than swallowing.
+    if (error?.name === "GroqError" || error?.name === "CerebrasError") {
+      console.error(`[ai] ${error.name}:`, error.message);
       return res.status(503).json({ success: false, message: error.message });
     }
 
@@ -640,19 +706,11 @@ exports.ask = async (req, res) => {
 exports.status = async (_req, res) => {
   const base = {
     success: true,
-    model: ANALYST_MODEL,
-    provider: "groq",
     readOnlyAccount: hasOwnAccount,
+    // Every model the assistant may use, in the order it would try them.
+    // Informational now: there is no picker, and the router decides.
+    catalogue: CATALOGUE,
   };
-
-  if (!isConfigured) {
-    return res.json({
-      ...base,
-      ready: false,
-      catalogue: CHAT_MODELS,
-      message: "GROQ_API_KEY is not set. Add it to the environment and restart.",
-    });
-  }
 
   if (missingPassword) {
     return res.json({
@@ -667,26 +725,40 @@ exports.status = async (_req, res) => {
     const info = await health();
     const schema = await describeSchema();
 
+    // One provider being out is not an outage - that is the point of having
+    // two - so it is reported as a note beside a working assistant rather
+    // than as a failure.
+    const notes = Object.entries(info.providers)
+      .filter(([, provider]) => provider.configured && provider.message)
+      .map(([name, provider]) => `${name}: ${provider.message}`);
+
+    const unconfigured = Object.entries(info.providers)
+      .filter(([, provider]) => !provider.configured)
+      .map(([name]) => `${name.toUpperCase()}_API_KEY`);
+
     return res.json({
       ...base,
       ready: info.present,
+      providers: info.providers,
       screening: info.screenAvailable ? SCREEN_MODEL : null,
-      fallbacks: info.fallbacks,
-      // Only models this key can reach AND that can call tools.
-      catalogue: info.catalogue,
+      // Only models a key can actually reach AND that can call tools.
+      catalogue: info.catalogue.length ? info.catalogue : CATALOGUE,
+      // What is left of each model's minute, so "why did that fail" has an
+      // answer on the screen rather than in a log.
+      budgets: budgetReport(),
       tables: schema.tables.length,
       maxRows: MAX_ROWS,
       message: info.present
-        ? null
-        : `Your Groq key cannot use "${ANALYST_MODEL}". Available: ${info.models
-            .slice(0, 8)
-            .join(", ")}`,
+        ? notes.join("; ") || null
+        : unconfigured.length
+          ? `${unconfigured.join(" and ")} not set. Add one to the environment and restart.`
+          : `No provider could be reached. ${notes.join("; ")}`,
     });
   } catch (error) {
     return res.json({
       ...base,
       ready: false,
-      message: error instanceof GroqError ? error.message : "Could not reach Groq",
+      message: error?.message || "Could not reach any model provider",
     });
   }
 };

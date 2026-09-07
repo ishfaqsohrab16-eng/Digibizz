@@ -2,8 +2,6 @@ import React, { useCallback, useEffect, useMemo, useRef, useState } from "react"
 import {
   AlertTriangle,
   BarChart3,
-  Check,
-  ChevronDown,
   Copy,
   Database,
   GraduationCap,
@@ -99,8 +97,6 @@ const AiAssistantPanel: React.FC = () => {
   const [elapsed, setElapsed] = useState(0);
   const [openSql, setOpenSql] = useState<Record<string, boolean>>({});
   const [copied, setCopied] = useState<string | null>(null);
-  const [model, setModel] = useState<string>("");
-  const [modelMenuOpen, setModelMenuOpen] = useState(false);
 
   const endRef = useRef<HTMLDivElement>(null);
   const inputRef = useRef<HTMLTextAreaElement>(null);
@@ -119,23 +115,11 @@ const AiAssistantPanel: React.FC = () => {
 
   const loadStatus = useCallback(() => {
     getAiStatus()
-      .then((next) => {
-        setStatus(next);
-        // Default to whichever the server recommends, so the picker is a
-        // refinement rather than a decision you have to make first.
-        setModel(
-          (previous) =>
-            previous ||
-            next.catalogue?.find((entry) => entry.recommended)?.id ||
-            next.model ||
-            ""
-        );
-      })
+      .then(setStatus)
       .catch(() =>
         setStatus({
           success: false,
           ready: false,
-          model: "",
           readOnlyAccount: false,
           message: "Could not check whether the assistant is available.",
         })
@@ -161,15 +145,6 @@ const AiAssistantPanel: React.FC = () => {
   useEffect(() => {
     endRef.current?.scrollIntoView({ behavior: "smooth" });
   }, [turns, asking]);
-
-  // Any click outside closes the model menu. Without this it stays open behind
-  // whatever you clicked next.
-  useEffect(() => {
-    if (!modelMenuOpen) return;
-    const close = () => setModelMenuOpen(false);
-    window.addEventListener("click", close);
-    return () => window.removeEventListener("click", close);
-  }, [modelMenuOpen]);
 
   const copy = (text: string, key: string) => {
     navigator.clipboard?.writeText(text).then(
@@ -210,7 +185,7 @@ const AiAssistantPanel: React.FC = () => {
             : []
         );
 
-        const answer = await askAiAssistant(trimmed, history, conversationId, model);
+        const answer = await askAiAssistant(trimmed, history, conversationId);
         setTurns((previous) =>
           previous.map((turn) =>
             turn.id === id
@@ -238,7 +213,7 @@ const AiAssistantPanel: React.FC = () => {
         inputRef.current?.focus();
       }
     },
-    [asking, turns, conversationId, model]
+    [asking, turns, conversationId]
   );
 
   if (!canUse) {
@@ -260,7 +235,6 @@ const AiAssistantPanel: React.FC = () => {
 
   const blocked = !status?.ready;
   const catalogue: AiModel[] = status?.catalogue || [];
-  const active = catalogue.find((entry) => entry.id === model);
 
   return (
     // Fills the viewport under the app chrome and manages its own scrolling, so
@@ -293,55 +267,21 @@ const AiAssistantPanel: React.FC = () => {
               </span>
             )}
 
-            {/* Which model answers. Each option says what it is FOR, because
-                "20B or 120B" is not a question anyone can answer without it. */}
+            {/* Not a picker any more. Which model to use is not a question
+                anyone can answer from here: it is whichever still has a token
+                allowance this minute, across two accounts, and only the server
+                can see that. What is worth showing is how many are standing by,
+                because that is what makes a busy minute survivable. */}
             {catalogue.length > 0 && (
-              <div className="relative" onClick={(event) => event.stopPropagation()}>
-                <button
-                  onClick={() => setModelMenuOpen((open) => !open)}
-                  disabled={asking}
-                  className="inline-flex items-center gap-2 rounded-lg border border-slate-300 bg-white px-3 py-1.5 text-xs font-medium text-slate-700 transition hover:border-emerald-400 hover:bg-emerald-50 disabled:opacity-40"
-                >
-                  <Zap className="h-3.5 w-3.5 text-emerald-600" />
-                  {active?.label || "Model"}
-                  <ChevronDown className="h-3.5 w-3.5 text-slate-400" />
-                </button>
-
-                {modelMenuOpen && (
-                  <div className="absolute right-0 z-30 mt-2 w-80 overflow-hidden rounded-xl border border-slate-200 bg-white shadow-xl">
-                    {catalogue.map((entry) => (
-                      <button
-                        key={entry.id}
-                        onClick={() => {
-                          setModel(entry.id);
-                          setModelMenuOpen(false);
-                        }}
-                        className={`flex w-full flex-col gap-0.5 border-b border-slate-100 px-4 py-3 text-left transition last:border-0 hover:bg-emerald-50 ${
-                          entry.id === model ? "bg-emerald-50/60" : ""
-                        }`}
-                      >
-                        <span className="flex items-center gap-2 text-sm font-semibold text-slate-900">
-                          {entry.label}
-                          {entry.recommended && (
-                            <span className="rounded bg-emerald-600 px-1.5 py-0.5 text-[10px] font-bold uppercase tracking-wide text-white">
-                              Recommended
-                            </span>
-                          )}
-                          {entry.id === model && (
-                            <Check className="ml-auto h-4 w-4 text-emerald-600" />
-                          )}
-                        </span>
-                        <span className="text-xs font-medium text-emerald-700">
-                          {entry.tagline}
-                        </span>
-                        <span className="text-xs leading-relaxed text-slate-500">
-                          {entry.detail}
-                        </span>
-                      </button>
-                    ))}
-                  </div>
-                )}
-              </div>
+              <span
+                className="inline-flex items-center gap-1.5 rounded-full bg-slate-100 px-3 py-1.5 text-xs font-medium text-slate-700 ring-1 ring-inset ring-slate-200"
+                title={`Asked in order until one answers: ${catalogue
+                  .map((entry) => entry.label)
+                  .join(", ")}`}
+              >
+                <Zap className="h-3.5 w-3.5 text-amber-500" />
+                {catalogue.length} models
+              </span>
             )}
 
             {turns.length > 0 && (
@@ -500,11 +440,20 @@ const AiAssistantPanel: React.FC = () => {
                         </button>
 
                         {turn.answer.model && (
-                          <span className="rounded-full bg-slate-200/70 px-2 py-0.5 text-[11px] text-slate-600">
+                          <span
+                            className="rounded-full bg-slate-200/70 px-2 py-0.5 text-[11px] text-slate-600"
+                            title={
+                              turn.answer.usedFallback
+                                ? "The first model was out of allowance for the minute, so this one answered instead"
+                                : "The model that answered"
+                            }
+                          >
                             {turn.answer.model.split("/").pop()}
-                            {/* Worth saying: "why is this answer worse than
-                                usual" is sometimes "it was the fallback". */}
-                            {turn.answer.usedFallback && " · fallback"}
+                            {/* Which account, now that there are two. "Why is
+                                this answer worse than usual" is sometimes "the
+                                fast one was busy". */}
+                            {turn.answer.provider && ` · ${turn.answer.provider}`}
+                            {turn.answer.usedFallback && " · stood in"}
                           </span>
                         )}
                       </div>

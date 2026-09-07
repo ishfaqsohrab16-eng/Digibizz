@@ -33,18 +33,18 @@ const check = (name, condition, detail) => {
   }
 };
 
-stub("../servec/providers/groq", {
-  chat: async () => ({ message: {}, model: "test" }),
+stub("../servec/providers/analyst", {
+  chat: async () => ({ message: {}, model: "test", provider: "groq" }),
   screenPrompt: async () => ({ flagged: false, score: 0 }),
-  health: async () => ({ ok: true, present: true }),
-  ANALYST_MODEL: "test",
-  SCREEN_MODEL: "guard",
-  CHAT_MODELS: [],
-  resolveModel: () => null,
-  isConfigured: true,
-  GroqError: Error,
+  health: async () => ({ present: true, providers: {}, catalogue: [] }),
+  budgetReport: () => [],
+  CATALOGUE: [],
 });
-stub("../utils/dbSchema", { describeSchema: async () => ({ text: "", tables: [] }) });
+stub("../servec/providers/groq", { SCREEN_MODEL: "guard" });
+stub("../utils/dbSchema", {
+  describeSchema: async () => ({ text: "", index: "", tables: [] }),
+  describeTables: async () => "",
+});
 stub("../utils/aiReadOnlyDb", {
   runQuery: async () => ({ rows: [], ms: 0 }),
   hasOwnAccount: true,

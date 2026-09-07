@@ -1,3 +1,4 @@
+const { parseDuration } = require("./rateLimitHeaders");
 const https = require("https");
 
 /**
@@ -78,6 +79,14 @@ const CHAT_MODELS = [
       "Different training, so it often writes a different query for the same question. Useful for checking a figure you doubt.",
     speed: "fast",
   },
+  {
+    id: "qwen/qwen3.6-27b",
+    label: "Qwen3.6 27B",
+    tagline: "The spare - useful mainly because its allowance is its own",
+    detail:
+      "The previous Qwen. Kept because each model has a separate per-minute allowance, so a fourth model is a fourth minute of headroom.",
+    speed: "fast",
+  },
 ];
 
 const MODEL_IDS = CHAT_MODELS.map((model) => model.id);
@@ -90,13 +99,15 @@ const resolveModel = (requested) =>
 const ANALYST_MODEL = process.env.GROQ_MODEL || "openai/gpt-oss-120b";
 
 /**
- * Tried in order when the analyst cannot be reached.
+ * The other models this may spend, when the analyst has no allowance left.
  *
  * A rate limit on a free tier is a normal Tuesday, not an outage, and answering
- * with a smaller model beats answering with an error.
+ * with a smaller model beats answering with an error. All three are listed
+ * because each has its own 8,000 tokens a minute; see the note on budgets.
  */
 const FALLBACK_MODELS = (
-  process.env.GROQ_FALLBACK_MODELS || "openai/gpt-oss-20b,qwen/qwen3.8-27b"
+  process.env.GROQ_FALLBACK_MODELS ||
+  "openai/gpt-oss-20b,qwen/qwen3.8-27b,qwen/qwen3.6-27b"
 )
   .split(",")
   .map((name) => name.trim())
@@ -124,6 +135,65 @@ if (!isConfigured) {
     "[ai] GROQ_API_KEY is not set - the data assistant will not answer anything."
   );
 }
+
+/**
+ * What is left of each model's minute.
+ *
+ * Groq answers every request with x-ratelimit-remaining-tokens, and the free
+ * tier allows 8,000 tokens a minute. That is small: this assistant's prompt
+ * plus a couple of rounds of rows is several thousand, so one question could
+ * spend a whole minute's allowance and the next would be refused.
+ *
+ * The measurement that matters, taken against the live account: the allowances
+ * are PER MODEL, not per key. Spending 2,502 tokens on gpt-oss-120b left
+ * gpt-oss-20b, qwen3.8 and qwen3.6 each with their full 8,000. Four models that
+ * can call tools is therefore not four chances at one allowance, it is roughly
+ * 32,000 tokens a minute - if requests are sent to whichever model has room
+ * rather than always to the same one first.
+ *
+ * So this remembers what the headers said and spends from the fullest bucket.
+ * In-process and per-instance: it is an optimisation, and the API remains the
+ * authority - a 429 is still handled when the guess is wrong.
+ */
+const budgets = new Map();
+
+
+const noteBudget = (model, headers) => {
+  const remaining = Number(headers["x-ratelimit-remaining-tokens"]);
+  if (!Number.isFinite(remaining)) return;
+
+  budgets.set(model, {
+    remaining,
+    limit: Number(headers["x-ratelimit-limit-tokens"]) || null,
+    // When the bucket refills. Past this, whatever was left is stale and the
+    // model is assumed full again.
+    freshUntil:
+      Date.now() + parseDuration(headers["x-ratelimit-reset-tokens"]) * 1000,
+    at: Date.now(),
+  });
+};
+
+/** How many tokens this model can be assumed to have. Unknown means full. */
+const headroomFor = (model) => {
+  const budget = budgets.get(model);
+  if (!budget) return Infinity;
+  if (Date.now() >= budget.freshUntil) return Infinity;
+  return budget.remaining;
+};
+
+/** What the panel shows: every model's allowance, as last reported. */
+const budgetReport = () =>
+  MODEL_IDS.map((id) => {
+    const budget = budgets.get(id);
+    const stale = !budget || Date.now() >= budget.freshUntil;
+    return {
+      provider: "groq",
+      model: id,
+      remaining: stale ? budget?.limit ?? null : budget.remaining,
+      limit: budget?.limit ?? null,
+      resetsIn: stale ? 0 : Math.ceil((budget.freshUntil - Date.now()) / 1000),
+    };
+  });
 
 class GroqError extends Error {
   constructor(message, { status, retryable, code } = {}) {
@@ -170,7 +240,11 @@ const request = (path, payload) =>
           } catch {
             parsed = { error: { message: raw.slice(0, 400) } };
           }
-          resolve({ status: response.statusCode, body: parsed });
+          resolve({
+            status: response.statusCode,
+            body: parsed,
+            headers: response.headers,
+          });
         });
       }
     );
@@ -200,7 +274,7 @@ const request = (path, payload) =>
   });
 
 /** Turn a non-2xx answer into an error that says what to do about it. */
-const errorFor = ({ status, body }, model) => {
+const errorFor = ({ status, body, headers }, model) => {
   const detail = body?.error?.message || "no detail";
 
   if (status === 401) {
@@ -215,13 +289,18 @@ const errorFor = ({ status, body }, model) => {
       { status, retryable: false }
     );
   }
-  // Rate limits and capacity are why the fallback list exists.
+  // Rate limits and capacity are why there is more than one model.
   if (status === 429) {
-    return new GroqError(`Groq rate limited this request: ${detail}`, {
-      status,
-      retryable: true,
-      code: "RATE_LIMITED",
-    });
+    // The free tier allows 8,000 tokens a minute per model, so the wait is
+    // usually seconds. Saying how many is the difference between "try again
+    // shortly" and someone assuming the feature is broken.
+    const wait = Math.ceil(parseDuration(headers?.["retry-after"]));
+    return new GroqError(
+      wait > 0
+        ? `${model} is rate limited for about ${wait}s: ${detail}`
+        : `${model} is rate limited: ${detail}`,
+      { status, retryable: true, code: "RATE_LIMITED" }
+    );
   }
   if (status === 413) {
     return new GroqError(
@@ -235,10 +314,86 @@ const errorFor = ({ status, body }, model) => {
       retryable: true,
     });
   }
+
+  // A 400 about the MODEL'S OWN OUTPUT, not about the request. gpt-oss now and
+  // then emits tool-call arguments that are not valid JSON and the API rejects
+  // the completion; the same messages sent to another model come back fine.
+  // Treated as a fault of that model so the next one is tried, rather than as
+  // a malformed request, which threw away the question and the data with it.
+  if (status === 400 && /tool call/i.test(detail)) {
+    return new GroqError(`${model} produced an unusable tool call: ${detail}`, {
+      status,
+      retryable: true,
+      code: "BAD_TOOL_CALL",
+    });
+  }
   return new GroqError(`Groq refused the request (${status}): ${detail}`, {
     status,
     retryable: false,
   });
+};
+
+/**
+ * One turn of conversation, on one named model, with no fallback.
+ *
+ * The counterpart of the same function in the Cerebras provider. Choosing
+ * what to try next belongs to servec/providers/analyst.js, because the next
+ * thing to try is often on the other provider - and a provider that quietly
+ * retried three of its own models first would spend three Groq allowances
+ * before Cerebras got a look in.
+ */
+const chatOne = async (
+  messages,
+  { tools, toolChoice = "auto", temperature = 0, model }
+) => {
+  if (!isConfigured) {
+    throw new GroqError("GROQ_API_KEY is not set", { retryable: true });
+  }
+
+  const response = await request(CHAT_PATH, {
+    model,
+    messages,
+    // Zero: this writes SQL and reports numbers. Invention is not a feature.
+    temperature,
+    ...(tools ? { tools, tool_choice: toolChoice } : {}),
+  });
+
+  // Recorded whether the request succeeded or not - a 429 carries the headers
+  // too, and knowing a model is empty is worth as much as knowing it is full.
+  noteBudget(model, response.headers || {});
+
+  if (response.status < 200 || response.status >= 300) {
+    throw errorFor(response, model);
+  }
+
+  const choice = response.body?.choices?.[0];
+  if (!choice?.message) {
+    throw new GroqError("Groq returned no message", { retryable: true });
+  }
+
+  return {
+    message: choice.message,
+    finishReason: choice.finish_reason,
+    model,
+    provider: "groq",
+    usage: response.body?.usage || null,
+  };
+};
+
+/**
+ * Roughly how many tokens this request will cost.
+ *
+ * Four characters to a token is the usual rule of thumb for English, and it
+ * is close enough here: this decides which of four models to send a request
+ * to, and being ten per cent out changes nothing. The completion is allowed
+ * for with a flat margin, since it is not knowable in advance.
+ */
+const COMPLETION_ALLOWANCE = 1200;
+
+const estimateTokens = (messages, tools) => {
+  const text =
+    JSON.stringify(messages || []).length + JSON.stringify(tools || []).length;
+  return Math.ceil(text / 4) + COMPLETION_ALLOWANCE;
 };
 
 /**
@@ -260,17 +415,37 @@ const chat = async (
     throw new GroqError("GROQ_API_KEY is not set", { retryable: false });
   }
 
-  // A model chosen in the panel leads, but the fallbacks still follow it:
-  // being rate limited on your preferred model should slow an answer down,
-  // not lose it.
+  // A model chosen in the panel leads, but the others still follow it: being
+  // rate limited on your preferred model should slow an answer down, not lose
+  // it.
   const preferred = resolveModel(model) || ANALYST_MODEL;
-  const candidates = [
-    preferred,
-    ...[ANALYST_MODEL, ...FALLBACK_MODELS].filter((name) => name !== preferred),
-  ];
+
+  // Ordered by what is left of each minute, because the allowances are
+  // separate per model. Sending every request to the preferred model first
+  // and only falling through on a 429 wastes a round trip to be told
+  // something the previous response already said, and on a long question
+  // spends one model's minute while three others sit full.
+  //
+  // The preferred model still leads whenever it can afford the request. It
+  // is only stepped over once its bucket is genuinely too low, and the
+  // answer reports which model actually replied.
+  const others = [ANALYST_MODEL, ...FALLBACK_MODELS, ...MODEL_IDS]
+    .filter((name, index, all) => name !== preferred && all.indexOf(name) === index)
+    .sort((a, b) => headroomFor(b) - headroomFor(a));
+
+  const needed = estimateTokens(messages, tools);
+  const candidates =
+    headroomFor(preferred) >= needed
+      ? [preferred, ...others]
+      : [...others.filter((name) => headroomFor(name) >= needed), preferred, ...others];
+
+  const tried = new Set();
   let lastError = null;
 
   for (const candidate of candidates) {
+    if (tried.has(candidate)) continue;
+    tried.add(candidate);
+
     try {
       const response = await request(CHAT_PATH, {
         model: candidate,
@@ -279,6 +454,11 @@ const chat = async (
         temperature,
         ...(tools ? { tools, tool_choice: toolChoice } : {}),
       });
+
+      // Recorded whether the request succeeded or not - a 429 carries the
+      // headers too, and knowing a model is empty is worth as much as
+      // knowing it is full.
+      noteBudget(candidate, response.headers || {});
 
       if (response.status < 200 || response.status >= 300) {
         const error = errorFor(response, candidate);
@@ -301,11 +481,24 @@ const chat = async (
         model: candidate,
         usedFallback: candidate !== preferred,
         usage: response.body?.usage || null,
+        remaining: headroomFor(candidate),
       };
     } catch (error) {
       if (!(error instanceof GroqError) || !error.retryable) throw error;
       lastError = error;
     }
+  }
+
+  if (lastError?.code === "RATE_LIMITED") {
+    const soonest = budgetReport()
+      .map((entry) => entry.resetsIn)
+      .sort((a, b) => a - b)[0];
+    throw new GroqError(
+      `Every model has used its allowance for this minute. They refill in about ${
+        soonest || 60
+      }s - ask again then, or ask something narrower.`,
+      { status: 429, retryable: true, code: "RATE_LIMITED" }
+    );
   }
 
   throw lastError || new GroqError("No Groq model could be reached");
@@ -379,8 +572,13 @@ const health = async () => {
 
 module.exports = {
   chat,
+  chatOne,
   screenPrompt,
   health,
+  budgetReport,
+  headroomFor,
+  MODEL_IDS,
+  _internals: { parseDuration, estimateTokens, headroomFor, noteBudget, budgets },
   isConfigured,
   resolveModel,
   CHAT_MODELS,

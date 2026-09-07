@@ -28,7 +28,7 @@ const { FORBIDDEN_TABLES, FORBIDDEN_COLUMNS } = require("./sqlGuard");
 
 const CACHE_MS = Number(process.env.AI_SCHEMA_CACHE_MS) || 10 * 60 * 1000;
 
-let cache = { at: 0, text: null, tables: null };
+let cache = { at: 0, text: null, tables: null, detail: null };
 
 /**
  * What the words mean in this database.
@@ -151,8 +151,82 @@ const describeSchema = async ({ force = false } = {}) => {
 
   const text = `${lines.join("\n")}${relationships}\n\n${GLOSSARY}`;
 
-  cache = { at: Date.now(), text, tables: [...tables.keys()] };
+  // The INDEX is what every request carries: one line per table, name and
+  // size only. The full listing above is ~2,500 tokens, which on an 8,000
+  // tokens-per-minute allowance meant a single two-round question was over
+  // budget before the question was even read. The index is a tenth of that,
+  // and the assistant asks for the columns of the handful of tables it
+  // actually needs.
+  const index = [...tables.keys()]
+    .map((table) => {
+      const size = rowCounts.get(table);
+      return size ? `${table} (~${size})` : table;
+    })
+    .join(", ");
+
+  // Per-table detail, ready to hand over when it is asked for.
+  const detail = new Map();
+  for (const [table, cols] of tables) {
+    const described = cols
+      .map((column) => {
+        const marker =
+          column.key === "PRI" ? " PK" : column.key === "MUL" ? " FK" : "";
+        return `${column.name} ${column.type}${marker}`;
+      })
+      .join(", ");
+
+    const links = foreignKeys
+      .filter((row) => row.t === table || row.rt === table)
+      .map((row) => `${row.t}.${row.c} -> ${row.rt}.${row.rc}`);
+
+    detail.set(
+      table,
+      `${table}(${described})${
+        links.length
+          ? `\n  joins: ${[...new Set(links)].join("; ")}`
+          : ""
+      }`
+    );
+  }
+
+  cache = {
+    at: Date.now(),
+    text,
+    index: `${index}\n\n${GLOSSARY}`,
+    tables: [...tables.keys()],
+    detail,
+  };
   return cache;
 };
 
-module.exports = { describeSchema, GLOSSARY, CACHE_MS };
+/**
+ * The columns and joins of specific tables.
+ *
+ * Answers the assistant's describe_tables tool. Unknown names come back
+ * named rather than silently dropped - a model that asked for `centres` and
+ * got nothing would assume the table does not exist, when the table is
+ * `centers`.
+ */
+const describeTables = async (names) => {
+  const { detail, tables } = await describeSchema();
+  const wanted = (Array.isArray(names) ? names : [names])
+    .map((name) => String(name || "").trim())
+    .filter(Boolean)
+    .slice(0, 8);
+
+  const found = [];
+  const missing = [];
+
+  for (const name of wanted) {
+    if (detail.has(name)) found.push(detail.get(name));
+    else missing.push(name);
+  }
+
+  const suggestions = missing.length
+    ? `\n\nNot found: ${missing.join(", ")}. Available tables: ${tables.join(", ")}`
+    : "";
+
+  return `${found.join("\n")}${suggestions}`;
+};
+
+module.exports = { describeSchema, describeTables, GLOSSARY, CACHE_MS };
