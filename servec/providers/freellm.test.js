@@ -24,7 +24,7 @@ const check = (name, condition, detail) => {
 };
 
 const freellm = require("./freellm");
-const { errorFor, noteQuota, quotaState } = freellm._internals;
+const { errorFor, noteQuota, quotaState, RETRY_ONCE } = freellm._internals;
 
 console.log("\nReading the router's own rate limit\n");
 
@@ -147,6 +147,42 @@ const noKeys = errorFor({
 });
 check("503 about provider keys says where to add them", /dashboard/i.test(noKeys.message), noKeys.message);
 check("and is distinguishable from a plain fault", noKeys.code === "NO_PROVIDER_KEYS");
+
+// Seen in the browser as a red box saying the router "refused the request",
+// which read as a bug in this application. It is one model garbling its own
+// tool call. The router fails over when it has somewhere to go - its log shows
+// 20b failing and 120b answering the identical messages a second later - so
+// this only surfaces when everything else is rate limited, and asking again
+// is what the router itself would have done.
+const badTool = errorFor({
+  status: 400,
+  body: {
+    error: {
+      message:
+        "All routed providers rejected the request as invalid. Attempt trail: groq/openai/gpt-oss-20b key1: provider_bad_request. Last error: Groq API error 400: Failed to parse tool call arguments as JSON",
+    },
+  },
+  headers: {},
+});
+check("a garbled tool call is recognised", badTool.code === "BAD_TOOL_CALL");
+check("and is retried rather than shown as a refusal", RETRY_ONCE.has(badTool.code));
+check(
+  "and is not blamed on the request that was sent",
+  !/refused the request/.test(badTool.message),
+  badTool.message
+);
+
+// A 400 that is genuinely about what was sent must not be retried forever.
+const realBadRequest = errorFor({
+  status: 400,
+  body: { error: { message: "messages: field required" } },
+  headers: {},
+});
+check(
+  "an ordinary bad request is not mistaken for one",
+  realBadRequest.code !== "BAD_TOOL_CALL",
+  realBadRequest.message
+);
 
 const badKey = errorFor({ status: 401, body: { error: { message: "unauthorized" } }, headers: {} });
 check("401 names FREELLM_API_KEY", /FREELLM_API_KEY/.test(badKey.message), badKey.message);

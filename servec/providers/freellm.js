@@ -291,6 +291,30 @@ const errorFor = ({ status, body, headers }) => {
     });
   }
 
+  // A 400 about the MODEL'S OWN OUTPUT, not about what was sent.
+  //
+  // gpt-oss intermittently emits tool-call arguments that are not valid JSON,
+  // and the upstream rejects its own completion:
+  //
+  //   groq/openai/gpt-oss-20b key1: provider_bad_request.
+  //   Last error: Groq API error 400: Failed to parse tool call arguments as JSON
+  //
+  // The router fails over when it has somewhere to go - seen in its log, 20b
+  // failing and 120b answering the identical messages a second later - but when
+  // everything else is rate limited the trail is one attempt long and the 400
+  // comes back to us. Reported as "refused the request" it read as a bug in
+  // this application; it is one bad reply from one model, and asking again
+  // works.
+  if (
+    status === 400 &&
+    /tool call|provider_bad_request|rejected the request as invalid/i.test(detail)
+  ) {
+    return new FreeLlmError(
+      `A model returned a malformed tool call. (${detail})`,
+      { status, retryable: true, code: "BAD_TOOL_CALL" }
+    );
+  }
+
   return new FreeLlmError(`The model router refused the request (${status}): ${detail}`, {
     status,
     retryable: true,
@@ -307,11 +331,12 @@ const errorFor = ({ status, body, headers }) => {
  * Failures where asking again lands on a different route and simply works.
  *
  * Not a general retry: a rate limit means every route was already tried, and
- * repeating it only makes the wait longer. These are the two where the router
+ * repeating it only makes the wait longer. These are the three where the router
  * itself would have succeeded on a second pass - a model withdrawn upstream
- * between its catalog sync and the request, and a fault in one backend.
+ * between its catalog sync and the request, a fault in one backend, and a model
+ * garbling its own tool call.
  */
-const RETRY_ONCE = new Set(["STALE_ROUTE", "ROUTER_FAULT"]);
+const RETRY_ONCE = new Set(["STALE_ROUTE", "ROUTER_FAULT", "BAD_TOOL_CALL"]);
 
 const chat = async (messages, { tools, toolChoice = "auto", temperature = 0 } = {}) => {
   if (!isConfigured) {
@@ -503,5 +528,5 @@ module.exports = {
   SCREEN_MODEL,
   BASE_URL,
   FreeLlmError,
-  _internals: { errorFor, noteQuota, quotaState: () => quota },
+  _internals: { errorFor, noteQuota, quotaState: () => quota, RETRY_ONCE },
 };
