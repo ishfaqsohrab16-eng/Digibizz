@@ -26,6 +26,7 @@ stub("../models/center", {});
 stub("../models/course", {});
 stub("../models/trainingBatcheModel", {});
 stub("../models/trainersCenterAllocationModel", {});
+stub("../models/centersDatesModel", {});
 stub("../utils/evaluationMetrics", { metricsFor: async () => ({}), classesFor: async () => [] });
 
 const { _internals } = require("./weeklyEvaluationController");

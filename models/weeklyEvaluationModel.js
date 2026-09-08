@@ -2,6 +2,7 @@ const { DataTypes } = require("sequelize");
 const { sequelize } = require("../config/db");
 const Trainer = require("./trainersModel");
 const MasterTrainer = require("./masterTrainersModel");
+const TrainingBatch = require("./trainingBatcheModel");
 
 /**
  * A Master Trainer's weekly evaluation of one trainer.
@@ -10,12 +11,17 @@ const MasterTrainer = require("./masterTrainersModel");
  * Performance", signed by the M&E Officer and the Master Trainer. This is that
  * form, with everything the LMS already knows filled in before the MT starts.
  *
- * ONE REPORT PER TRAINER PER WEEK, not per class. A trainer teaching three
- * classes is one person whose punctuality and lecture reports are being
- * assessed, and three near-identical forms would be three chances to disagree
- * with yourself. The classes covered are recorded on the report so the reader
- * knows its scope; the unique index on (t_id, we_week_key) makes a second
- * report for the same week impossible rather than merely discouraged.
+ * ONE REPORT PER TRAINER PER BATCH PER WEEK, not per class. A trainer
+ * teaching three classes in a batch is one person whose punctuality and
+ * lecture reports are being assessed, and three near-identical forms would be
+ * three chances to disagree with yourself. The classes covered are recorded on
+ * the report so the reader knows its scope.
+ *
+ * The batch is part of the key because the module is read a batch at a time,
+ * and a trainer running classes in two batches at once is doing two separable
+ * jobs - the students, the dates and the curriculum are all different. The
+ * unique index makes a second report for the same trainer, batch and week
+ * impossible rather than merely discouraged.
  *
  * WHAT IS STORED AND WHY THERE ARE TWO COPIES OF THE NUMBERS
  *
@@ -46,6 +52,12 @@ const WeeklyEvaluation = sequelize.define(
       allowNull: false,
       references: { model: MasterTrainer, key: "mt_id" },
       comment: "The Master Trainer who filled the report in.",
+    },
+    tb_id: {
+      type: DataTypes.INTEGER,
+      allowNull: false,
+      references: { model: TrainingBatch, key: "tb_id" },
+      comment: "The batch this report covers. Part of the one-per-week key.",
     },
 
     /** "2026-W37". The unique half of one report per trainer per week. */
@@ -152,14 +164,19 @@ const WeeklyEvaluation = sequelize.define(
     indexes: [
       // One report per trainer per week, enforced by the database rather than
       // by a check that races with a second browser tab.
-      { unique: true, fields: ["t_id", "we_week_key"], name: "weekly_evaluations_trainer_week" },
+      {
+        unique: true,
+        fields: ["t_id", "tb_id", "we_week_key"],
+        name: "weekly_evaluations_trainer_batch_week",
+      },
       { fields: ["mt_id", "we_week_key"], name: "weekly_evaluations_mt_week" },
-      { fields: ["we_week_key", "we_status"], name: "weekly_evaluations_week_status" },
+      { fields: ["tb_id", "we_week_key", "we_status"], name: "weekly_evaluations_batch_week" },
     ],
   }
 );
 
 WeeklyEvaluation.belongsTo(Trainer, { foreignKey: "t_id", as: "trainer" });
+WeeklyEvaluation.belongsTo(TrainingBatch, { foreignKey: "tb_id", as: "batch" });
 WeeklyEvaluation.belongsTo(MasterTrainer, { foreignKey: "mt_id", as: "masterTrainer" });
 
 module.exports = WeeklyEvaluation;

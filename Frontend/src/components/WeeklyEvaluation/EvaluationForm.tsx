@@ -45,6 +45,8 @@ import {
 
 interface Props {
   t_id: number;
+  /** Reports belong to a batch: the same trainer in two batches is two reports. */
+  tb_id: number;
   weekKey?: string;
   onBack: () => void;
 }
@@ -119,7 +121,7 @@ const CountField: React.FC<{
   );
 };
 
-const EvaluationForm: React.FC<Props> = ({ t_id, weekKey, onBack }) => {
+const EvaluationForm: React.FC<Props> = ({ t_id, tb_id, weekKey, onBack }) => {
   const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState<"draft" | "submitted" | null>(null);
   const [error, setError] = useState<string | null>(null);
@@ -157,7 +159,7 @@ const EvaluationForm: React.FC<Props> = ({ t_id, weekKey, onBack }) => {
     setError(null);
 
     try {
-      const data = await prepareEvaluation(t_id, weekKey);
+      const data = await prepareEvaluation(t_id, tb_id, weekKey);
 
       setWeek(data.week);
       setCriteria(data.criteria);
@@ -227,7 +229,7 @@ const EvaluationForm: React.FC<Props> = ({ t_id, weekKey, onBack }) => {
     } finally {
       setLoading(false);
     }
-  }, [t_id, weekKey]);
+  }, [t_id, tb_id, weekKey]);
 
   useEffect(() => {
     load();
@@ -263,6 +265,7 @@ const EvaluationForm: React.FC<Props> = ({ t_id, weekKey, onBack }) => {
     try {
       const result = await saveEvaluation({
         t_id,
+        tb_id,
         week_key: week.key,
         status: nextStatus,
         daily,
@@ -367,9 +370,21 @@ const EvaluationForm: React.FC<Props> = ({ t_id, weekKey, onBack }) => {
                 {classes.map((entry) => (
                   <span
                     key={`${entry.center_id}-${entry.course_id}-${entry.tb_id}`}
-                    className="rounded-lg bg-white px-2.5 py-1 text-xs font-medium text-slate-700 ring-1 ring-inset ring-slate-200"
+                    title={
+                      entry.active === false && entry.dates
+                        ? `This centre runs from ${entry.dates.start} to ${entry.dates.end}`
+                        : undefined
+                    }
+                    className={`rounded-lg px-2.5 py-1 text-xs font-medium ring-1 ring-inset ${
+                      entry.active === false
+                        ? "bg-slate-100 text-slate-400 ring-slate-200"
+                        : "bg-white text-slate-700 ring-slate-200"
+                    }`}
                   >
                     {entry.center_name} · {entry.course_name} · {entry.tb_name}
+                    {entry.active === false && (
+                      <span className="ml-1 font-normal italic">not running this week</span>
+                    )}
                   </span>
                 ))}
               </div>

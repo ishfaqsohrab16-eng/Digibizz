@@ -4394,6 +4394,21 @@ export interface EvalClass {
   center_name: string;
   course_name: string;
   tb_name: string;
+  /**
+   * Whether this centre was actually teaching in the week being reported on.
+   *
+   * Centres inside one batch have their own start and end dates, so in the
+   * first weeks one may be running and another not yet open.
+   */
+  active?: boolean;
+  dates?: { start: string; end: string } | null;
+}
+
+/** When teaching ran, across the centres in scope. */
+export interface EvalWindow {
+  start: string;
+  end: string;
+  byCentre: Record<string, { start: string; end: string }>;
 }
 
 /**
@@ -4464,30 +4479,39 @@ const evalAuth = () => ({
   headers: { Authorization: `Bearer ${getCurrentUserToken()}` },
 });
 
-/** The trainers reporting to this Master Trainer, and where each report stands. */
-export const getMyTrainersForEvaluation = async (week?: string) => {
+/**
+ * The trainers this Master Trainer evaluates in one batch.
+ *
+ * Trainers are found by COURSE through their allocation, so only those with a
+ * class in the batch come back at all.
+ */
+export const getMyTrainersForEvaluation = async (tb_id: number, week?: string) => {
   const response = await axios.get(`${API_URL}/weekly-evaluations/my-trainers`, {
     ...evalAuth(),
-    params: week ? { week } : {},
+    params: { tb_id, ...(week ? { week } : {}) },
   });
   return response.data as {
     success: boolean;
     week: EvalWeek;
     weeks: EvalWeek[];
+    window: EvalWindow | null;
+    inWindow: boolean;
     trainers: EvalTrainerRow[];
   };
 };
 
-/** One trainer's form for one week, pre-filled from the LMS. */
-export const prepareEvaluation = async (t_id: number, week?: string) => {
+/** One trainer's form for one week of one batch, pre-filled from the LMS. */
+export const prepareEvaluation = async (t_id: number, tb_id: number, week?: string) => {
   const response = await axios.get(`${API_URL}/weekly-evaluations/prepare`, {
     ...evalAuth(),
-    params: { t_id, ...(week ? { week } : {}) },
+    params: { t_id, tb_id, ...(week ? { week } : {}) },
   });
   return response.data as {
     success: boolean;
     week: EvalWeek;
     weeks: EvalWeek[];
+    window: EvalWindow | null;
+    inWindow: boolean;
     criteria: EvalCriterion[];
     grades: string[];
     trainer: { t_id: number; name: string; email: string | null; cnic: string };
@@ -4500,6 +4524,7 @@ export const prepareEvaluation = async (t_id: number, week?: string) => {
 
 export interface EvaluationDraft {
   t_id: number;
+  tb_id: number;
   week_key: string;
   status: "draft" | "submitted";
   daily: Record<string, Record<string, boolean>>;
@@ -4522,11 +4547,16 @@ export const saveEvaluation = async (draft: EvaluationDraft) => {
   return response.data as { success: boolean; message: string; report: EvalReport };
 };
 
-/** Every report written about one trainer, newest week first. */
-export const getEvaluationHistory = async (t_id: number) => {
+/**
+ * Every report written about one trainer, newest week first.
+ *
+ * Without a batch this spans all of them, which is what someone reviewing a
+ * person over time wants to see.
+ */
+export const getEvaluationHistory = async (t_id: number, tb_id?: number) => {
   const response = await axios.get(`${API_URL}/weekly-evaluations/history`, {
     ...evalAuth(),
-    params: { t_id },
+    params: { t_id, ...(tb_id ? { tb_id } : {}) },
   });
   return response.data as { success: boolean; reports: EvalReport[] };
 };
@@ -4554,16 +4584,17 @@ export interface EvalOverviewRow {
   submitted_on: string | null;
 }
 
-/** Every trainer for one week, reported on or not. The missing rows are the point. */
-export const getEvaluationOverview = async (week?: string) => {
+/** Every trainer in a batch for one week, reported on or not. Missing is the point. */
+export const getEvaluationOverview = async (tb_id: number, week?: string) => {
   const response = await axios.get(`${API_URL}/weekly-evaluations/overview`, {
     ...evalAuth(),
-    params: week ? { week } : {},
+    params: { tb_id, ...(week ? { week } : {}) },
   });
   return response.data as {
     success: boolean;
     week: EvalWeek;
     weeks: EvalWeek[];
+    window: EvalWindow | null;
     /** False for a week filed on paper, before this module took over. */
     chased: boolean;
     startWeek: string;

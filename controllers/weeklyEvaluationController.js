@@ -7,7 +7,15 @@ const Center = require("../models/center");
 const Course = require("../models/course");
 const TrainingBatch = require("../models/trainingBatcheModel");
 const TrainerCenterAllocation = require("../models/trainersCenterAllocationModel");
-const { metricsFor, classesFor } = require("../utils/evaluationMetrics");
+const { metricsFor } = require("../utils/evaluationMetrics");
+const {
+  trainersForCourse,
+  classesInBatch,
+  teachingWindow,
+  classesActiveIn,
+  weeksInWindow,
+  isInWindow,
+} = require("../utils/evaluationScope");
 const {
   weekOf,
   weekFromKey,
@@ -21,7 +29,7 @@ const {
 const {
   canWrite,
   readScope,
-  ownsTrainer,
+  teachesCourse,
   canEdit,
   isMasterTrainer,
   isViewer,
@@ -30,15 +38,39 @@ const {
 /**
  * The weekly M&E report on trainer performance.
  *
- * A Master Trainer fills one in per trainer per week; admins read them and,
- * more importantly, see which are missing. The paper form is the contract -
- * utils/evaluationWeek.js holds its criteria and grades so the form, the API
- * and the tests cannot drift apart.
+ * A Master Trainer fills one in per trainer per batch per week; admins read
+ * them and, more importantly, see which are missing. The paper form is the
+ * contract - utils/evaluationWeek.js holds its criteria and grades so the
+ * form, the API and the tests cannot drift apart.
+ *
+ * THREE THINGS DECIDE WHAT ANYONE SEES, and all three live in
+ * utils/evaluationScope.js:
+ *
+ *   THE COURSE links a Master Trainer to a trainer. An MT owns a course and
+ *   evaluates whoever is teaching it - not whoever has their id in a column.
+ *
+ *   THE BATCH scopes everything. The module is read one batch at a time, and a
+ *   trainer's other batch is a different report with different students.
+ *
+ *   THE CENTRE'S DATES decide which weeks exist. Each centre has its own start
+ *   and end even inside one batch, so the weeks on offer are the widest span
+ *   across a trainer's centres - and the form marks which of their classes had
+ *   actually started in the week being reported on.
+ *
+ * A trainer with no allocation in the batch never appears at all. There is
+ * nothing to evaluate, and a greyed-out row saying so is clutter on a list
+ * whose whole job is to show what is outstanding.
  *
  * Everything countable is offered pre-filled from the LMS and stays editable.
  * See utils/evaluationMetrics.js for what can honestly be counted and what
  * cannot.
  */
+
+/** The batch a request is about. Required: nothing here is batch-agnostic. */
+const resolveBatch = (raw) => {
+  const tb_id = Number(raw);
+  return Number.isInteger(tb_id) && tb_id > 0 ? tb_id : null;
+};
 
 /** The Master Trainer row behind the signed-in user, or null. */
 const masterTrainerFor = async (user) => {
@@ -75,23 +107,35 @@ const nameLookup = async (classes) => {
   }));
 };
 
-/** The trainers reporting to one Master Trainer, with their classes. */
-const trainersUnder = async (mt_id) => {
+/**
+ * The trainers a Master Trainer evaluates in one batch.
+ *
+ * Found through the ALLOCATION, by course. That one query answers all three
+ * questions at once - teaching the MT's course, in this batch, with a class at
+ * all - so a trainer with nothing allocated cannot appear and does not need
+ * filtering out later.
+ */
+const trainersUnder = async (courseId, tb_id) => {
+  const allocated = await trainersForCourse(courseId, tb_id);
+  if (allocated.length === 0) return [];
+
   const trainers = await Trainer.findAll({
-    where: { mt_id },
+    where: { t_id: allocated.map((entry) => entry.t_id) },
     attributes: ["t_id", "user_id", "t_cnic", "t_course_id"],
     include: [{ model: User, as: "user", attributes: ["user_name", "user_email"] }],
   });
 
+  const rowBy = Object.fromEntries(trainers.map((row) => [row.t_id, row]));
+
   return Promise.all(
-    trainers.map(async (trainer) => {
-      const classes = await classesFor(trainer.t_id);
+    allocated.map(async (entry) => {
+      const trainer = rowBy[entry.t_id];
       return {
-        t_id: trainer.t_id,
-        name: trainer.user?.user_name || `Trainer ${trainer.t_id}`,
-        email: trainer.user?.user_email || null,
-        cnic: trainer.t_cnic,
-        classes: classes.length ? await nameLookup(classes) : [],
+        t_id: entry.t_id,
+        name: trainer?.user?.user_name || `Trainer ${entry.t_id}`,
+        email: trainer?.user?.user_email || null,
+        cnic: trainer?.t_cnic || "",
+        classes: await nameLookup(entry.classes),
       };
     })
   );
@@ -128,25 +172,54 @@ exports.myTrainers = async (req, res) => {
       return res.status(403).json({ success: false, message: "Master Trainers only" });
     }
 
-    const { week, error } = resolveWeek(req.query.week);
-    if (error) return res.status(400).json({ success: false, message: error });
+    const tb_id = resolveBatch(req.query.tb_id);
+    if (!tb_id) {
+      return res.status(400).json({ success: false, message: "Choose a batch first" });
+    }
 
-    const trainers = await trainersUnder(mt.mt_id);
+    const trainers = await trainersUnder(mt.mt_course_id, tb_id);
 
-    const reports = await WeeklyEvaluation.findAll({
-      where: { we_week_key: week.key, t_id: trainers.map((entry) => entry.t_id) },
-      attributes: ["we_id", "t_id", "we_status", "we_submitted_on"],
-      raw: true,
-    });
+    // The weeks come from the centres these trainers actually teach at in this
+    // batch, so a batch that has not started offers nothing rather than every
+    // week since January.
+    const centreIds = [
+      ...new Set(trainers.flatMap((entry) => entry.classes.map((c) => c.center_id))),
+    ];
+    const window = await teachingWindow(centreIds, tb_id);
+    const weeks = weeksInWindow(window);
+
+    // Default to the most recent week of the batch, which is the one being
+    // reported on - not "this week", which may be after the batch ended.
+    const requested = req.query.week ? resolveWeek(req.query.week) : { week: weeks[0] || weekOf() };
+    if (requested.error) {
+      return res.status(400).json({ success: false, message: requested.error });
+    }
+    const week = requested.week;
+
+    const reports = trainers.length
+      ? await WeeklyEvaluation.findAll({
+          where: {
+            we_week_key: week.key,
+            tb_id,
+            t_id: trainers.map((entry) => entry.t_id),
+          },
+          attributes: ["we_id", "t_id", "we_status", "we_submitted_on"],
+          raw: true,
+        })
+      : [];
 
     const reportBy = Object.fromEntries(reports.map((row) => [row.t_id, row]));
 
     return res.json({
       success: true,
       week,
-      weeks: recentWeeks(12),
+      weeks,
+      window,
+      inWindow: isInWindow(week, window),
       trainers: trainers.map((trainer) => ({
         ...trainer,
+        // Which of this trainer's centres had actually started in this week.
+        classes: classesActiveIn(trainer.classes, week, window),
         report: reportBy[trainer.t_id]
           ? {
               we_id: reportBy[trainer.t_id].we_id,
@@ -178,8 +251,10 @@ exports.prepare = async (req, res) => {
       return res.status(400).json({ success: false, message: "Which trainer?" });
     }
 
-    const { week, error } = resolveWeek(req.query.week);
-    if (error) return res.status(400).json({ success: false, message: error });
+    const tb_id = resolveBatch(req.query.tb_id);
+    if (!tb_id) {
+      return res.status(400).json({ success: false, message: "Choose a batch first" });
+    }
 
     const trainer = await Trainer.findOne({
       where: { t_id },
@@ -189,34 +264,64 @@ exports.prepare = async (req, res) => {
       return res.status(404).json({ success: false, message: "No such trainer" });
     }
 
-    // A Master Trainer may only prepare reports for their own trainers. The
-    // check is against the trainer row, not against anything in the request.
-    if (mt && !ownsTrainer(mt.mt_id, trainer) && !isViewer(req.user)) {
-      return res
-        .status(403)
-        .json({ success: false, message: "That trainer does not report to you" });
-    }
-    if (!mt && !isViewer(req.user)) {
-      return res.status(403).json({ success: false, message: "Master Trainers only" });
+    // The classes this trainer teaches in this batch. They are also the proof
+    // of access: a Master Trainer may report on a trainer teaching their
+    // course, so the allocation answers the question rather than a column
+    // somebody may or may not have filled in.
+    const classes = await classesInBatch(t_id, tb_id);
+
+    if (!isViewer(req.user)) {
+      if (!mt) {
+        return res.status(403).json({ success: false, message: "Master Trainers only" });
+      }
+      if (!teachesCourse(mt.mt_course_id, classes)) {
+        return res.status(403).json({
+          success: false,
+          message: "That trainer is not teaching your course in this batch",
+        });
+      }
     }
 
+    if (classes.length === 0) {
+      return res.status(404).json({
+        success: false,
+        message: "That trainer has no class in this batch",
+      });
+    }
+
+    const window = await teachingWindow(
+      classes.map((entry) => entry.center_id),
+      tb_id
+    );
+    const weeks = weeksInWindow(window);
+
+    const requested = req.query.week ? resolveWeek(req.query.week) : { week: weeks[0] || weekOf() };
+    if (requested.error) {
+      return res.status(400).json({ success: false, message: requested.error });
+    }
+    const week = requested.week;
+
     const existing = await WeeklyEvaluation.findOne({
-      where: { t_id, we_week_key: week.key },
+      where: { t_id, tb_id, we_week_key: week.key },
     });
 
     // A submitted report shows what it recorded, not what the numbers say
     // today - the data moves on and the report must not.
     const metrics =
-      existing && existing.we_status === "submitted" ? null : await metricsFor(t_id, week);
+      existing && existing.we_status === "submitted"
+        ? null
+        : await metricsFor(t_id, week, tb_id);
 
-    const classes = existing?.we_classes?.length
+    const named = existing?.we_classes?.length
       ? existing.we_classes
-      : await nameLookup(await classesFor(t_id));
+      : await nameLookup(classes);
 
     return res.json({
       success: true,
       week,
-      weeks: recentWeeks(12),
+      weeks,
+      window,
+      inWindow: isInWindow(week, window),
       criteria: DAILY_CRITERIA,
       grades: QUALITY_GRADES,
       trainer: {
@@ -225,7 +330,10 @@ exports.prepare = async (req, res) => {
         email: trainer.user?.user_email || null,
         cnic: trainer.t_cnic,
       },
-      classes,
+      // Marked with which centres had actually started in this week, so a
+      // class that had not begun is visible as such rather than silently
+      // included in a grade.
+      classes: classesActiveIn(named, week, window),
       metrics,
       report: existing,
       editable: existing ? canEdit(req.user, existing, mt?.mt_id) : canWrite(req.user),
@@ -288,22 +396,46 @@ exports.save = async (req, res) => {
       return res.status(400).json({ success: false, message: "Which trainer?" });
     }
 
+    const tb_id = resolveBatch(req.body?.tb_id);
+    if (!tb_id) {
+      return res.status(400).json({ success: false, message: "Which batch?" });
+    }
+
     const { week, error } = resolveWeek(req.body?.week_key);
     if (error) return res.status(400).json({ success: false, message: error });
 
     const trainer = await Trainer.findOne({ where: { t_id }, raw: true });
     if (!trainer) return res.status(404).json({ success: false, message: "No such trainer" });
 
-    if (!ownsTrainer(mt.mt_id, trainer)) {
-      return res
-        .status(403)
-        .json({ success: false, message: "That trainer does not report to you" });
+    // Access and scope from the same source: the allocation. Checked here as
+    // well as in prepare, because a POST does not have to have come from a
+    // form this server rendered.
+    const classes = await classesInBatch(t_id, tb_id);
+
+    if (!teachesCourse(mt.mt_course_id, classes)) {
+      return res.status(403).json({
+        success: false,
+        message: "That trainer is not teaching your course in this batch",
+      });
+    }
+
+    // A week the centres were not teaching in is not a week to report on. The
+    // form does not offer one; a request can still ask for it.
+    const window = await teachingWindow(
+      classes.map((entry) => entry.center_id),
+      tb_id
+    );
+    if (window && !isInWindow(week, window)) {
+      return res.status(400).json({
+        success: false,
+        message: `This batch ran from ${window.start} to ${window.end}. That week is outside it.`,
+      });
     }
 
     const submitting = req.body?.status === "submitted";
 
     const existing = await WeeklyEvaluation.findOne({
-      where: { t_id, we_week_key: week.key },
+      where: { t_id, tb_id, we_week_key: week.key },
     });
 
     // Submitted is final. Saying so is better than silently discarding the
@@ -339,12 +471,13 @@ exports.save = async (req, res) => {
 
     // The classes and the computed figures as they stand now, kept with the
     // report so it can be read back years later against data that has moved on.
-    const classes = await nameLookup(await classesFor(t_id));
-    const auto = await metricsFor(t_id, week);
+    const named = await nameLookup(classes);
+    const auto = await metricsFor(t_id, week, tb_id);
 
     const values = {
       t_id,
       mt_id: mt.mt_id,
+      tb_id,
       we_week_key: week.key,
       we_week_start: week.start,
       we_week_end: week.end,
@@ -361,7 +494,7 @@ exports.save = async (req, res) => {
       we_feedback_submission: feedback,
       we_other_tasks: textFrom(req.body?.other_tasks, 4000),
       we_remarks: textFrom(req.body?.remarks, 4000),
-      we_classes: classes,
+      we_classes: classesActiveIn(named, week, window),
       we_auto: auto,
       we_status: submitting ? "submitted" : "draft",
       we_submitted_on: submitting ? new Date() : null,
@@ -373,7 +506,7 @@ exports.save = async (req, res) => {
 
     console.log(
       `[evaluation] ${submitting ? "submitted" : "saved a draft of"} the ${week.key} report ` +
-        `for trainer ${t_id} by mt ${mt.mt_id}`
+        `for trainer ${t_id} in batch ${tb_id} by mt ${mt.mt_id}`
     );
 
     return res.json({
@@ -407,10 +540,15 @@ exports.history = async (req, res) => {
       return res.status(400).json({ success: false, message: "Which trainer?" });
     }
 
+    // Optional. Without a batch this is every report ever written about the
+    // trainer, which is what someone reviewing a person over time wants.
+    const tb_id = resolveBatch(req.query.tb_id);
+
     const reports = await WeeklyEvaluation.findAll({
       where: {
         ...scope,
         t_id,
+        ...(tb_id ? { tb_id } : {}),
         // A draft is the author's own working copy. An admin reading the
         // history should see what was signed off, not what is half-typed.
         ...(isViewer(req.user) ? { we_status: "submitted" } : {}),
@@ -476,44 +614,89 @@ exports.overview = async (req, res) => {
       return res.status(403).json({ success: false, message: "Not for you" });
     }
 
-    const { week, error } = resolveWeek(req.query.week);
-    if (error) return res.status(400).json({ success: false, message: error });
+    const tb_id = resolveBatch(req.query.tb_id);
+    if (!tb_id) {
+      return res.status(400).json({ success: false, message: "Choose a batch first" });
+    }
+
+    // Only trainers with a class in this batch. A trainer without one has
+    // nothing to be evaluated on and never appears - which is also what keeps
+    // the outstanding count meaningful.
+    const allocations = await TrainerCenterAllocation.findAll({
+      where: { tb_id },
+      attributes: ["t_id", "center_id", "course_id"],
+      raw: true,
+    });
+
+    if (allocations.length === 0) {
+      return res.json({
+        success: true,
+        week: weekOf(),
+        weeks: [],
+        window: null,
+        rows: [],
+        summary: { teaching: 0, submitted: 0, draft: 0, missing: 0 },
+        chased: false,
+        startWeek: START_WEEK,
+      });
+    }
+
+    const window = await teachingWindow(
+      [...new Set(allocations.map((row) => row.center_id))],
+      tb_id
+    );
+    const weeks = weeksInWindow(window);
+
+    const requested = req.query.week ? resolveWeek(req.query.week) : { week: weeks[0] || weekOf() };
+    if (requested.error) {
+      return res.status(400).json({ success: false, message: requested.error });
+    }
+    const week = requested.week;
+
+    const teachingIds = [...new Set(allocations.map((row) => row.t_id))];
 
     const trainers = await Trainer.findAll({
-      attributes: ["t_id", "mt_id", "t_cnic"],
+      where: { t_id: teachingIds },
+      attributes: ["t_id", "mt_id", "t_cnic", "t_course_id"],
       include: [{ model: User, as: "user", attributes: ["user_name"] }],
     });
 
-    const [reports, masterTrainers, allocations] = await Promise.all([
+    const [reports, masterTrainers] = await Promise.all([
       WeeklyEvaluation.findAll({
-        where: { we_week_key: week.key },
+        where: { we_week_key: week.key, tb_id },
         attributes: ["we_id", "t_id", "mt_id", "we_status", "we_submitted_on", "we_quality"],
         raw: true,
       }),
       MasterTrainer.findAll({
-        attributes: ["mt_id", "user_id"],
+        attributes: ["mt_id", "user_id", "mt_course_id"],
         include: [{ model: User, as: "user", attributes: ["user_name"] }],
       }),
-      TrainerCenterAllocation.findAll({ attributes: ["t_id"], raw: true }),
     ]);
 
     const reportBy = Object.fromEntries(reports.map((row) => [row.t_id, row]));
-    const mtBy = Object.fromEntries(
-      masterTrainers.map((row) => [row.mt_id, row.user?.user_name || `MT ${row.mt_id}`])
-    );
 
-    // A trainer with no classes has nothing to be evaluated on, and counting
-    // them as missing would make the number meaningless.
-    const teaching = new Set(allocations.map((row) => row.t_id));
+    // The Master Trainer responsible is the one who owns the course being
+    // taught, which is how the whole module is scoped - not trainers.mt_id.
+    const mtByCourse = {};
+    for (const row of masterTrainers) {
+      mtByCourse[row.mt_course_id] = row.user?.user_name || `MT ${row.mt_id}`;
+    }
+
+    // Which course each trainer teaches IN THIS BATCH, which is what decides
+    // who is responsible for their report.
+    const courseByTrainer = {};
+    for (const row of allocations) courseByTrainer[row.t_id] = row.course_id;
 
     const rows = trainers.map((trainer) => {
       const report = reportBy[trainer.t_id];
+      const courseId = courseByTrainer[trainer.t_id];
+
       return {
         t_id: trainer.t_id,
         name: trainer.user?.user_name || `Trainer ${trainer.t_id}`,
-        master_trainer: trainer.mt_id ? mtBy[trainer.mt_id] || null : null,
+        master_trainer: mtByCourse[courseId] || null,
         mt_id: trainer.mt_id,
-        teaching: teaching.has(trainer.t_id),
+        teaching: true,
         status: report ? report.we_status : "missing",
         we_id: report?.we_id || null,
         quality: report?.we_quality || null,
@@ -521,25 +704,25 @@ exports.overview = async (req, res) => {
       };
     });
 
-    const active = rows.filter((row) => row.teaching);
-
-    // Weeks before this module took over were filed on paper. Their reports
-    // are not missing, they are elsewhere - counting them as outstanding would
-    // put a permanent red number on the screen that nobody can ever clear.
-    const chased = isChased(week);
+    // Weeks before this module took over were filed on paper, and a week the
+    // batch was not running is not owed at all. Either way, counting them as
+    // outstanding would put a permanent red number on the screen that nobody
+    // can ever clear.
+    const chased = isChased(week) && isInWindow(week, window);
 
     return res.json({
       success: true,
       week,
-      weeks: recentWeeks(12),
+      weeks,
+      window,
       chased,
       startWeek: START_WEEK,
       rows,
       summary: {
-        teaching: active.length,
-        submitted: active.filter((row) => row.status === "submitted").length,
-        draft: active.filter((row) => row.status === "draft").length,
-        missing: chased ? active.filter((row) => row.status === "missing").length : 0,
+        teaching: rows.length,
+        submitted: rows.filter((row) => row.status === "submitted").length,
+        draft: rows.filter((row) => row.status === "draft").length,
+        missing: chased ? rows.filter((row) => row.status === "missing").length : 0,
       },
     });
   } catch (error) {
@@ -560,51 +743,74 @@ exports.pending = async (req, res) => {
     const mt = await masterTrainerFor(req.user);
     if (!mt) return res.json({ success: true, pending: [] });
 
-    const trainers = await Trainer.findAll({
-      where: { mt_id: mt.mt_id },
-      attributes: ["t_id"],
-      raw: true,
-    });
-
+    // Every batch this Master Trainer's course is being taught in. The
+    // reminder spans batches deliberately: an MT running two at once is owed
+    // reports for both, and a nudge that only knew about one would be wrong
+    // in the quietest possible way.
     const allocations = await TrainerCenterAllocation.findAll({
-      where: { t_id: trainers.map((row) => row.t_id) },
-      attributes: ["t_id"],
+      where: { course_id: mt.mt_course_id },
+      attributes: ["t_id", "tb_id", "center_id"],
       raw: true,
     });
 
-    // Only trainers actually teaching. Nobody should be chased for a report on
-    // a trainer with no class this term.
-    const teaching = [...new Set(allocations.map((row) => row.t_id))];
-    if (teaching.length === 0) return res.json({ success: true, pending: [] });
+    if (allocations.length === 0) return res.json({ success: true, pending: [] });
 
-    // This week and the two before it, and never earlier than the week this
-    // module took over - those were filed on paper and chasing them would be
-    // asking for the same work twice. Further back than three weeks a reminder
-    // is no longer a nudge but a backlog, and the module's own list is the
-    // right place to work through one.
-    const weeks = recentWeeks(3).filter((week) => isChased(week));
-    if (weeks.length === 0) return res.json({ success: true, pending: [] });
+    const byBatch = new Map();
+    for (const row of allocations) {
+      if (!byBatch.has(row.tb_id)) byBatch.set(row.tb_id, { trainers: new Set(), centres: new Set() });
+      byBatch.get(row.tb_id).trainers.add(row.t_id);
+      byBatch.get(row.tb_id).centres.add(row.center_id);
+    }
 
-    const submitted = await WeeklyEvaluation.findAll({
-      where: {
-        t_id: teaching,
-        we_week_key: weeks.map((entry) => entry.key),
-        we_status: "submitted",
-      },
-      attributes: ["t_id", "we_week_key"],
-      raw: true,
-    });
+    // This week and the two before it. Further back a reminder is no longer a
+    // nudge but a backlog, and the module's own list is where you work through
+    // one. Never earlier than the week this module took over either - those
+    // weeks were filed on paper.
+    const candidateWeeks = recentWeeks(3).filter((week) => isChased(week));
+    if (candidateWeeks.length === 0) return res.json({ success: true, pending: [] });
 
-    const done = new Set(submitted.map((row) => `${row.t_id}:${row.we_week_key}`));
+    const outstandingByWeek = new Map();
+    let trainerCount = 0;
 
-    const pending = weeks
-      .map((week) => ({
-        week,
-        outstanding: teaching.filter((t_id) => !done.has(`${t_id}:${week.key}`)).length,
-      }))
-      .filter((entry) => entry.outstanding > 0);
+    for (const [tb_id, entry] of byBatch) {
+      const window = await teachingWindow([...entry.centres], tb_id);
 
-    return res.json({ success: true, pending, trainers: teaching.length });
+      // A batch that has finished, or has not started, is not owed anything.
+      const weeks = candidateWeeks.filter((week) => isInWindow(week, window));
+      if (weeks.length === 0) continue;
+
+      const trainers = [...entry.trainers];
+      trainerCount += trainers.length;
+
+      const submitted = await WeeklyEvaluation.findAll({
+        where: {
+          tb_id,
+          t_id: trainers,
+          we_week_key: weeks.map((week) => week.key),
+          we_status: "submitted",
+        },
+        attributes: ["t_id", "we_week_key"],
+        raw: true,
+      });
+
+      const done = new Set(submitted.map((row) => `${row.t_id}:${row.we_week_key}`));
+
+      for (const week of weeks) {
+        const owed = trainers.filter((t_id) => !done.has(`${t_id}:${week.key}`)).length;
+        if (owed === 0) continue;
+
+        const current = outstandingByWeek.get(week.key) || { week, outstanding: 0 };
+        current.outstanding += owed;
+        outstandingByWeek.set(week.key, current);
+      }
+    }
+
+    // Newest first, matching the order the weeks were generated in.
+    const pending = candidateWeeks
+      .map((week) => outstandingByWeek.get(week.key))
+      .filter(Boolean);
+
+    return res.json({ success: true, pending, trainers: trainerCount });
   } catch (error) {
     console.error("[evaluation] pending failed:", error);
     // A broken reminder must not break the dashboard around it.

@@ -7,8 +7,11 @@
 -- sequelize.sync({alter:false}) creates this table on first boot, so this file
 -- is for a database that is updated by hand.
 --
--- NOTE ON THE UNIQUE INDEX. A trainer teaching three classes gets ONE report
--- covering all three, not three near-identical forms. (t_id, we_week_key)
+-- NOTE ON THE UNIQUE INDEX. A trainer teaching three classes in a batch gets
+-- ONE report covering all three, not three near-identical forms. The batch is
+-- part of the key because the module is read a batch at a time and a trainer
+-- running classes in two batches is doing two separable jobs.
+-- (t_id, tb_id, we_week_key)
 -- makes a second report for the same week impossible in the database rather
 -- than merely checked for in the application, which is what makes it safe when
 -- two browser tabs submit at once.
@@ -18,6 +21,7 @@ CREATE TABLE IF NOT EXISTS `weekly_evaluations` (
 
   `t_id`             INT NOT NULL COMMENT 'The trainer being evaluated.',
   `mt_id`            INT NOT NULL COMMENT 'The Master Trainer who filled it in.',
+  `tb_id`            INT NOT NULL COMMENT 'The batch this report covers.',
 
   `we_week_key`      VARCHAR(10) NOT NULL COMMENT 'ISO week, e.g. 2026-W37.',
   `we_week_start`    DATE NOT NULL COMMENT 'Monday. The From Date on the form.',
@@ -56,12 +60,14 @@ CREATE TABLE IF NOT EXISTS `weekly_evaluations` (
   `we_updated_on`    DATETIME NOT NULL,
 
   PRIMARY KEY (`we_id`),
-  UNIQUE KEY `weekly_evaluations_trainer_week` (`t_id`, `we_week_key`),
+  UNIQUE KEY `weekly_evaluations_trainer_batch_week` (`t_id`, `tb_id`, `we_week_key`),
   KEY `weekly_evaluations_mt_week` (`mt_id`, `we_week_key`),
-  KEY `weekly_evaluations_week_status` (`we_week_key`, `we_status`),
+  KEY `weekly_evaluations_batch_week` (`tb_id`, `we_week_key`, `we_status`),
 
   CONSTRAINT `fk_weekly_evaluations_trainer`
     FOREIGN KEY (`t_id`) REFERENCES `trainers` (`t_id`),
   CONSTRAINT `fk_weekly_evaluations_mt`
-    FOREIGN KEY (`mt_id`) REFERENCES `mastertrainers` (`mt_id`)
+    FOREIGN KEY (`mt_id`) REFERENCES `mastertrainers` (`mt_id`),
+  CONSTRAINT `fk_weekly_evaluations_batch`
+    FOREIGN KEY (`tb_id`) REFERENCES `training_batches` (`tb_id`)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;

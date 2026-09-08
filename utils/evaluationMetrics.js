@@ -38,10 +38,16 @@ const SOURCE = {
 
 const figure = (value, source, note) => ({ value, source, note });
 
-/** The classes a trainer is allocated to teach. */
-const classesFor = async (t_id) => {
+/**
+ * The classes a trainer teaches in one batch.
+ *
+ * Scoped to the batch, because the module is read a batch at a time and a
+ * trainer's other batch is somebody else's report. Without the tb_id every
+ * count below would silently span both.
+ */
+const classesFor = async (t_id, tb_id) => {
   const rows = await TrainerCenterAllocation.findAll({
-    where: { t_id },
+    where: { t_id, ...(tb_id ? { tb_id } : {}) },
     attributes: ["center_id", "course_id", "tb_id"],
     raw: true,
   });
@@ -79,10 +85,14 @@ const classScope = (classes) => {
  * The one daily criterion the system can answer. Returned per day so the grid
  * can be ticked in advance and the MT only has to correct it.
  */
-const lectureReportDays = async (t_id, week) => {
+const lectureReportDays = async (t_id, week, tb_id) => {
   const rows = await DailyLectureReport.findAll({
     where: {
       t_id,
+      // Narrowed to the batch. A trainer running two batches files a lecture
+      // report for each, and counting both would tick a day on this report
+      // because a class in a different batch was taught.
+      ...(tb_id ? { tb_id } : {}),
       dlr_date: { [Op.between]: [week.start, week.end] },
     },
     attributes: ["dlr_date"],
@@ -99,22 +109,24 @@ const lectureReportDays = async (t_id, week) => {
   return byDay;
 };
 
-/** Assignments this trainer set during the week. */
-const assignmentCount = (t_id, week) =>
+/** Assignments this trainer set during the week, in this batch. */
+const assignmentCount = (t_id, week, tb_id) =>
   Assignment.count({
     where: {
       t_id,
+      ...(tb_id ? { tb_id } : {}),
       // as_added_on is a real DATETIME, so the day itself has to be included
       // up to its last moment or everything set on Friday is missed.
       as_added_on: { [Op.between]: [`${week.start} 00:00:00`, `${week.end} 23:59:59`] },
     },
   });
 
-/** Quizzes this trainer created during the week. */
-const quizCount = (t_id, week) =>
+/** Quizzes this trainer created during the week, in this batch. */
+const quizCount = (t_id, week, tb_id) =>
   StudentQuiz.count({
     where: {
       t_id,
+      ...(tb_id ? { tb_id } : {}),
       quiz_created_on: { [Op.between]: [week.start, week.end] },
     },
   });
@@ -246,13 +258,13 @@ const onLeave = async (classes, week) => {
  * Read in parallel: they are independent, and an MT opening a form should not
  * wait for seven round trips in sequence.
  */
-const metricsFor = async (t_id, week) => {
-  const classes = await classesFor(t_id);
+const metricsFor = async (t_id, week, tb_id) => {
+  const classes = await classesFor(t_id, tb_id);
 
   const [lectureDays, assignments, quizzes, enrolled, joined, left, leave] = await Promise.all([
-    lectureReportDays(t_id, week),
-    assignmentCount(t_id, week),
-    quizCount(t_id, week),
+    lectureReportDays(t_id, week, tb_id),
+    assignmentCount(t_id, week, tb_id),
+    quizCount(t_id, week, tb_id),
     enrolledAtStart(classes, week),
     newlyEnrolled(classes, week),
     dropouts(classes, week).catch((error) => {

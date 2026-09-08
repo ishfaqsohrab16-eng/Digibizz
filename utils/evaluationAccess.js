@@ -5,10 +5,16 @@ const { ROLES } = require("../middleware/authMiddleware");
  *
  * Three answers, and the difference between them is the whole point:
  *
- *   A MASTER TRAINER writes reports, and only for the trainers who report to
- *   them. trainers.mt_id is that relationship, and it is checked against the
- *   database on every write rather than trusted from the request - a t_id in
- *   a request body is a number the browser chose.
+ *   A MASTER TRAINER writes reports, and only about trainers teaching THEIR
+ *   COURSE. That is the relationship the programme runs on: an MT owns a
+ *   subject and evaluates whoever teaches it. trainers.mt_id exists and looks
+ *   like the answer, but it is not maintained reliably and a trainer teaching
+ *   Graphic Design is the Graphic Design MT's to evaluate either way.
+ *
+ *   The course is read from the ALLOCATION, per batch, so the same check also
+ *   proves the trainer has a class at all. It is done against the database on
+ *   every write rather than trusted from the request - a t_id in a request
+ *   body is a number the browser chose.
  *
  *   ADMINS read everything and write nothing. The report carries two
  *   signatures and one of them is the Master Trainer's; an admin editing it
@@ -56,12 +62,20 @@ const readScope = (user, mt_id) => {
 };
 
 /**
- * May this Master Trainer report on this trainer?
+ * May this Master Trainer report on this trainer, in this batch?
  *
- * `trainer` is the row read from the database, not anything the caller sent.
+ * `classes` is what the trainer is allocated to teach in the batch, read from
+ * the database. One truthful answer covers both questions that matter: is this
+ * my subject, and is this person actually teaching.
+ *
+ * An empty allocation is always false. A trainer with no class has nothing to
+ * be evaluated on, and letting a report exist for one would put a grade
+ * against a week that never happened.
  */
-const ownsTrainer = (mt_id, trainer) =>
-  Boolean(mt_id) && Boolean(trainer) && Number(trainer.mt_id) === Number(mt_id);
+const teachesCourse = (mt_course_id, classes) => {
+  if (!mt_course_id || !Array.isArray(classes) || classes.length === 0) return false;
+  return classes.some((entry) => Number(entry.course_id) === Number(mt_course_id));
+};
 
 /**
  * Is this report still the MT's to change?
@@ -81,7 +95,7 @@ module.exports = {
   canUseModule,
   canWrite,
   readScope,
-  ownsTrainer,
+  teachesCourse,
   canEdit,
   isMasterTrainer,
   isViewer,

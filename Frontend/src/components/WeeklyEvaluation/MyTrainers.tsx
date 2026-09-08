@@ -12,8 +12,10 @@ import {
 import {
   EvalTrainerRow,
   EvalWeek,
+  EvalWindow,
   getMyTrainersForEvaluation,
 } from "../../services/api";
+import { useBatch } from "../../context/BatchContext";
 import WeekPicker, { describeWeek } from "./WeekPicker";
 import EvaluationForm from "./EvaluationForm";
 import EvaluationHistory from "./EvaluationHistory";
@@ -31,6 +33,29 @@ type View =
   | { name: "list" }
   | { name: "form"; t_id: number; weekKey: string }
   | { name: "history"; t_id: number; trainerName: string };
+
+/** The centres a trainer was teaching at in the week being reported on. */
+const ClassChips: React.FC<{ classes: EvalTrainerRow["classes"] }> = ({ classes }) => (
+  <div className="mt-1.5 flex flex-wrap gap-1">
+    {classes.map((entry) => (
+      <span
+        key={`${entry.center_id}-${entry.course_id}-${entry.tb_id}`}
+        title={
+          entry.active === false && entry.dates
+            ? `This centre runs from ${entry.dates.start} to ${entry.dates.end}`
+            : undefined
+        }
+        className={`rounded px-2 py-0.5 text-[11px] ring-1 ring-inset ${
+          entry.active === false
+            ? "bg-slate-50 text-slate-400 ring-slate-200 line-through"
+            : "bg-slate-50 text-slate-600 ring-slate-200"
+        }`}
+      >
+        {entry.center_name} · {entry.course_name}
+      </span>
+    ))}
+  </div>
+);
 
 const StatusPill: React.FC<{ status: "submitted" | "draft" | "missing" }> = ({ status }) => {
   const look = {
@@ -62,29 +87,46 @@ const StatusPill: React.FC<{ status: "submitted" | "draft" | "missing" }> = ({ s
 };
 
 const MyTrainers: React.FC = () => {
+  // The batch is the one selected app-wide, so this module agrees with every
+  // other screen about which batch is being looked at.
+  const { selectedBatchId, selectedBatchName } = useBatch();
+
   const [view, setView] = useState<View>({ name: "list" });
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
 
   const [week, setWeek] = useState<EvalWeek | null>(null);
   const [weeks, setWeeks] = useState<EvalWeek[]>([]);
+  const [teaching, setTeaching] = useState<EvalWindow | null>(null);
   const [trainers, setTrainers] = useState<EvalTrainerRow[]>([]);
   const [weekKey, setWeekKey] = useState<string | undefined>();
 
+  // A different batch is a different set of trainers and a different set of
+  // weeks, so the chosen week must not carry across.
+  useEffect(() => {
+    setWeekKey(undefined);
+  }, [selectedBatchId]);
+
   const load = useCallback(async () => {
+    if (!selectedBatchId || selectedBatchId < 0) {
+      setLoading(false);
+      return;
+    }
+
     setLoading(true);
     setError(null);
     try {
-      const data = await getMyTrainersForEvaluation(weekKey);
+      const data = await getMyTrainersForEvaluation(selectedBatchId, weekKey);
       setWeek(data.week);
       setWeeks(data.weeks);
+      setTeaching(data.window);
       setTrainers(data.trainers);
     } catch (caught: any) {
       setError(caught?.response?.data?.message || "Could not load your trainers.");
     } finally {
       setLoading(false);
     }
-  }, [weekKey]);
+  }, [weekKey, selectedBatchId]);
 
   useEffect(() => {
     if (view.name === "list") load();
@@ -94,6 +136,7 @@ const MyTrainers: React.FC = () => {
     return (
       <EvaluationForm
         t_id={view.t_id}
+        tb_id={selectedBatchId}
         weekKey={view.weekKey}
         onBack={() => setView({ name: "list" })}
       />
@@ -110,8 +153,10 @@ const MyTrainers: React.FC = () => {
     );
   }
 
+  // Every trainer here has a class - the server only returns allocated ones -
+  // so an outstanding report is simply one not yet submitted.
   const outstanding = trainers.filter(
-    (trainer) => trainer.classes.length > 0 && trainer.report?.status !== "submitted"
+    (trainer) => trainer.report?.status !== "submitted"
   ).length;
 
   return (
@@ -120,7 +165,8 @@ const MyTrainers: React.FC = () => {
         <div>
           <h1 className="text-xl font-bold text-slate-900">Weekly M&amp;E Reports</h1>
           <p className="mt-0.5 text-sm text-slate-500">
-            Trainers performance, for the trainers who report to you
+            Trainers teaching your course
+            {selectedBatchName ? ` in ${selectedBatchName}` : ""}
           </p>
         </div>
 
@@ -172,6 +218,16 @@ const MyTrainers: React.FC = () => {
         </div>
       )}
 
+      {(!selectedBatchId || selectedBatchId < 0) && !loading && (
+        <div className="rounded-2xl border border-slate-200 bg-white p-10 text-center">
+          <ClipboardList className="mx-auto h-8 w-8 text-slate-300" />
+          <p className="mt-2 text-sm font-medium text-slate-700">Choose a batch first</p>
+          <p className="mt-1 text-xs text-slate-500">
+            Reports belong to a batch, and each centre in a batch has its own dates.
+          </p>
+        </div>
+      )}
+
       {loading && (
         <div className="flex min-h-[30vh] items-center justify-center">
           <Loader2 className="h-6 w-6 animate-spin text-emerald-600" />
@@ -184,12 +240,26 @@ const MyTrainers: React.FC = () => {
         </div>
       )}
 
-      {!loading && !error && trainers.length === 0 && (
+      {!loading && !error && selectedBatchId > 0 && trainers.length === 0 && (
         <div className="rounded-2xl border border-slate-200 bg-white p-10 text-center">
           <Users className="mx-auto h-8 w-8 text-slate-300" />
-          <p className="mt-2 text-sm font-medium text-slate-700">No trainers report to you yet</p>
+          <p className="mt-2 text-sm font-medium text-slate-700">
+            Nobody is teaching your course in this batch
+          </p>
           <p className="mt-1 text-xs text-slate-500">
-            A trainer appears here once they are assigned to you as their Master Trainer.
+            A trainer appears here once they are allocated a class on your course in this batch.
+          </p>
+        </div>
+      )}
+
+      {!loading && !error && trainers.length > 0 && !teaching && (
+        <div className="mb-4 rounded-xl border border-amber-200 bg-amber-50 p-4">
+          <p className="text-sm font-semibold text-amber-900">
+            This batch has no start and end dates recorded for its centres
+          </p>
+          <p className="mt-0.5 text-xs text-amber-800">
+            Reports run between a centre's own dates, so those need setting before a week can be
+            reported on.
           </p>
         </div>
       )}
@@ -201,12 +271,11 @@ const MyTrainers: React.FC = () => {
           .slice()
           .sort((a, b) => {
             const rank = (row: EvalTrainerRow) =>
-              row.classes.length === 0 ? 2 : row.report?.status === "submitted" ? 1 : 0;
+              row.report?.status === "submitted" ? 1 : 0;
             return rank(a) - rank(b) || a.name.localeCompare(b.name);
           })
           .map((trainer) => {
             const status = trainer.report?.status || "missing";
-            const teaching = trainer.classes.length > 0;
 
             return (
               <div
@@ -216,31 +285,10 @@ const MyTrainers: React.FC = () => {
                 <div className="min-w-0 flex-1">
                   <div className="flex flex-wrap items-center gap-2">
                     <p className="font-semibold text-slate-900">{trainer.name}</p>
-                    {teaching ? (
-                      <StatusPill status={status} />
-                    ) : (
-                      <span className="rounded-full bg-slate-100 px-2.5 py-1 text-xs font-medium text-slate-500 ring-1 ring-inset ring-slate-200">
-                        No class allocated
-                      </span>
-                    )}
+                    <StatusPill status={status} />
                   </div>
 
-                  {teaching ? (
-                    <div className="mt-1.5 flex flex-wrap gap-1">
-                      {trainer.classes.map((entry) => (
-                        <span
-                          key={`${entry.center_id}-${entry.course_id}-${entry.tb_id}`}
-                          className="rounded bg-slate-50 px-2 py-0.5 text-[11px] text-slate-600 ring-1 ring-inset ring-slate-200"
-                        >
-                          {entry.center_name} · {entry.course_name} · {entry.tb_name}
-                        </span>
-                      ))}
-                    </div>
-                  ) : (
-                    <p className="mt-1 text-xs text-slate-400">
-                      Nothing to evaluate until a class is assigned.
-                    </p>
-                  )}
+                  <ClassChips classes={trainer.classes} />
                 </div>
 
                 <div className="flex items-center gap-2">
@@ -255,7 +303,7 @@ const MyTrainers: React.FC = () => {
                   </button>
 
                   <button
-                    disabled={!teaching || !week}
+                    disabled={!week}
                     onClick={() =>
                       week && setView({ name: "form", t_id: trainer.t_id, weekKey: week.key })
                     }

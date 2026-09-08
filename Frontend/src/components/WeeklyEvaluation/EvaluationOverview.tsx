@@ -18,6 +18,7 @@ import {
 } from "../../services/api";
 import WeekPicker, { describeWeek } from "./WeekPicker";
 import ReportCard from "./ReportCard";
+import { useBatch } from "../../context/BatchContext";
 
 /**
  * Every trainer in the programme for one week, reported on or not.
@@ -86,6 +87,10 @@ const Stat: React.FC<{
 };
 
 const EvaluationOverview: React.FC = () => {
+  // The batch selected app-wide. Reports belong to a batch, and each centre in
+  // one has its own start and end dates.
+  const { selectedBatchId, selectedBatchName } = useBatch();
+
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
 
@@ -104,11 +109,21 @@ const EvaluationOverview: React.FC = () => {
   const [open, setOpen] = useState<{ report: EvalReport; week: EvalWeek | null } | null>(null);
   const [opening, setOpening] = useState(false);
 
+  // A different batch has different trainers and different weeks.
+  useEffect(() => {
+    setWeekKey(undefined);
+  }, [selectedBatchId]);
+
   const load = useCallback(async () => {
+    if (!selectedBatchId || selectedBatchId < 0) {
+      setLoading(false);
+      return;
+    }
+
     setLoading(true);
     setError(null);
     try {
-      const data = await getEvaluationOverview(weekKey);
+      const data = await getEvaluationOverview(selectedBatchId, weekKey);
       setWeek(data.week);
       setWeeks(data.weeks);
       setRows(data.rows);
@@ -119,7 +134,7 @@ const EvaluationOverview: React.FC = () => {
     } finally {
       setLoading(false);
     }
-  }, [weekKey]);
+  }, [weekKey, selectedBatchId]);
 
   useEffect(() => {
     load();
@@ -137,10 +152,10 @@ const EvaluationOverview: React.FC = () => {
           : true
       )
       .sort((a, b) => {
-        // Not teaching last; then missing, draft, submitted - worst first,
-        // because this page exists to find what is outstanding.
+        // Missing, draft, submitted - worst first, because this page exists to
+        // find what is outstanding.
         const rank = (row: EvalOverviewRow) =>
-          !row.teaching ? 3 : row.status === "missing" ? 0 : row.status === "draft" ? 1 : 2;
+          row.status === "missing" ? 0 : row.status === "draft" ? 1 : 2;
         return rank(a) - rank(b) || a.name.localeCompare(b.name);
       });
   }, [rows, filter, search]);
@@ -183,7 +198,8 @@ const EvaluationOverview: React.FC = () => {
         <div>
           <h1 className="text-xl font-bold text-slate-900">Weekly M&amp;E Reports</h1>
           <p className="mt-0.5 text-sm text-slate-500">
-            Trainers performance across the programme
+            Trainers performance
+            {selectedBatchName ? ` in ${selectedBatchName}` : " across the programme"}
           </p>
         </div>
         {week && (
@@ -266,6 +282,16 @@ const EvaluationOverview: React.FC = () => {
         />
       </div>
 
+      {(!selectedBatchId || selectedBatchId < 0) && !loading && (
+        <div className="rounded-2xl border border-slate-200 bg-white p-10 text-center">
+          <FileEdit className="mx-auto h-8 w-8 text-slate-300" />
+          <p className="mt-2 text-sm font-medium text-slate-700">Choose a batch first</p>
+          <p className="mt-1 text-xs text-slate-500">
+            Reports belong to a batch, and each centre in a batch has its own dates.
+          </p>
+        </div>
+      )}
+
       {loading && (
         <div className="flex min-h-[30vh] items-center justify-center">
           <Loader2 className="h-6 w-6 animate-spin text-emerald-600" />
@@ -302,18 +328,12 @@ const EvaluationOverview: React.FC = () => {
                   </p>
                 </div>
 
-                {!row.teaching ? (
-                  <span className="rounded-full bg-slate-100 px-2.5 py-1 text-xs font-medium text-slate-500 ring-1 ring-inset ring-slate-200">
-                    No class allocated
-                  </span>
-                ) : (
-                  <span
-                    className={`inline-flex items-center gap-1.5 whitespace-nowrap rounded-full px-2.5 py-1 text-xs font-semibold ring-1 ring-inset ${look.className}`}
-                  >
-                    <look.Icon className="h-3.5 w-3.5" />
-                    {look.label}
-                  </span>
-                )}
+                <span
+                  className={`inline-flex items-center gap-1.5 whitespace-nowrap rounded-full px-2.5 py-1 text-xs font-semibold ring-1 ring-inset ${look.className}`}
+                >
+                  <look.Icon className="h-3.5 w-3.5" />
+                  {look.label}
+                </span>
 
                 {row.quality && (
                   <span className="hidden rounded bg-slate-100 px-2 py-0.5 text-[11px] font-medium text-slate-600 sm:inline">

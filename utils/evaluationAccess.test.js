@@ -12,7 +12,7 @@ const {
   canUseModule,
   canWrite,
   readScope,
-  ownsTrainer,
+  teachesCourse,
   canEdit,
 } = require("./evaluationAccess");
 
@@ -86,15 +86,42 @@ check(
 
 console.log("\nWhich trainers are whose\n");
 
-check("their own trainer", ownsTrainer(7, { mt_id: 7 }));
-check("not someone else's", !ownsTrainer(7, { mt_id: 8 }));
-check("a trainer with no master trainer belongs to nobody", !ownsTrainer(7, { mt_id: null }));
-check("a missing trainer is not owned", !ownsTrainer(7, null));
-check("a missing master trainer owns nobody", !ownsTrainer(null, { mt_id: 7 }));
+// The link is the COURSE, read from what the trainer is allocated to teach in
+// the batch. An MT owns a subject and evaluates whoever teaches it.
+const graphicDesign = 3;
+const digitalMarketing = 4;
 
-// A t_id arrives in a request body, so the ids being compared come from the
-// database and from a token - and one of them may be a string.
-check("ids compare across types", ownsTrainer("7", { mt_id: 7 }));
+const teaching = (...courseIds) =>
+  courseIds.map((course_id) => ({ center_id: 1, course_id, tb_id: 10 }));
+
+check(
+  "a trainer teaching my course is mine",
+  teachesCourse(graphicDesign, teaching(graphicDesign))
+);
+check(
+  "a trainer teaching a different course is not",
+  !teachesCourse(graphicDesign, teaching(digitalMarketing))
+);
+
+// A trainer may teach two subjects. They belong to both MTs, each for their
+// own course, which is correct - two different people assess two different
+// classes.
+check(
+  "a trainer teaching both belongs to both",
+  teachesCourse(graphicDesign, teaching(graphicDesign, digitalMarketing)) &&
+    teachesCourse(digitalMarketing, teaching(graphicDesign, digitalMarketing))
+);
+
+// The rule that keeps unallocated trainers out of the module entirely. A
+// report on a trainer with no class would grade a week that never happened.
+check("a trainer with no class belongs to nobody", !teachesCourse(graphicDesign, []));
+check("no allocation at all is not ownership", !teachesCourse(graphicDesign, null));
+check("an MT with no course owns nobody", !teachesCourse(null, teaching(graphicDesign)));
+check("nor one with course 0", !teachesCourse(0, teaching(graphicDesign)));
+
+// Ids arrive from a token and from the database, and one of them may be a
+// string.
+check("ids compare across types", teachesCourse("3", teaching(3)));
 
 console.log("\nWhat may still be changed\n");
 
