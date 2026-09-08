@@ -1,6 +1,11 @@
 const StudentsDocsModel = require("../models/studentsDocsModel"); // Adjust the path as necessary
 const StudentsModel = require("../models/studentModel");
 const StudentModel = require("../models/studentModel");
+const User = require("../models/userModel");
+const {
+  PASSPORT_DOC_TYPE,
+  ensureProfilePhoto,
+} = require("../utils/studentProfilePhoto");
 // Get all student documents
 exports.getAllStudentDocs = async (req, res) => {
   try {
@@ -65,6 +70,28 @@ exports.createStudentDoc = async (req, res) => {
       tb_id,
       doc_date,
     });
+
+    /**
+     * A passport photograph just arrived for a student with no usable profile
+     * picture, so use it as one - copied, leaving the document itself alone.
+     *
+     * Doing it here rather than only in the nightly sense of "eventually" is
+     * the difference between an avatar that appears the moment the photo is
+     * uploaded and one that appears at some point afterwards for no reason
+     * the person watching can see.
+     *
+     * Never allowed to fail the upload. The document is saved and that is
+     * what was asked for; a picture that did not get copied is worth a line
+     * in the log, not an error page over a successful upload.
+     */
+    if (doc_type === PASSPORT_DOC_TYPE) {
+      try {
+        const user = await User.findOne({ where: { user_id: std_user_id } });
+        await ensureProfilePhoto(user, Student);
+      } catch (error) {
+        console.error("[photo] could not adopt the passport photo:", error.message);
+      }
+    }
 
     const studentDoc = await StudentsDocsModel.findAll({
       where: { std_cnic: Student.std_cnic },

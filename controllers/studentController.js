@@ -11,6 +11,7 @@ const bcrypt = require("bcryptjs");
 const { Op } = require("sequelize");
 const { sequelize } = require("../config/db");
 const { studentContactConflicts } = require("../utils/contactUniqueness");
+const { ensureProfilePhoto } = require("../utils/studentProfilePhoto");
 const MasterTrainer = require("../models/masterTrainersModel");
 const CenterDates = require("../models/centersDatesModel");
 const Attendance = require("../models/attendanceModel");
@@ -803,6 +804,24 @@ const getStudentProfileByField = async (res, fieldClause, replacements) => {
         success: false,
         message: "Student not found",
       });
+    }
+
+    /**
+     * A missing or broken profile picture is repaired from the student's own
+     * passport photograph on the way past.
+     *
+     * One stat() when the picture is fine, which is nearly always, and work
+     * only when it is not - so opening a profile quietly fixes the students
+     * who predate this without anybody running anything. The photograph stays
+     * in documents either way; what goes in user-profiles is a copy.
+     */
+    try {
+      const account = await User.findOne({ where: { user_id: student.user_id } });
+      const photo = await ensureProfilePhoto(account, student);
+      if (photo) student.user_profile_photo = photo;
+    } catch (error) {
+      // A profile that will not load is worse than one with no picture.
+      console.error("[photo] could not resolve a profile picture:", error.message);
     }
 
     // Fetch training batch to get end date

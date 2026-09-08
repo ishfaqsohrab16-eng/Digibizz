@@ -115,6 +115,10 @@ interface StudentData {
   professionalProfiles: ProfessionalProfile[];
 }
 
+/** Shown when there is no photograph of this student anywhere. */
+const DEFAULT_AVATAR =
+  "data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='24' height='24' viewBox='0 0 24 24' fill='none' stroke='%23999' stroke-width='1.5' stroke-linecap='round' stroke-linejoin='round'%3E%3Cpath d='M20 21v-2a4 4 0 0 0-4-4H8a4 4 0 0 0-4 4v2'/%3E%3Ccircle cx='12' cy='7' r='4'/%3E%3C/svg%3E";
+
 const SearchStudent = () => {
   const [searchMode, setSearchMode] = useState<"cnic" | "email">("cnic");
   const [searchCNIC, setSearchCNIC] = useState("");
@@ -138,6 +142,11 @@ const SearchStudent = () => {
   const [editData, setEditData] = useState<any>(null);
   const [showSendMail, setShowSendMail] = useState(false);
   const [showDeleteDialog, setShowDeleteDialog] = useState(false);
+  // A picture that will not load. The server fills a missing one from the
+  // student's passport photograph, so this is the case where there is no
+  // photograph of them anywhere - a silhouette says that, a broken image
+  // icon says something is wrong.
+  const [imageError, setImageError] = useState(false);
 
   // Same rule as the enrolled-student table: permanent deletion is SuperAdmin
   // only, and the server enforces it independently of this flag.
@@ -164,6 +173,7 @@ const SearchStudent = () => {
 
   const handleSearch = async () => {
     setIsLoading(true);
+    setImageError(false);
     try {
       const query = searchMode === "cnic" ? searchCNIC.trim() : searchEmail.trim();
 
@@ -487,9 +497,14 @@ const SearchStudent = () => {
               <div className="header-gradient-student rounded-lg p-6 mb-8 flex items-center transform hover:scale-[1.02] transition-all duration-300 bg-[hsl(var(--sidebar-bg))] text-[hsl(var(--sidebar-fg))]">
                 <div className="flex-shrink-0">
                   <img
-                    src={`${BACKEND_URL}${studentData.user_profile_photo}`}
+                    src={
+                      studentData.user_profile_photo && !imageError
+                        ? `${BACKEND_URL}${studentData.user_profile_photo}`
+                        : DEFAULT_AVATAR
+                    }
+                    onError={() => setImageError(true)}
                     alt={studentData.user_name}
-                    className="w-48 h-48 rounded-full border-4 border-[hsl(var(--card))] shadow-lg hover:border-[hsl(var(--primary))] transition-colors"
+                    className="w-48 h-48 rounded-full border-4 border-[hsl(var(--card))] shadow-lg hover:border-[hsl(var(--primary))] transition-colors object-cover"
                   />
                 </div>
                 <div className="ml-6 flex-1">
