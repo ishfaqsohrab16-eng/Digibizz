@@ -1,6 +1,7 @@
 import React, { useCallback, useEffect, useState } from "react";
 import {
   AlertTriangle,
+  BadgeCheck,
   CheckCircle2,
   ChevronRight,
   ClipboardList,
@@ -57,8 +58,18 @@ const ClassChips: React.FC<{ classes: EvalTrainerRow["classes"] }> = ({ classes 
   </div>
 );
 
-const StatusPill: React.FC<{ status: "submitted" | "draft" | "missing" }> = ({ status }) => {
+const StatusPill: React.FC<{ status: "submitted" | "reviewed" | "draft" | "missing" }> = ({
+  status,
+}) => {
   const look = {
+    // The second signature. A Master Trainer seeing this knows somebody
+    // senior actually read what they wrote, which is the whole reason the
+    // review stage is recorded at all.
+    reviewed: {
+      className: "bg-emerald-600 text-white ring-emerald-600",
+      label: "Reviewed",
+      Icon: BadgeCheck,
+    },
     submitted: {
       className: "bg-emerald-50 text-emerald-800 ring-emerald-200",
       label: "Submitted",
@@ -156,7 +167,7 @@ const MyTrainers: React.FC = () => {
   // Every trainer here has a class - the server only returns allocated ones -
   // so an outstanding report is simply one not yet submitted.
   const outstanding = trainers.filter(
-    (trainer) => trainer.report?.status !== "submitted"
+    (trainer) => !["submitted", "reviewed"].includes(trainer.report?.status || "")
   ).length;
 
   return (
@@ -308,13 +319,17 @@ const MyTrainers: React.FC = () => {
                       week && setView({ name: "form", t_id: trainer.t_id, weekKey: week.key })
                     }
                     className={`inline-flex items-center gap-1.5 rounded-lg px-3 py-2 text-xs font-semibold transition ${
-                      status === "submitted"
+                      status === "submitted" || status === "reviewed"
                         ? "bg-slate-100 text-slate-600 hover:bg-slate-200"
                         : "bg-emerald-600 text-white shadow-sm hover:bg-emerald-700"
                     } disabled:cursor-not-allowed disabled:opacity-40`}
                   >
                     <ClipboardList className="h-3.5 w-3.5" />
-                    {status === "submitted" ? "View" : status === "draft" ? "Continue" : "Fill in"}
+                    {status === "submitted" || status === "reviewed"
+                      ? "View"
+                      : status === "draft"
+                        ? "Continue"
+                        : "Fill in"}
                     <ChevronRight className="h-3.5 w-3.5" />
                   </button>
                 </div>

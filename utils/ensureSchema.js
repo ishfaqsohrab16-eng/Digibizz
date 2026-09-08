@@ -20,6 +20,42 @@ const { sequelize } = require("../config/db");
  * exact SQL to run by hand.
  */
 const REQUIRED_COLUMNS = [
+  // The weekly M&E report gained attendance and a review stage after it was
+  // already deployed. Same reason as tb_id below: sync({alter:false}) creates
+  // tables and never adds a column to one that exists.
+  {
+    table: "weekly_evaluations",
+    column: "we_attendance",
+    definition:
+      "JSON NULL DEFAULT NULL COMMENT 'Present, absent and on leave per teaching day, from the register.'",
+    migration: "migration/028_weekly_evaluations_attendance_and_review.sql",
+  },
+  {
+    table: "weekly_evaluations",
+    column: "we_reviewed_by",
+    definition: "INT NULL DEFAULT NULL COMMENT 'The user who marked it reviewed.'",
+    migration: "migration/028_weekly_evaluations_attendance_and_review.sql",
+  },
+  {
+    table: "weekly_evaluations",
+    column: "we_reviewed_by_name",
+    definition:
+      "VARCHAR(150) NULL DEFAULT NULL COMMENT 'Their name at the time, so an old report still reads.'",
+    migration: "migration/028_weekly_evaluations_attendance_and_review.sql",
+  },
+  {
+    table: "weekly_evaluations",
+    column: "we_reviewed_on",
+    definition: "DATETIME NULL DEFAULT NULL",
+    migration: "migration/028_weekly_evaluations_attendance_and_review.sql",
+  },
+  {
+    table: "weekly_evaluations",
+    column: "we_review_note",
+    definition:
+      "TEXT NULL DEFAULT NULL COMMENT 'Optional note from the reviewer, shown to the Master Trainer.'",
+    migration: "migration/028_weekly_evaluations_attendance_and_review.sql",
+  },
   {
     // The weekly M&E report was first deployed keyed on (trainer, week) and
     // then corrected to (trainer, BATCH, week) - a trainer running classes in
@@ -225,6 +261,19 @@ const FORBIDDEN_INDEXES = [
  * and no data can be truncated by running this.
  */
 const REQUIRED_WIDER_COLUMNS = [
+  {
+    // Trainees' feedback was Yes/No and is now the four-point scale, so
+    // "Satisfactory" - twelve characters - no longer fits in ten.
+    table: "weekly_evaluations",
+    column: "we_feedback_submission",
+    tooSmall: (type) => /varchar\((\d+)\)/i.test(type) && Number(RegExp.$1) < 20,
+    definition:
+      "VARCHAR(20) NULL DEFAULT NULL COMMENT 'Trainees feedback: Excellent | Good | Satisfactory | Poor'",
+    reason:
+      "trainees' feedback moved from Yes/No to a four-point scale and " +
+      "\"Satisfactory\" does not fit in the old column",
+    migration: "migration/028_weekly_evaluations_attendance_and_review.sql",
+  },
   {
     table: "daily_lecture_reports",
     column: "dlr_challenges",

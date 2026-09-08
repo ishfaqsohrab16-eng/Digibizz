@@ -5,9 +5,9 @@
  * Exits non-zero if any rule regresses.
  *
  * The week boundary decides every automatic figure on a signed report - how
- * many assignments were set, how many students were enrolled at the start, who
- * was on leave. An off-by-one here is not a display bug; it is a wrong number
- * on a document two people put their names to.
+ * many assignments were set, who was present on Tuesday, how many students
+ * were enrolled at the start. An off-by-one here is not a display bug; it is a
+ * wrong number on a document two people put their names to.
  */
 process.env.TZ = "Asia/Karachi";
 
@@ -16,6 +16,8 @@ const {
   weekFromKey,
   recentWeeks,
   isReportable,
+  isChased,
+  START_WEEK,
   DAYS,
   DAILY_CRITERIA,
   QUALITY_GRADES,
@@ -34,104 +36,131 @@ const check = (name, condition, detail) => {
   }
 };
 
-console.log("\nMonday to Friday\n");
+const dayName = (iso) =>
+  ["Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"][new Date(`${iso}T00:00:00`).getDay()];
 
-// Tuesday 8 September 2026.
-let week = weekOf(new Date(2026, 8, 8));
-check("the week starts on Monday", week.start === "2026-09-07", week.start);
-check("and ends on Friday", week.end === "2026-09-11", week.end);
+console.log("\nFriday to Thursday\n");
+
+// The week the change was specified against: Fri 4 Sep 2026 to Thu 10 Sep.
+let week = weekOf(new Date(2026, 8, 8)); // Tuesday 8 September
+
+check("the week starts on the Friday", week.start === "2026-09-04", week.start);
+check("and that really is a Friday", dayName(week.start) === "Fri");
+check("it ends on the Thursday", week.end === "2026-09-10", week.end);
+check("and that really is a Thursday", dayName(week.end) === "Thu");
 check("five teaching days", week.days.length === 5);
 
-// The whole point of the boundary: every day of the week has to resolve to the
-// same week, or a Friday report and a Monday report disagree about which week
-// they belong to.
-for (const [day, label] of [
-  [7, "Monday"],
-  [8, "Tuesday"],
-  [9, "Wednesday"],
-  [10, "Thursday"],
-  [11, "Friday"],
-  [12, "Saturday"],
-  [13, "Sunday"],
+// Every day of the week has to resolve to the same week, or a Friday report
+// and a Wednesday report disagree about which week they belong to.
+for (const [day, label, expected] of [
+  [4, "Friday", "2026-09-04"],
+  [5, "Saturday", "2026-09-04"],
+  [6, "Sunday", "2026-09-04"],
+  [7, "Monday", "2026-09-04"],
+  [8, "Tuesday", "2026-09-04"],
+  [9, "Wednesday", "2026-09-04"],
+  [10, "Thursday", "2026-09-04"],
+  // The next Friday starts a NEW week. This is the boundary that matters.
+  [11, "the next Friday", "2026-09-11"],
 ]) {
   const from = weekOf(new Date(2026, 8, day));
-  check(`${label} resolves to the same week`, from.start === "2026-09-07", from.start);
+  check(`${label} belongs to ${expected}`, from.start === expected, from.start);
 }
 
-// Sunday is the END of an ISO week, which is the classic off-by-one: read as
-// the start of the next one, a Sunday submission files against the wrong week.
-const sunday = weekOf(new Date(2026, 8, 6));
-check("the Sunday before belongs to the PREVIOUS week", sunday.start === "2026-08-31", sunday.start);
+// The weekend belongs to the week that has just started, not the one about to.
+// Getting this backwards moves every Saturday submission a week forward.
+const saturday = weekOf(new Date(2026, 8, 5));
+check("Saturday is inside the week that began the day before", saturday.end === "2026-09-10");
 
 console.log("\nThe columns the paper form prints\n");
 
-// The form heads its columns "Fri Mon Tue Wed Thurs". The screen keeps that
-// order so it matches the paper in front of the person filling it in.
+// "Fri Mon Tue Wed Thurs" is not an odd ordering - against a Friday-to-Thursday
+// week it is simply chronological, which is what it always was.
 check(
   "columns are in the paper's order",
   week.days.map((day) => day.label).join(" ") === "Fri Mon Tue Wed Thurs",
   week.days.map((day) => day.label).join(" ")
 );
 
-// But each column has to carry its REAL date, or Friday-first is unreadable.
 const byKey = Object.fromEntries(week.days.map((day) => [day.key, day.date]));
-check("Monday's column is Monday's date", byKey.mon === "2026-09-07");
-check("Tuesday's", byKey.tue === "2026-09-08");
-check("Wednesday's", byKey.wed === "2026-09-09");
-check("Thursday's", byKey.thu === "2026-09-10");
-check("Friday's is the END of the week, not the start", byKey.fri === "2026-09-11", byKey.fri);
+check("Friday is the first day of the week", byKey.fri === "2026-09-04", byKey.fri);
+check("Monday follows the weekend", byKey.mon === "2026-09-07", byKey.mon);
+check("Tuesday", byKey.tue === "2026-09-08");
+check("Wednesday", byKey.wed === "2026-09-09");
+check("Thursday is the last", byKey.thu === "2026-09-10", byKey.thu);
 
-// Display order must not leak into storage. Reordering the columns later would
-// otherwise re-map every stored answer to a different day.
+// The dates have to ascend down the row, or the columns are not chronological
+// after all and the label order is misleading.
+const dates = week.days.map((day) => day.date);
 check(
-  "storage keys are day names, not positions",
-  DAYS.every((day) => /^(mon|tue|wed|thu|fri)$/.test(day.key))
+  "and the dates ascend across the columns",
+  dates.every((date, index) => index === 0 || date > dates[index - 1]),
+  dates.join(" ")
 );
+
+// Saturday and Sunday are in the week and nobody teaches, so they have no
+// column. Their absence is what makes five days out of seven.
+check("no weekend columns", week.days.every((day) => !["sat", "sun"].includes(day.key)));
+check("storage keys are day names", DAYS.every((day) => /^(fri|mon|tue|wed|thu)$/.test(day.key)));
 
 console.log("\nRebuilding a week from its key\n");
 
 const rebuilt = weekFromKey(week.key);
-check("a key round-trips", rebuilt && rebuilt.start === week.start, rebuilt && rebuilt.start);
-check("and keeps its dates", rebuilt && rebuilt.end === "2026-09-11");
+check("a key round-trips", rebuilt?.start === week.start, rebuilt?.start);
+check("and keeps its dates", rebuilt?.end === "2026-09-10");
+check("the key is the starting Friday", week.key === "2026-09-04", week.key);
+
+// An ISO week key belongs to the OTHER week definition in this system - the
+// one student feedback and leave run on. Accepting it here would silently mix
+// two calendars.
+check("an ISO week key is refused", weekFromKey("2026-W37") === null);
 
 check("a malformed key is rejected", weekFromKey("nonsense") === null);
 check("an empty key is rejected", weekFromKey("") === null);
-check("week 0 is rejected", weekFromKey("2026-W00") === null);
-check("week 54 is rejected", weekFromKey("2026-W54") === null);
+check("an impossible date is rejected", weekFromKey("2026-02-31") === null);
 
-// 1 January is often in the last ISO week of the previous year. A key built
-// from the calendar year would name a week that does not exist and rebuild as
-// a different one entirely.
-const newYear = weekOf(new Date(2027, 0, 1));
-check(
-  "a new-year week round-trips through its key",
-  weekFromKey(newYear.key)?.start === newYear.start,
-  `${newYear.key} -> ${weekFromKey(newYear.key)?.start} (want ${newYear.start})`
-);
+// A date that is not a Friday cannot be the start of a report week. Snapping
+// it would file the report against a week nobody asked for.
+check("a Monday is refused, not snapped", weekFromKey("2026-09-07") === null);
+check("a Thursday is refused", weekFromKey("2026-09-10") === null);
+
+// A new year inside a week: 1 January 2027 is a Friday, so it starts one.
+const newYear = weekFromKey("2027-01-01");
+check("a week starting on New Year's Day works", newYear?.end === "2027-01-07", newYear?.end);
+
+// And a week that straddles the year end.
+const straddle = weekOf(new Date(2026, 11, 29)); // Tue 29 Dec 2026
+check("a week can straddle the year end", straddle.start === "2026-12-25", straddle.start);
+check("ending in the next year", straddle.end === "2026-12-31", straddle.end);
 
 console.log("\nWhich weeks may be reported on\n");
 
 const weeks = recentWeeks(6, new Date(2026, 8, 8));
-check("newest first", weeks[0].start === "2026-09-07", weeks[0].start);
-check("then the week before", weeks[1].start === "2026-08-31", weeks[1].start);
-check("as many as asked for", weeks.length === 6);
+check("newest first", weeks[0].start === "2026-09-04", weeks[0].start);
+check("then the week before", weeks[1].start === "2026-08-28", weeks[1].start);
+check("exactly seven days apart", weeks.length === 6);
 check("no duplicates", new Set(weeks.map((entry) => entry.key)).size === 6);
+check("every one starts on a Friday", weeks.every((entry) => dayName(entry.start) === "Fri"));
 
-// The current week is reportable: a report is due at the end of it, and an MT
-// finishing their Friday visit should not have to wait until Monday.
-check("the current week is reportable", isReportable(weekOf(new Date(2026, 8, 8)), new Date(2026, 8, 8)));
-check(
-  "a past week is reportable",
-  isReportable(weekOf(new Date(2026, 7, 25)), new Date(2026, 8, 8))
-);
+const now = new Date(2026, 8, 8);
+check("the current week is reportable", isReportable(weekOf(now), now));
+check("a past week is reportable", isReportable(weekOf(new Date(2026, 7, 20)), now));
 
-// A future week is not. There is nothing to evaluate yet, and a report filed
-// in advance is a guess with two signatures on it.
-check(
-  "next week is not",
-  !isReportable(weekOf(new Date(2026, 8, 15)), new Date(2026, 8, 8))
-);
+// A report filed in advance is a guess with two signatures on it.
+check("next week is not", !isReportable(weekOf(new Date(2026, 8, 15)), now));
 check("nothing is not", !isReportable(null));
+
+console.log("\nWhich weeks anyone is chased for\n");
+
+check("the start week is a Friday", dayName(START_WEEK) === "Fri", START_WEEK);
+check("the current week is chased", isChased(weekOf(now), now));
+
+// Weeks before the module existed were filed on paper.
+const march = weekOf(new Date(2026, 2, 10));
+check("a week from before the module is not chased", !isChased(march, now));
+check("although it can still be filled in", isReportable(march, now));
+check("a future week is not chased", !isChased(weekOf(new Date(2026, 8, 15)), now));
+check("nothing is not chased", !isChased(null, now));
 
 console.log("\nWhat the form offers\n");
 
@@ -141,37 +170,12 @@ check(
   DAILY_CRITERIA.filter((item) => item.auto).length === 1 &&
     DAILY_CRITERIA.find((item) => item.auto).key === "lecture_reports"
 );
-check("four quality grades", QUALITY_GRADES.length === 4);
+
+// One scale for both graded questions, so they can be compared across trainers
+// and weeks. Trainees' feedback used to be Yes/No, which recorded only whether
+// the exercise happened and not what it said.
+check("four grades", QUALITY_GRADES.length === 4);
 check("best first", QUALITY_GRADES[0] === "Excellent" && QUALITY_GRADES[3] === "Poor");
-
-console.log("\nWhich weeks anyone is chased for\n");
-
-// Weeks before this module took over were filed on paper. Chasing a Master
-// Trainer for one is asking them to do the same work twice, and a red
-// "missing" count nobody can ever clear is worse than no count at all.
-const { isChased, START_WEEK } = require("./evaluationWeek");
-const nowish = new Date(2026, 8, 8);
-
-check("the start week is a Monday", new Date(START_WEEK + "T00:00:00").getDay() === 1, START_WEEK);
-
-const thisWeek = weekOf(nowish);
-check("the current week is chased", isChased(thisWeek, nowish), thisWeek.start);
-
-// March is long before the module existed.
-const march = weekOf(new Date(2026, 2, 10));
-check("a week from before the module is not chased", !isChased(march, nowish));
-
-// But it is still perfectly reportable - someone typing up a paper report
-// from March must be able to. Reportable and chased are different questions
-// and collapsing them would lock the backfill out.
-check("although it can still be filled in", isReportable(march, nowish));
-
-// A future week is neither.
-const ahead = weekOf(new Date(2026, 8, 15));
-check("a future week is not chased", !isChased(ahead, nowish));
-check("nor reportable", !isReportable(ahead, nowish));
-
-check("nothing is not chased", !isChased(null, nowish));
 
 console.log(`\n${passed} passed, ${failed} failed`);
 process.exit(failed === 0 ? 0 : 1);

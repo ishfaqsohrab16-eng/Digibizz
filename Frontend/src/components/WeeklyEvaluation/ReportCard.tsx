@@ -1,5 +1,5 @@
 import React from "react";
-import { Check, X } from "lucide-react";
+import { BadgeCheck, Check, X } from "lucide-react";
 import { EvalCriterion, EvalReport, EvalWeek } from "../../services/api";
 
 /**
@@ -34,35 +34,26 @@ const Mark: React.FC<{ on: boolean }> = ({ on }) => (
   </span>
 );
 
-/** One assessment line, with the computed figure when it disagreed. */
-const Line: React.FC<{ label: string; value: React.ReactNode; auto?: number | null }> = ({
-  label,
-  value,
-  auto,
-}) => {
-  const shown = typeof value === "number" ? value : null;
-  const differs = auto !== null && auto !== undefined && shown !== null && shown !== auto;
-
-  return (
-    <div className="flex items-baseline justify-between gap-4 border-b border-slate-100 px-4 py-2.5 last:border-0">
-      <p className="text-sm text-slate-700">{label}</p>
-      <div className="text-right">
-        <p className="text-sm font-semibold tabular-nums text-slate-900">
-          {value === null || value === undefined || value === "" ? (
-            <span className="font-normal text-slate-300">—</span>
-          ) : (
-            value
-          )}
-        </p>
-        {differs && (
-          <p className="text-[11px] text-amber-700" title="What the LMS counted at the time">
-            system counted {auto}
-          </p>
-        )}
-      </div>
-    </div>
-  );
-};
+/**
+ * One assessment line.
+ *
+ * There is no longer a second figure to show beside it. The countable numbers
+ * are taken from the database and written by the server, so a report cannot
+ * disagree with what was counted - which is the point of having made them
+ * uneditable.
+ */
+const Line: React.FC<{ label: string; value: React.ReactNode }> = ({ label, value }) => (
+  <div className="flex items-baseline justify-between gap-4 border-b border-slate-100 px-4 py-2.5 last:border-0">
+    <p className="text-sm text-slate-700">{label}</p>
+    <p className="text-right text-sm font-semibold tabular-nums text-slate-900">
+      {value === null || value === undefined || value === "" ? (
+        <span className="font-normal text-slate-300">—</span>
+      ) : (
+        value
+      )}
+    </p>
+  </div>
+);
 
 interface Props {
   report: EvalReport;
@@ -75,8 +66,6 @@ const ReportCard: React.FC<Props> = ({ report, criteria, week }) => {
     ...criteria,
     ...(report.we_custom_label ? [{ key: "custom", label: report.we_custom_label }] : []),
   ];
-
-  const auto = report.we_auto;
 
   // The report's own dates, so a column heading is right even if the week
   // helper is not consulted.
@@ -110,6 +99,86 @@ const ReportCard: React.FC<Props> = ({ report, criteria, week }) => {
               {entry.center_name} · {entry.course_name} · {entry.tb_name}
             </span>
           ))}
+        </div>
+      )}
+
+      {/* Who read it. Shown at the top because it is the first thing a
+          Master Trainer opening their own report wants to know - somebody
+          senior looked at this, or nobody has yet. */}
+      {report.we_status === "reviewed" && (
+        <div className="flex items-start gap-2.5 border-b border-emerald-100 bg-emerald-50 px-5 py-3">
+          <BadgeCheck className="mt-0.5 h-4 w-4 shrink-0 text-emerald-600" />
+          <div className="min-w-0">
+            <p className="text-sm font-semibold text-emerald-900">
+              Reviewed{report.we_reviewed_by_name ? ` by ${report.we_reviewed_by_name}` : ""}
+              {report.we_reviewed_on
+                ? ` on ${new Date(report.we_reviewed_on).toLocaleDateString()}`
+                : ""}
+            </p>
+            {report.we_review_note && (
+              <p className="mt-1 whitespace-pre-wrap text-sm text-emerald-800">
+                {report.we_review_note}
+              </p>
+            )}
+          </div>
+        </div>
+      )}
+
+      {/* Student attendance, counted from the register. */}
+      {report.we_attendance && (
+        <div className="overflow-x-auto border-b border-slate-100 px-5 py-4">
+          <p className="mb-2 text-xs font-semibold uppercase tracking-wide text-slate-500">
+            Student attendance
+          </p>
+          <table className="w-full min-w-[480px] border-separate border-spacing-0">
+            <thead>
+              <tr>
+                <th className="bg-slate-100 px-3 py-1.5 text-left text-xs font-semibold text-slate-700">
+                  &nbsp;
+                </th>
+                {days.map((day) => (
+                  <th
+                    key={day.key}
+                    className="bg-slate-100 px-2 py-1.5 text-center text-xs font-semibold text-slate-700"
+                  >
+                    {day.label}
+                  </th>
+                ))}
+              </tr>
+            </thead>
+            <tbody>
+              {(
+                [
+                  ["P", "Present"],
+                  ["A", "Absent"],
+                  ["L", "On leave"],
+                ] as const
+              ).map(([status, label]) => (
+                <tr key={status}>
+                  <td className="border-b border-slate-100 px-3 py-1.5 text-sm text-slate-700">
+                    {label}
+                  </td>
+                  {days.map((day) => {
+                    const cell = report.we_attendance?.[day.key];
+                    return (
+                      <td
+                        key={day.key}
+                        className="border-b border-slate-100 px-2 py-1.5 text-center text-sm font-semibold tabular-nums text-slate-800"
+                      >
+                        {cell?.marked ? (
+                          cell[status]
+                        ) : (
+                          <span className="font-normal text-slate-300" title="No register was marked">
+                            —
+                          </span>
+                        )}
+                      </td>
+                    );
+                  })}
+                </tr>
+              ))}
+            </tbody>
+          </table>
         </div>
       )}
 
@@ -152,35 +221,18 @@ const ReportCard: React.FC<Props> = ({ report, criteria, week }) => {
           <p className="text-xs font-semibold uppercase tracking-wide text-slate-600">Assessment</p>
         </div>
 
-        <Line
-          label="Assignments during this week"
-          value={report.we_assignments}
-          auto={auto?.assignments?.value}
-        />
-        <Line label="Quizzes during this week" value={report.we_quizzes} auto={auto?.quizzes?.value} />
+        <Line label="Assignments during this week" value={report.we_assignments} />
+        <Line label="Quizzes during this week" value={report.we_quizzes} />
         <Line label="Grading of Training Quality" value={report.we_quality} />
         <Line label="Date of Visit of MT in the last week" value={report.we_mt_visit_date} />
         <Line
           label="Enrolled Students in the start of the week"
           value={report.we_enrolled_start}
-          auto={auto?.enrolled_start?.value}
         />
-        <Line
-          label="Drop-outs during this week"
-          value={report.we_dropouts}
-          auto={auto?.dropouts?.value}
-        />
-        <Line
-          label="Newly enrolled during this week"
-          value={report.we_new_enrolled}
-          auto={auto?.new_enrolled?.value}
-        />
-        <Line
-          label="Students on Leave during this week"
-          value={report.we_on_leave}
-          auto={auto?.on_leave?.value}
-        />
-        <Line label="Trainees' Feedback Submission" value={report.we_feedback_submission} />
+        <Line label="Drop-outs during this week" value={report.we_dropouts} />
+        <Line label="Newly enrolled during this week" value={report.we_new_enrolled} />
+        <Line label="Students on Leave during this week" value={report.we_on_leave} />
+        <Line label="Trainees' Feedback" value={report.we_feedback_submission} />
       </div>
 
       {(report.we_other_tasks || report.we_remarks) && (

@@ -27,10 +27,11 @@ stub("../models/course", {});
 stub("../models/trainingBatcheModel", {});
 stub("../models/trainersCenterAllocationModel", {});
 stub("../models/centersDatesModel", {});
+stub("../models/attendanceModel", {});
 stub("../utils/evaluationMetrics", { metricsFor: async () => ({}), classesFor: async () => [] });
 
 const { _internals } = require("./weeklyEvaluationController");
-const { cleanDaily, countFrom, textFrom, resolveWeek } = _internals;
+const { cleanDaily, textFrom, resolveWeek } = _internals;
 const { weekOf } = require("../utils/evaluationWeek");
 
 let passed = 0;
@@ -52,8 +53,10 @@ console.log("\nThe day grid\n");
 
 const daily = cleanDaily(
   {
-    lecture_reports: { mon: true, tue: false, wed: "true" },
-    course_mapping: { mon: true },
+    // Counted from the database, and no longer the MT's to answer.
+    lecture_reports: { mon: true, tue: true, wed: true, thu: true, fri: true },
+    course_mapping: { mon: true, tue: false, wed: "true" },
+    presence: { mon: true },
     // A criterion the form does not define, from an old tab or a hand-written
     // request. It must not be stored.
     invented: { mon: true },
@@ -62,15 +65,23 @@ const daily = cleanDaily(
   null
 );
 
-check("the four criteria are kept", Object.keys(daily).length === 4, Object.keys(daily).join(","));
+check("the three answerable criteria are kept", Object.keys(daily).length === 3, Object.keys(daily).join(","));
 check("an invented criterion is dropped", daily.invented === undefined);
-check("a tick is a tick", daily.lecture_reports.mon === true);
-check('the string "true" counts too', daily.lecture_reports.wed === true);
+
+// THE ONE THAT MATTERS. Whether a lecture report was filed is a fact in the
+// database. Accepting it from the request would let a form post put a tick
+// against a day on which nothing was submitted - which is the single most
+// damaging thing this form could get wrong, because it is the trainer's
+// compliance record.
+check("the counted row is refused from the request", daily.lecture_reports === undefined);
+
+check("a tick is a tick", daily.course_mapping.mon === true);
+check('the string "true" counts too', daily.course_mapping.wed === true);
 
 // An unticked box is an answer of "no", not an absence. Left undefined it
 // renders as an empty cell, which reads as neither answer on a signed form.
-check("an unticked box is false, not missing", daily.lecture_reports.tue === false);
-check("a day never mentioned is false", daily.lecture_reports.thu === false);
+check("an unticked box is false, not missing", daily.course_mapping.tue === false);
+check("a day never mentioned is false", daily.course_mapping.thu === false);
 check("every day is present", Object.keys(daily.course_mapping).sort().join(",") === "fri,mon,thu,tue,wed");
 
 // A day that is not one of the five must not be stored: it would be written to
@@ -87,25 +98,8 @@ const withCustom = cleanDaily({ custom: { mon: true } }, week, "Punctuality of s
 check("a named custom row is kept", withCustom.custom?.mon === true);
 
 check("no grid at all is still five days of false", cleanDaily(undefined, week, null).course_mapping.mon === false);
+check("and the counted row is still absent", cleanDaily(undefined, week, null).lecture_reports === undefined);
 check("null is handled", cleanDaily(null, week, null).presence.fri === false);
-
-console.log("\nThe counts\n");
-
-check("a number is a number", countFrom("12") === 12);
-check("zero is a real answer, not a blank", countFrom(0) === 0);
-check("zero as a string too", countFrom("0") === 0);
-
-// Blank means "not answered". Coerced to 0 it would report no drop-outs when
-// nobody had counted them, which is a different and worse claim.
-check("blank is unanswered, not zero", countFrom("") === null);
-check("null is unanswered", countFrom(null) === null);
-check("undefined is unanswered", countFrom(undefined) === null);
-
-// NaN reaching the column shows as an empty cell on the report and breaks any
-// total computed across weeks.
-check("text is not a count", countFrom("many") === null);
-check("a negative count is refused", countFrom(-3) === null);
-check("a decimal is floored, not stored as 12.7", countFrom("12.7") === 12);
 
 console.log("\nThe free text\n");
 
@@ -125,14 +119,16 @@ const current = resolveWeek(undefined);
 check("no week given means this week", current.week?.key === weekOf().key);
 
 const named = resolveWeek(week.key);
-check("a named past week is accepted", named.week?.start === "2026-09-07", named.week?.start);
+check("a named past week is accepted", named.week?.start === "2026-09-04", named.week?.start);
 
 // A bad key must be refused rather than silently treated as this week. A
 // report filed against the wrong week is worse than an error, because nobody
 // notices until the month is reviewed.
 check("a malformed week is refused", Boolean(resolveWeek("last-tuesday").error));
 check("and says so", /not a week/.test(resolveWeek("nonsense").error || ""));
-check("week 99 is refused", Boolean(resolveWeek("2026-W99").error));
+// An ISO week key belongs to the OTHER week definition in this system.
+check("an ISO week key is refused", Boolean(resolveWeek("2026-W37").error));
+check("a Monday is refused", Boolean(resolveWeek("2026-09-07").error));
 
 // A report filed in advance is a guess with two signatures on it.
 const future = weekOf(new Date(Date.now() + 21 * 24 * 60 * 60 * 1000));

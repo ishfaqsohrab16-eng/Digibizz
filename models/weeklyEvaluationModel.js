@@ -90,6 +90,20 @@ const WeeklyEvaluation = sequelize.define(
       defaultValue: {},
     },
 
+    /**
+     * Present, absent and on leave for each of the five teaching days.
+     *
+     * Counted from the register, never typed. Stored on the report rather than
+     * joined at read time because attendance can be corrected afterwards and a
+     * signed report has to keep saying what it said.
+     *
+     * { fri: { P: 18, A: 2, L: 1, marked: true }, ... }
+     */
+    we_attendance: {
+      type: DataTypes.JSON,
+      allowNull: true,
+    },
+
     /** The extra row the paper form leaves empty, when the MT uses it. */
     we_custom_label: {
       type: DataTypes.STRING(120),
@@ -121,9 +135,9 @@ const WeeklyEvaluation = sequelize.define(
     we_on_leave: { type: DataTypes.INTEGER, allowNull: true },
 
     we_feedback_submission: {
-      type: DataTypes.STRING(10),
+      type: DataTypes.STRING(20),
       allowNull: true,
-      comment: "Trainees' Feedback Submission: Yes | No",
+      comment: "Trainees' Feedback: Excellent | Good | Satisfactory | Poor",
     },
 
     we_other_tasks: { type: DataTypes.TEXT, allowNull: true },
@@ -141,20 +155,40 @@ const WeeklyEvaluation = sequelize.define(
     we_auto: { type: DataTypes.JSON, allowNull: true },
 
     /**
-     * draft while the MT is still filling it in, submitted once signed off.
+     * draft -> submitted -> reviewed.
      *
-     * A draft is the MT's own working copy: admins do not see it, and it does
+     * A DRAFT is the MT's own working copy: admins do not see it, and it does
      * not satisfy the week's obligation. The form is long enough that losing a
      * half-filled one to a closed tab would be its own reason not to use this.
+     *
+     * SUBMITTED is signed off by the Master Trainer and final to them.
+     *
+     * REVIEWED is the other signature on the paper form. Someone senior has
+     * read it and said so, and the Master Trainer can see that they have -
+     * which is the whole point of recording it. A report nobody ever looks at
+     * teaches everyone that filling it in does not matter.
      */
     we_status: {
       type: DataTypes.STRING(12),
       allowNull: false,
       defaultValue: "draft",
-      validate: { isIn: [["draft", "submitted"]] },
+      validate: { isIn: [["draft", "submitted", "reviewed"]] },
     },
 
     we_submitted_on: { type: DataTypes.DATE, allowNull: true },
+
+    /** Who reviewed it. A user id, not a name: people get renamed. */
+    we_reviewed_by: { type: DataTypes.INTEGER, allowNull: true },
+    /** Their name as it was at the time, so an old report still reads. */
+    we_reviewed_by_name: { type: DataTypes.STRING(150), allowNull: true },
+    we_reviewed_on: { type: DataTypes.DATE, allowNull: true },
+    /**
+     * What the reviewer said, if anything.
+     *
+     * Optional. Requiring a comment to acknowledge a good report would make
+     * reviewing them a chore, and the ones worth commenting on are rare.
+     */
+    we_review_note: { type: DataTypes.TEXT, allowNull: true },
   },
   {
     tableName: "weekly_evaluations",

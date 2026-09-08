@@ -16,10 +16,16 @@ const { ROLES } = require("../middleware/authMiddleware");
  *   every write rather than trusted from the request - a t_id in a request
  *   body is a number the browser chose.
  *
- *   ADMINS read everything and write nothing. The report carries two
- *   signatures and one of them is the Master Trainer's; an admin editing it
- *   afterwards would make the signature meaningless. They need to see what was
- *   submitted and, more usefully, what was NOT.
+ *   ADMINS read everything and REVIEW. They cannot edit a report - it carries
+ *   the Master Trainer's signature and an admin rewriting it afterwards would
+ *   make that signature meaningless - but marking one as read is the second
+ *   signature on the paper form, and the Master Trainer can see it has
+ *   happened. A report nobody ever looks at teaches everyone that filling it
+ *   in does not matter.
+ *
+ *   Read-only admins are the exception: they read, and do not review. Marking
+ *   a report reviewed is an assertion that somebody senior has read it, which
+ *   is a write in every sense that counts.
  *
  *   EVERYONE ELSE, including the trainer being evaluated, sees nothing here.
  *   This is a performance assessment written about someone, and how it reaches
@@ -34,6 +40,21 @@ const roleOf = (user) => String(user?.role || user?.type || "").trim().toLowerCa
 const isMasterTrainer = (user) => roleOf(user) === ROLES.MASTER_TRAINER;
 
 const isViewer = (user) => VIEWER_ROLES.includes(roleOf(user));
+
+/**
+ * Who may mark a report as reviewed.
+ *
+ * The Monitoring & Evaluation officer and the Super Admin - the two people the
+ * paper form has signature lines for. There is no distinct M&E role in this
+ * system, so it is the admin accounts they hold.
+ *
+ * NOT a read-only admin. The whole point of that role is that it changes
+ * nothing, and "somebody senior has read this" is a claim, recorded with a
+ * name against it.
+ */
+const REVIEWER_ROLES = [ROLES.SUPER_ADMIN, ROLES.CONTENT_ADMIN];
+
+const canReview = (user) => REVIEWER_ROLES.includes(roleOf(user));
 
 /** May this person open the module at all? */
 const canUseModule = (user) => isMasterTrainer(user) || isViewer(user);
@@ -94,10 +115,12 @@ const canEdit = (user, report, mt_id) => {
 module.exports = {
   canUseModule,
   canWrite,
+  canReview,
   readScope,
   teachesCourse,
   canEdit,
   isMasterTrainer,
   isViewer,
   VIEWER_ROLES,
+  REVIEWER_ROLES,
 };

@@ -44,12 +44,13 @@ console.log("\nWhich weeks a batch offers\n");
 const running = { start: "2026-08-19", end: "2026-12-18", byCentre: {} };
 const weeks = weeksInWindow(running, now);
 
-check("the current week is offered", weeks[0]?.start === "2026-09-07", weeks[0]?.start);
+check("the current week is offered", weeks[0]?.start === "2026-09-04", weeks[0]?.start);
 
-// The batch began mid-week. That week had three teaching days in it and needs
-// a report; requiring the whole week inside the window would drop it.
+// The batch began on Wednesday 19 August, inside the report week that started
+// on Friday 14 August. That week had teaching days in it and needs a report;
+// requiring the whole week inside the window would drop it.
 const first = weeks[weeks.length - 1];
-check("the week teaching began in is included", first.start === "2026-08-17", first.start);
+check("the week teaching began in is included", first.start === "2026-08-14", first.start);
 check("and nothing earlier", weeks.every((week) => week.end >= running.start));
 
 // The batch runs until December, but weeks that have not happened cannot be
@@ -62,7 +63,7 @@ const finished = { start: "2026-01-06", end: "2026-03-20", byCentre: {} };
 const past = weeksInWindow(finished, now);
 
 check("its weeks are still offered", past.length > 0, String(past.length));
-check("the newest is the last teaching week", past[0]?.start === "2026-03-16", past[0]?.start);
+check("the newest is the last teaching week", past[0]?.start === "2026-03-20", past[0]?.start);
 check("nothing after it ended", past.every((week) => week.start <= finished.end));
 
 console.log("\nA batch that has not started\n");

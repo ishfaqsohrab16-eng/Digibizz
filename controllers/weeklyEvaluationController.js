@@ -28,6 +28,7 @@ const {
 } = require("../utils/evaluationWeek");
 const {
   canWrite,
+  canReview,
   readScope,
   teachesCourse,
   canEdit,
@@ -344,10 +345,20 @@ exports.prepare = async (req, res) => {
   }
 };
 
-/** Keep only the four criteria the form defines, and only true/false. */
+/**
+ * Keep only the criteria the MT is allowed to answer, and only true/false.
+ *
+ * The lecture-report row is NOT among them. Whether a report was filed on a
+ * given day is a fact in the database, and letting it be typed over would put
+ * a tick against a day nothing was submitted. It is merged back in from the
+ * counted figures by the caller.
+ */
 const cleanDaily = (raw, week, customLabel) => {
   const daily = {};
-  const keys = [...DAILY_CRITERIA.map((item) => item.key), ...(customLabel ? ["custom"] : [])];
+  const keys = [
+    ...DAILY_CRITERIA.filter((item) => !item.auto).map((item) => item.key),
+    ...(customLabel ? ["custom"] : []),
+  ];
 
   for (const key of keys) {
     const row = raw?.[key] || {};
@@ -360,14 +371,6 @@ const cleanDaily = (raw, week, customLabel) => {
   }
 
   return daily;
-};
-
-/** A whole number a person typed, or null. Never NaN, never negative. */
-const countFrom = (value) => {
-  if (value === null || value === undefined || value === "") return null;
-  const number = Number(value);
-  if (!Number.isFinite(number) || number < 0) return null;
-  return Math.floor(number);
 };
 
 const textFrom = (value, max) => {
@@ -440,17 +443,22 @@ exports.save = async (req, res) => {
 
     // Submitted is final. Saying so is better than silently discarding the
     // work someone just typed into a form that looked editable.
-    if (existing && existing.we_status === "submitted") {
+    if (existing && existing.we_status !== "draft") {
       return res.status(409).json({
         success: false,
-        message: "That report was already submitted and cannot be changed",
+        message:
+          existing.we_status === "reviewed"
+            ? "That report has been reviewed and cannot be changed"
+            : "That report was already submitted and cannot be changed",
       });
     }
 
     const customLabel = textFrom(req.body?.custom_label, 120);
 
     const quality = QUALITY_GRADES.includes(req.body?.quality) ? req.body.quality : null;
-    const feedback = ["Yes", "No"].includes(req.body?.feedback_submission)
+    // The same four-point scale as the quality grade. It was Yes/No, which
+    // recorded whether the exercise happened rather than what it said.
+    const feedback = QUALITY_GRADES.includes(req.body?.feedback_submission)
       ? req.body.feedback_submission
       : null;
 
@@ -474,6 +482,20 @@ exports.save = async (req, res) => {
     const named = await nameLookup(classes);
     const auto = await metricsFor(t_id, week, tb_id);
 
+    // WHAT THE SYSTEM COUNTED IS NOT NEGOTIABLE.
+    //
+    // The countable figures - assignments set, quizzes created, students
+    // enrolled, drop-outs, leave, and which days a lecture report was filed -
+    // are taken from the counted figures and never from the request. They used to be
+    // editable suggestions; they are now simply what the database says.
+    //
+    // That makes the report a consistent statement about the programme rather
+    // than a set of remembered numbers, and it removes the failure where two
+    // reports disagree about the same week because one MT corrected a figure
+    // and another did not. The nothing-can-count-it questions - the grades,
+    // the visit date, the remarks - are still entirely theirs.
+    const counted = (figure) => (figure && figure.value !== null ? figure.value : null);
+
     const values = {
       t_id,
       mt_id: mt.mt_id,
@@ -481,16 +503,21 @@ exports.save = async (req, res) => {
       we_week_key: week.key,
       we_week_start: week.start,
       we_week_end: week.end,
-      we_daily: cleanDaily(req.body?.daily, week, customLabel),
+      we_daily: {
+        ...cleanDaily(req.body?.daily, week, customLabel),
+        // Merged in after the MT's answers so it cannot be overwritten by them.
+        lecture_reports: auto.lecture_reports,
+      },
+      we_attendance: auto.attendance,
       we_custom_label: customLabel,
-      we_assignments: countFrom(req.body?.assignments),
-      we_quizzes: countFrom(req.body?.quizzes),
+      we_assignments: counted(auto.assignments),
+      we_quizzes: counted(auto.quizzes),
       we_quality: quality,
       we_mt_visit_date: textFrom(req.body?.mt_visit_date, 10),
-      we_enrolled_start: countFrom(req.body?.enrolled_start),
-      we_dropouts: countFrom(req.body?.dropouts),
-      we_new_enrolled: countFrom(req.body?.new_enrolled),
-      we_on_leave: countFrom(req.body?.on_leave),
+      we_enrolled_start: counted(auto.enrolled_start),
+      we_dropouts: counted(auto.dropouts),
+      we_new_enrolled: counted(auto.new_enrolled),
+      we_on_leave: counted(auto.on_leave),
       we_feedback_submission: feedback,
       we_other_tasks: textFrom(req.body?.other_tasks, 4000),
       we_remarks: textFrom(req.body?.remarks, 4000),
@@ -551,7 +578,9 @@ exports.history = async (req, res) => {
         ...(tb_id ? { tb_id } : {}),
         // A draft is the author's own working copy. An admin reading the
         // history should see what was signed off, not what is half-typed.
-        ...(isViewer(req.user) ? { we_status: "submitted" } : {}),
+        ...(isViewer(req.user)
+          ? { we_status: { [Op.in]: ["submitted", "reviewed"] } }
+          : {}),
       },
       order: [["we_week_start", "DESC"]],
     });
@@ -584,7 +613,7 @@ exports.show = async (req, res) => {
 
     if (!report) return res.status(404).json({ success: false, message: "No such report" });
 
-    if (isViewer(req.user) && report.we_status !== "submitted") {
+    if (isViewer(req.user) && report.we_status === "draft") {
       return res.status(404).json({ success: false, message: "No such report" });
     }
 
@@ -594,6 +623,7 @@ exports.show = async (req, res) => {
       criteria: DAILY_CRITERIA,
       week: weekFromKey(report.we_week_key) || weekOf(new Date(report.we_week_start)),
       editable: canEdit(req.user, report, mt?.mt_id),
+      reviewable: canReview(req.user) && report.we_status !== "draft",
     });
   } catch (error) {
     console.error("[evaluation] show failed:", error);
@@ -721,6 +751,7 @@ exports.overview = async (req, res) => {
       summary: {
         teaching: rows.length,
         submitted: rows.filter((row) => row.status === "submitted").length,
+        reviewed: rows.filter((row) => row.status === "reviewed").length,
         draft: rows.filter((row) => row.status === "draft").length,
         missing: chased ? rows.filter((row) => row.status === "missing").length : 0,
       },
@@ -728,6 +759,88 @@ exports.overview = async (req, res) => {
   } catch (error) {
     console.error("[evaluation] overview failed:", error);
     return res.status(500).json({ success: false, message: "Could not load the overview" });
+  }
+};
+
+/**
+ * Mark a report as read.
+ *
+ * The second signature on the paper form. It changes nothing about what the
+ * report says - a reviewer who disagrees with it has a conversation, they do
+ * not edit somebody else's assessment - and it is visible to the Master
+ * Trainer, which is the entire point: a report nobody ever looks at teaches
+ * everyone that filling it in does not matter.
+ *
+ * The reviewer's name is stored alongside their id. Ids are stable and names
+ * are not, and a report read three years from now should still say who signed
+ * it rather than resolving to somebody who has since been renamed or removed.
+ */
+exports.review = async (req, res) => {
+  try {
+    if (!canReview(req.user)) {
+      return res.status(403).json({
+        success: false,
+        message: "Only the M&E officer or a Super Admin can review a report",
+      });
+    }
+
+    const report = await WeeklyEvaluation.findOne({
+      where: { we_id: Number(req.params.id) || 0 },
+    });
+
+    if (!report) return res.status(404).json({ success: false, message: "No such report" });
+
+    // A draft has not been submitted. Reviewing one would be signing off work
+    // its author has not finished.
+    if (report.we_status === "draft") {
+      return res.status(409).json({
+        success: false,
+        message: "That report has not been submitted yet",
+      });
+    }
+
+    const undo = req.body?.reviewed === false;
+
+    if (!undo && report.we_status === "reviewed") {
+      return res.json({ success: true, message: "Already reviewed", report });
+    }
+
+    const reviewer = await User.findOne({
+      where: { user_id: req.user.id },
+      attributes: ["user_name"],
+      raw: true,
+    });
+
+    await report.update(
+      undo
+        ? {
+            we_status: "submitted",
+            we_reviewed_by: null,
+            we_reviewed_by_name: null,
+            we_reviewed_on: null,
+            we_review_note: null,
+          }
+        : {
+            we_status: "reviewed",
+            we_reviewed_by: req.user.id,
+            we_reviewed_by_name: String(reviewer?.user_name || "").slice(0, 150) || null,
+            we_reviewed_on: new Date(),
+            we_review_note: textFrom(req.body?.note, 2000),
+          }
+    );
+
+    console.log(
+      `[evaluation] report ${report.we_id} ${undo ? "un-reviewed" : "reviewed"} by user ${req.user.id}`
+    );
+
+    return res.json({
+      success: true,
+      message: undo ? "Review withdrawn" : "Marked as reviewed",
+      report,
+    });
+  } catch (error) {
+    console.error("[evaluation] review failed:", error);
+    return res.status(500).json({ success: false, message: "Could not review that report" });
   }
 };
 
@@ -787,7 +900,7 @@ exports.pending = async (req, res) => {
           tb_id,
           t_id: trainers,
           we_week_key: weeks.map((week) => week.key),
-          we_status: "submitted",
+          we_status: { [Op.in]: ["submitted", "reviewed"] },
         },
         attributes: ["t_id", "we_week_key"],
         raw: true,
@@ -818,4 +931,4 @@ exports.pending = async (req, res) => {
   }
 };
 
-exports._internals = { cleanDaily, countFrom, textFrom, resolveWeek };
+exports._internals = { cleanDaily, textFrom, resolveWeek };

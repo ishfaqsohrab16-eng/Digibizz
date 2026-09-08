@@ -6,6 +6,7 @@ const Assignment = require("../models/assignmentModel");
 const StudentQuiz = require("../models/StudentQuiz");
 const Student = require("../models/studentModel");
 const StudentLeave = require("../models/studentLeaveModel");
+const Attendance = require("../models/attendanceModel");
 
 /**
  * The figures the LMS can answer for itself on a weekly M&E report.
@@ -101,7 +102,9 @@ const lectureReportDays = async (t_id, week, tb_id) => {
 
   // A trainer with three classes files three reports for one day. The question
   // is whether the day was reported at all, so they collapse to a set.
-  const reported = new Set(rows.map((row) => String(row.dlr_date).slice(0, 10)));
+  const reported = new Set(
+    rows.map((row) => String(row.dlr_date).slice(0, 10)),
+  );
 
   const byDay = {};
   for (const day of week.days) byDay[day.key] = reported.has(day.date);
@@ -117,7 +120,9 @@ const assignmentCount = (t_id, week, tb_id) =>
       ...(tb_id ? { tb_id } : {}),
       // as_added_on is a real DATETIME, so the day itself has to be included
       // up to its last moment or everything set on Friday is missed.
-      as_added_on: { [Op.between]: [`${week.start} 00:00:00`, `${week.end} 23:59:59`] },
+      as_added_on: {
+        [Op.between]: [`${week.start} 00:00:00`, `${week.end} 23:59:59`],
+      },
     },
   });
 
@@ -162,7 +167,9 @@ const newlyEnrolled = async (classes, week) => {
   return Student.count({
     where: {
       ...scope,
-      std_added_on: { [Op.between]: [`${week.start} 00:00:00`, `${week.end} 23:59:59`] },
+      std_added_on: {
+        [Op.between]: [`${week.start} 00:00:00`, `${week.end} 23:59:59`],
+      },
     },
   });
 };
@@ -195,7 +202,7 @@ const dropouts = async (classes, week) => {
         AND (${classes
           .map(
             (_, index) =>
-              `(s.center_id = :center${index} AND s.course_id = :course${index} AND s.tb_id = :batch${index})`
+              `(s.center_id = :center${index} AND s.course_id = :course${index} AND s.tb_id = :batch${index})`,
           )
           .join(" OR ")})`,
     {
@@ -209,10 +216,10 @@ const dropouts = async (classes, week) => {
             [`center${index}`, entry.center_id],
             [`course${index}`, entry.course_id],
             [`batch${index}`, entry.tb_id],
-          ])
+          ]),
         ),
       },
-    }
+    },
   );
 
   return Number(rows?.[0]?.total) || 0;
@@ -226,6 +233,54 @@ const nextDay = (isoDay) => {
   const month = String(date.getMonth() + 1).padStart(2, "0");
   const day = String(date.getDate()).padStart(2, "0");
   return `${year}-${month}-${day} 00:00:00`;
+};
+
+/**
+ * Student attendance, counted per teaching day.
+ *
+ * attend_status is one character: P present, A absent, L approved leave. One
+ * row per student per day per class, so a trainer with three classes has three
+ * sets of rows for the same date - they are summed, because the report covers
+ * all their classes together.
+ *
+ * A day with no rows at all comes back as zeroes rather than being left out.
+ * "Nobody marked the register" and "nobody turned up" look identical in a
+ * table of blanks, and the first is a fact about the trainer that the M&E
+ * report exists to surface.
+ */
+const attendanceByDay = async (classes, week) => {
+  const byDay = {};
+  for (const day of week.days)
+    byDay[day.key] = { P: 0, A: 0, L: 0, marked: false };
+
+  const scope = classScope(classes);
+  if (!scope) return byDay;
+
+  const rows = await Attendance.findAll({
+    where: {
+      ...scope,
+      attend_date: { [Op.in]: week.days.map((day) => day.date) },
+    },
+    attributes: ["attend_date", "attend_status"],
+    raw: true,
+  });
+
+  const dayByDate = Object.fromEntries(
+    week.days.map((day) => [day.date, day.key]),
+  );
+
+  for (const row of rows) {
+    const key = dayByDate[String(row.attend_date).slice(0, 10)];
+    if (!key) continue;
+
+    const status = String(row.attend_status || "").toUpperCase();
+    if (!["P", "A", "L"].includes(status)) continue;
+
+    byDay[key][status] += 1;
+    byDay[key].marked = true;
+  }
+
+  return byDay;
 };
 
 /**
@@ -261,8 +316,18 @@ const onLeave = async (classes, week) => {
 const metricsFor = async (t_id, week, tb_id) => {
   const classes = await classesFor(t_id, tb_id);
 
-  const [lectureDays, assignments, quizzes, enrolled, joined, left, leave] = await Promise.all([
+  const [
+    lectureDays,
+    attendance,
+    assignments,
+    quizzes,
+    enrolled,
+    joined,
+    left,
+    leave,
+  ] = await Promise.all([
     lectureReportDays(t_id, week, tb_id),
+    attendanceByDay(classes, week),
     assignmentCount(t_id, week, tb_id),
     quizCount(t_id, week, tb_id),
     enrolledAtStart(classes, week),
@@ -280,20 +345,34 @@ const metricsFor = async (t_id, week, tb_id) => {
   return {
     classes,
     lecture_reports: lectureDays,
-    assignments: figure(assignments, SOURCE.COUNTED, "Assignments created this week"),
+    // Present, absent and on leave for each of the five teaching days.
+    attendance,
+    assignments: figure(
+      assignments,
+      SOURCE.COUNTED,
+      "Assignments created this week",
+    ),
     quizzes: figure(quizzes, SOURCE.COUNTED, "Quizzes created this week"),
     enrolled_start: figure(
       enrolled,
       SOURCE.COUNTED,
-      "Enrolled before Monday and not since removed"
+      "Enrolled before Monday and not since removed",
     ),
     new_enrolled: figure(joined, SOURCE.COUNTED, "Enrolled during this week"),
     dropouts:
       left === null
         ? figure(null, SOURCE.UNAVAILABLE, "The activity log could not be read")
         : figure(left, SOURCE.AUDIT, "From the activity log - please confirm"),
-    on_leave: figure(leave, SOURCE.COUNTED, "Students with approved leave this week"),
-    mt_visit_date: figure(null, SOURCE.UNAVAILABLE, "Nothing in the system records MT visits"),
+    on_leave: figure(
+      leave,
+      SOURCE.COUNTED,
+      "Students with approved leave this week",
+    ),
+    mt_visit_date: figure(
+      null,
+      SOURCE.UNAVAILABLE,
+      "Nothing in the system records MT visits",
+    ),
     quality: figure(null, SOURCE.UNAVAILABLE, "Your assessment"),
     feedback_submission: figure(null, SOURCE.UNAVAILABLE, "Your assessment"),
   };
@@ -304,6 +383,7 @@ module.exports = {
   classesFor,
   classScope,
   lectureReportDays,
+  attendanceByDay,
   SOURCE,
   _internals: { nextDay, figure },
 };

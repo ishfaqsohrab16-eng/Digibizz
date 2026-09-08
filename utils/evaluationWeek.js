@@ -1,22 +1,25 @@
-const { startOfIsoWeek, isoWeekKey } = require("./weekKey");
-
 /**
  * The week a weekly M&E report covers.
  *
- * Monday to Friday, the five teaching days. The paper form lists its columns
- * as "Fri Mon Tue Wed Thurs" and the screen keeps that order, because the
- * people filling it in have the printed form in front of them - but the week
- * itself is the ordinary Monday-to-Friday one, and every date shown under a
- * column proves which day it is.
+ * FRIDAY TO THURSDAY. The report week starts on Friday and runs to the
+ * following Thursday - so the week of 4 September 2026 is Fri 4th through
+ * Thu 10th, and the five teaching days in it are Fri, Mon, Tue, Wed, Thu.
  *
- * Built on utils/weekKey.js so a report week is the SAME week the rest of the
- * application already means by "this week". Two definitions of a week in one
- * system is a bug waiting for a Sunday.
+ * That is why the paper form heads its columns "Fri Mon Tue Wed Thurs". Read
+ * against a Monday-to-Friday week the order looks like a typo; read against
+ * this one it is simply chronological, which is what it always was.
+ *
+ * DELIBERATELY NOT utils/weekKey.js. That is the ISO Monday-to-Sunday week the
+ * student feedback and leave modules run on, and it must keep meaning exactly
+ * what it means there. Two different weeks in one system is a hazard, so the
+ * difference is stated rather than hidden: this file never imports that one,
+ * and its keys are dates rather than ISO week numbers so the two can never be
+ * mistaken for each other.
  *
  * The process runs with TZ=Asia/Karachi (set in app.js), so every date here is
  * programme time. That matters more than usual: a week computed in UTC rolls
- * over five hours early, and a Friday-evening lecture report would land in the
- * following week's report and be counted as missing from its own.
+ * over five hours early, and a Thursday-evening lecture report would land in
+ * the next week's report and be counted as missing from its own.
  */
 
 /** ISO date, YYYY-MM-DD, in programme time. */
@@ -30,94 +33,120 @@ const isoDate = (date) => {
 const addDays = (date, count) => {
   const copy = new Date(date.getTime());
   copy.setDate(copy.getDate() + count);
+  copy.setHours(0, 0, 0, 0);
   return copy;
 };
 
 /**
- * The five teaching days, in the order the paper form prints them.
+ * The five teaching days, in the order they happen.
  *
- * `offset` is days from Monday, so the stored key never depends on the display
- * order. Reordering the columns later cannot silently re-map a trainer's
- * answers to different days.
+ * `offset` is days from the Friday the week starts on, so Saturday and Sunday
+ * (1 and 2) are simply absent - they are in the week and nobody teaches. The
+ * stored key never depends on the display order, so reordering the columns
+ * later cannot silently re-map a trainer's answers to different days.
  */
 const DAYS = [
-  { key: "fri", label: "Fri", offset: 4 },
-  { key: "mon", label: "Mon", offset: 0 },
-  { key: "tue", label: "Tue", offset: 1 },
-  { key: "wed", label: "Wed", offset: 2 },
-  { key: "thu", label: "Thurs", offset: 3 },
+  { key: "fri", label: "Fri", offset: 0 },
+  { key: "mon", label: "Mon", offset: 3 },
+  { key: "tue", label: "Tue", offset: 4 },
+  { key: "wed", label: "Wed", offset: 5 },
+  { key: "thu", label: "Thurs", offset: 6 },
 ];
 
-/** The four criteria the paper form scores day by day. */
+/**
+ * The four criteria the paper form scores day by day.
+ *
+ * `auto` marks the one the system answers for itself and nobody may edit: a
+ * lecture report was either filed that day or it was not, and the database is
+ * the record of that.
+ */
 const DAILY_CRITERIA = [
-  {
-    key: "lecture_reports",
-    label: "Daily Lecture Reports Submission",
-    // The only one the system can answer for itself.
-    auto: true,
-  },
+  { key: "lecture_reports", label: "Daily Lecture Reports Submission", auto: true },
   { key: "course_mapping", label: "Course Mapping" },
   { key: "class_time", label: "Completion of 2 Hours Class Time" },
   { key: "presence", label: "Presence at center 1 Hour Prior to the class" },
 ];
 
-/** How the MT grades the week overall. */
+/**
+ * The four-point scale, used for both graded questions on the form.
+ *
+ * "Grading of Training Quality" and "Trainees' Feedback Submission" are both
+ * judgements of how something went, and a shared scale makes them comparable
+ * across trainers and weeks. Feedback used to be Yes/No, which recorded only
+ * whether the exercise happened and not what it said.
+ */
 const QUALITY_GRADES = ["Excellent", "Good", "Satisfactory", "Poor"];
+
+/** Friday is day 5, counting from Sunday as 0. */
+const FRIDAY = 5;
+
+/** Midnight on the Friday that starts the report week containing `date`. */
+const startOfReportWeek = (date = new Date()) => {
+  const day = new Date(date.getTime());
+  day.setHours(0, 0, 0, 0);
+
+  // Days since the most recent Friday: Fri 0, Sat 1, Sun 2, Mon 3 ... Thu 6.
+  // Saturday and Sunday therefore belong to the week that has just started,
+  // not to the one about to.
+  const since = (day.getDay() - FRIDAY + 7) % 7;
+  return addDays(day, -since);
+};
 
 /**
  * Everything about the week containing `date`.
  *
- * Returns the key a report is filed under, the Monday and Friday that bound
- * it, and the five days with their real dates - which is what the form heads
- * its columns with and what every metric query filters on.
+ * The key is the starting Friday's date - "2026-09-04". A plain date rather
+ * than an ISO week number, because this week is not an ISO week and borrowing
+ * that notation would invite exactly the confusion the note above is trying to
+ * prevent.
  */
 const weekOf = (date = new Date()) => {
-  const monday = startOfIsoWeek(date);
-  const friday = addDays(monday, 4);
+  const friday = startOfReportWeek(date);
 
   return {
-    key: isoWeekKey(monday),
-    start: isoDate(monday),
-    end: isoDate(friday),
+    key: isoDate(friday),
+    start: isoDate(friday),
+    end: isoDate(addDays(friday, 6)),
     days: DAYS.map((day) => ({
       key: day.key,
       label: day.label,
-      date: isoDate(addDays(monday, day.offset)),
+      date: isoDate(addDays(friday, day.offset)),
     })),
   };
 };
 
-/** The week a key names, so a stored report can be rebuilt from its key alone. */
+/**
+ * The week a key names.
+ *
+ * A key that is not a Friday is refused rather than snapped to one. It can
+ * only have come from a hand-written request or a stale link, and quietly
+ * moving it would file a report against a week nobody asked for.
+ */
 const weekFromKey = (key) => {
-  const match = String(key || "").match(/^(\d{4})-W(\d{1,2})$/);
-  if (!match) return null;
+  const text = String(key || "").trim();
+  if (!/^\d{4}-\d{2}-\d{2}$/.test(text)) return null;
 
-  const year = Number(match[1]);
-  const week = Number(match[2]);
-  if (week < 1 || week > 53) return null;
+  const date = new Date(`${text}T00:00:00`);
+  if (Number.isNaN(date.getTime())) return null;
 
-  // 4 January is always in ISO week 1, so counting from its Monday lands on
-  // the Monday of any week without needing a calendar table.
-  const firstMonday = startOfIsoWeek(new Date(year, 0, 4));
-  const monday = addDays(firstMonday, (week - 1) * 7);
+  // Rejects impossible dates that Date happily rolls over, like 2026-02-31.
+  if (isoDate(date) !== text) return null;
+  if (date.getDay() !== FRIDAY) return null;
 
-  const resolved = weekOf(monday);
-  // A key naming week 53 of a 52-week year resolves into the next year; that
-  // is not the week that was asked for.
-  return resolved.key === `${year}-W${String(week).padStart(2, "0")}` ? resolved : null;
+  return weekOf(date);
 };
 
 /**
  * The weeks a report may be filed for, newest first.
  *
  * The CURRENT week is included: a report is due at the end of it and an MT
- * visiting on Friday afternoon should not have to wait until Monday. Future
+ * finishing their Thursday visit should not have to wait for Friday. Future
  * weeks are not - there is nothing to evaluate yet, and a report filed in
  * advance would be a guess with a signature on it.
  */
 const recentWeeks = (count = 12, from = new Date()) => {
   const weeks = [];
-  let cursor = startOfIsoWeek(from);
+  let cursor = startOfReportWeek(from);
 
   for (let index = 0; index < count; index += 1) {
     weeks.push(weekOf(cursor));
@@ -130,7 +159,7 @@ const recentWeeks = (count = 12, from = new Date()) => {
 /** Is this a week that can be reported on yet? */
 const isReportable = (week, now = new Date()) => {
   if (!week) return false;
-  return week.start <= isoDate(startOfIsoWeek(now));
+  return week.start <= isoDate(startOfReportWeek(now));
 };
 
 /**
@@ -144,10 +173,10 @@ const isReportable = (week, now = new Date()) => {
  * A week before this can still be FILLED IN, deliberately: someone typing up a
  * paper report from March should be able to. It is only never chased.
  *
- * Set as a date in any week - EVALUATION_START_WEEK=2026-09-07 - or leave it,
+ * Set as a date in any week - EVALUATION_START_WEEK=2026-09-04 - or leave it,
  * in which case it is the week the module went live. A fixed default rather
  * than "the current week" on purpose: a default that moves would quietly
- * forgive last week's missing reports every Monday morning.
+ * forgive last week's missing reports every Friday morning.
  */
 const START_WEEK = (() => {
   const configured = process.env.EVALUATION_START_WEEK;
@@ -158,7 +187,7 @@ const START_WEEK = (() => {
       `[evaluation] EVALUATION_START_WEEK="${configured}" is not a date; using the default`
     );
   }
-  return "2026-09-07";
+  return "2026-09-04";
 })();
 
 /**
@@ -179,6 +208,7 @@ module.exports = {
   isChased,
   START_WEEK,
   isoDate,
+  startOfReportWeek,
   DAYS,
   DAILY_CRITERIA,
   QUALITY_GRADES,

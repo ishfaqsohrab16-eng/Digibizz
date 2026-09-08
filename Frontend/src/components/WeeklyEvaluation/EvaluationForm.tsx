@@ -14,10 +14,12 @@ import {
 } from "lucide-react";
 import { toast } from "sonner";
 import {
+  EvalAttendanceDay,
   EvalClass,
   EvalCriterion,
   EvalFigure,
   EvalMetrics,
+  EvalReport,
   EvalWeek,
   prepareEvaluation,
   saveEvaluation,
@@ -31,16 +33,16 @@ import {
  * the people filling it in have that page in front of them and a rearranged
  * screen would be slower, not faster, however much tidier it looked.
  *
- * WHAT THE LMS ALREADY KNOWS IS FILLED IN. Nine of the figures can be counted
- * from the database, and counting them from memory on a Friday afternoon is
- * exactly what nobody does accurately. Every one of them stays editable: the
- * Master Trainer was at the centre and the system was not, and it is their
- * signature on the report.
+ * WHAT THE LMS KNOWS IS NOT ASKED FOR. Assignments set, quizzes created,
+ * students enrolled, drop-outs, leave, attendance and which days a lecture
+ * report was filed are all counted from the database and shown as facts, not
+ * as fields. Nobody counts those accurately from memory at the end of a week,
+ * and two Master Trainers correcting the same figure differently would make
+ * two reports about one week disagree.
  *
- * Where a figure came from is shown beside it, because "counted from the
- * lecture reports", "worked out from the activity log" and "nothing records
- * this" are three different kinds of number and an MT who cannot tell them
- * apart will either distrust a good one or accept a missing one.
+ * What is left is everything nothing can count - whether the trainer arrived
+ * an hour early, how the teaching was, what the trainees said - and that is
+ * the whole of what this form asks a person for.
  */
 
 interface Props {
@@ -52,8 +54,6 @@ interface Props {
 }
 
 type Daily = Record<string, Record<string, boolean>>;
-
-const YES_NO = ["Yes", "No"];
 
 /** Where a pre-filled number came from, said plainly. */
 const SourceNote: React.FC<{ figure?: EvalFigure }> = ({ figure }) => {
@@ -76,16 +76,20 @@ const SourceNote: React.FC<{ figure?: EvalFigure }> = ({ figure }) => {
   );
 };
 
-/** A number the LMS suggested and the MT may correct. */
-const CountField: React.FC<{
+/**
+ * A figure counted from the database.
+ *
+ * Read-only, and it reads as a fact rather than a disabled input - a greyed-out
+ * box invites people to try to type in it and wonder why they cannot.
+ */
+const CountedField: React.FC<{
   label: string;
-  value: string;
   figure?: EvalFigure;
-  onChange: (value: string) => void;
-  disabled?: boolean;
-}> = ({ label, value, figure, onChange, disabled }) => {
-  const suggested = figure?.value;
-  const edited = suggested !== null && suggested !== undefined && String(suggested) !== value;
+  saved?: number | null;
+}> = ({ label, figure, saved }) => {
+  // A submitted report shows what it recorded; a blank form shows what the
+  // database says right now.
+  const value = saved !== undefined && saved !== null ? saved : figure?.value;
 
   return (
     <div className="grid grid-cols-1 gap-2 border-b border-slate-100 px-4 py-3 last:border-0 sm:grid-cols-[1fr_auto] sm:items-center">
@@ -94,28 +98,94 @@ const CountField: React.FC<{
         <SourceNote figure={figure} />
       </div>
 
-      <div className="flex items-center gap-2">
-        <input
-          type="number"
-          min={0}
-          inputMode="numeric"
-          value={value}
-          disabled={disabled}
-          onChange={(event) => onChange(event.target.value)}
-          className="w-28 rounded-lg border border-slate-300 px-3 py-1.5 text-right text-sm font-semibold tabular-nums text-slate-900 transition focus:border-emerald-500 focus:outline-none focus:ring-2 focus:ring-emerald-100 disabled:bg-slate-50 disabled:text-slate-500"
-        />
-        {/* Only shown once the MT has actually changed it, so the reader can
-            see at a glance which figures were corrected by hand. */}
-        {edited && !disabled && (
-          <button
-            type="button"
-            onClick={() => onChange(String(suggested))}
-            className="whitespace-nowrap rounded-lg bg-slate-100 px-2 py-1 text-[11px] font-medium text-slate-600 transition hover:bg-slate-200"
-            title={`The system counted ${suggested}`}
-          >
-            reset to {suggested}
-          </button>
+      <p className="text-right text-lg font-bold tabular-nums text-slate-900">
+        {value === null || value === undefined ? (
+          <span className="text-base font-normal text-slate-300">—</span>
+        ) : (
+          value
         )}
+      </p>
+    </div>
+  );
+};
+
+/** Present, absent and on leave, per teaching day. */
+const AttendanceRow: React.FC<{
+  days: EvalWeek["days"];
+  attendance?: Record<string, EvalAttendanceDay>;
+}> = ({ days, attendance }) => {
+  if (!attendance) return null;
+
+  const total = (key: "P" | "A" | "L") =>
+    days.reduce((sum, day) => sum + (attendance[day.key]?.[key] || 0), 0);
+
+  const LOOK = {
+    P: { label: "Present", className: "text-emerald-700" },
+    A: { label: "Absent", className: "text-rose-700" },
+    L: { label: "On leave", className: "text-amber-700" },
+  } as const;
+
+  return (
+    <div className="mt-5">
+      <h3 className="mb-2 text-xs font-semibold uppercase tracking-wide text-slate-500">
+        Student attendance
+      </h3>
+
+      <div className="-mx-6 overflow-x-auto px-6 sm:mx-0 sm:px-0">
+        <table className="w-full min-w-[560px] border-separate border-spacing-0">
+          <thead>
+            <tr>
+              <th className="rounded-tl-xl bg-slate-100 px-3 py-2 text-left text-xs font-semibold text-slate-700">
+                &nbsp;
+              </th>
+              {days.map((day) => (
+                <th
+                  key={day.key}
+                  className="bg-slate-100 px-2 py-2 text-center text-xs font-semibold text-slate-700"
+                >
+                  {day.label}
+                </th>
+              ))}
+              <th className="rounded-tr-xl bg-slate-200 px-3 py-2 text-center text-xs font-semibold text-slate-800">
+                Total
+              </th>
+            </tr>
+          </thead>
+          <tbody>
+            {(["P", "A", "L"] as const).map((status) => (
+              <tr key={status}>
+                <td className="border-b border-slate-100 px-3 py-2 text-sm text-slate-700">
+                  {LOOK[status].label}
+                </td>
+                {days.map((day) => {
+                  const cell = attendance[day.key];
+                  return (
+                    <td
+                      key={day.key}
+                      className="border-b border-slate-100 px-2 py-2 text-center"
+                    >
+                      {/* A day nobody marked is a dash, not a zero. "No
+                          register taken" and "nobody came" are different
+                          findings and this report exists to surface the first. */}
+                      {cell?.marked ? (
+                        <span className={`text-sm font-semibold tabular-nums ${LOOK[status].className}`}>
+                          {cell[status]}
+                        </span>
+                      ) : (
+                        <span className="text-sm text-slate-300" title="No register was marked">
+                          —
+                        </span>
+                      )}
+                    </td>
+                  );
+                })}
+                <td className="border-b border-slate-100 bg-slate-50 px-3 py-2 text-center text-sm font-bold tabular-nums text-slate-800">
+                  {total(status)}
+                </td>
+              </tr>
+            ))}
+          </tbody>
+        </table>
       </div>
     </div>
   );
@@ -137,15 +207,13 @@ const EvaluationForm: React.FC<Props> = ({ t_id, tb_id, weekKey, onBack }) => {
 
   const [daily, setDaily] = useState<Daily>({});
   const [customLabel, setCustomLabel] = useState("");
+  const [report, setReport] = useState<EvalReport | null>(null);
+
+  // Only what a person answers. Every countable figure is written by the
+  // server from the database and is not part of this form's state at all.
   const [fields, setFields] = useState({
-    assignments: "",
-    quizzes: "",
     quality: "",
     mt_visit_date: "",
-    enrolled_start: "",
-    dropouts: "",
-    new_enrolled: "",
-    on_leave: "",
     feedback_submission: "",
     other_tasks: "",
     remarks: "",
@@ -169,36 +237,14 @@ const EvaluationForm: React.FC<Props> = ({ t_id, tb_id, weekKey, onBack }) => {
       setMetrics(data.metrics);
       setEditable(data.editable);
       setStatus(data.report?.we_status || "draft");
+      setReport(data.report);
 
       const report = data.report;
       const auto = data.metrics;
 
-      /**
-       * What a number field starts as.
-       *
-       * A saved report always wins: it is what was written down, and a blank
-       * left deliberately in a draft must stay blank rather than being
-       * helpfully refilled from a count that has since changed. Only a form
-       * with no report behind it starts from what the LMS worked out.
-       */
-      const start = (
-        saved: number | null | undefined,
-        suggested: number | null | undefined
-      ) => {
-        if (saved !== null && saved !== undefined) return String(saved);
-        if (report) return "";
-        return suggested === null || suggested === undefined ? "" : String(suggested);
-      };
-
       setFields({
-        assignments: start(report?.we_assignments, auto?.assignments.value),
-        quizzes: start(report?.we_quizzes, auto?.quizzes.value),
         quality: report?.we_quality || "",
         mt_visit_date: report?.we_mt_visit_date || "",
-        enrolled_start: start(report?.we_enrolled_start, auto?.enrolled_start.value),
-        dropouts: start(report?.we_dropouts, auto?.dropouts.value),
-        new_enrolled: start(report?.we_new_enrolled, auto?.new_enrolled.value),
-        on_leave: start(report?.we_on_leave, auto?.on_leave.value),
         feedback_submission: report?.we_feedback_submission || "",
         other_tasks: report?.we_other_tasks || "",
         remarks: report?.we_remarks || "",
@@ -206,15 +252,19 @@ const EvaluationForm: React.FC<Props> = ({ t_id, tb_id, weekKey, onBack }) => {
 
       setCustomLabel(report?.we_custom_label || "");
 
-      // The lecture-report row is ticked from the database on a blank form.
-      // The other three are the MT's own observation and start empty.
+      // The lecture-report row comes from the database either way: from the
+      // saved report if there is one, from the live count if not. It is never
+      // seeded from an answer, because it is never an answer.
       const seeded: Daily = {};
       for (const criterion of data.criteria) {
         seeded[criterion.key] = {};
         for (const day of data.week.days) {
-          seeded[criterion.key][day.key] =
-            report?.we_daily?.[criterion.key]?.[day.key] ??
-            (criterion.auto ? Boolean(auto?.lecture_reports?.[day.key]) : false);
+          seeded[criterion.key][day.key] = criterion.auto
+            ? Boolean(
+                report?.we_daily?.[criterion.key]?.[day.key] ??
+                  auto?.lecture_reports?.[day.key]
+              )
+            : report?.we_daily?.[criterion.key]?.[day.key] ?? false;
         }
       }
       if (report?.we_custom_label) {
@@ -237,6 +287,8 @@ const EvaluationForm: React.FC<Props> = ({ t_id, tb_id, weekKey, onBack }) => {
 
   const toggle = (criterion: string, day: string) => {
     if (!editable) return;
+    // The lecture-report row is a fact, not an answer.
+    if (criteria.find((item) => item.key === criterion)?.auto) return;
     setDaily((previous) => ({
       ...previous,
       [criterion]: { ...previous[criterion], [day]: !previous[criterion]?.[day] },
@@ -430,15 +482,19 @@ const EvaluationForm: React.FC<Props> = ({ t_id, tb_id, weekKey, onBack }) => {
                     <td className="sticky left-0 z-10 border-b border-slate-100 bg-white px-3 py-2.5 text-sm text-slate-700">
                       {criterion.label}
                       {(criterion as EvalCriterion).auto && (
-                        <span className="ml-1.5 inline-flex items-center gap-0.5 rounded bg-emerald-50 px-1.5 py-0.5 align-middle text-[10px] font-semibold text-emerald-700">
+                        <span
+                          className="ml-1.5 inline-flex items-center gap-0.5 rounded bg-emerald-50 px-1.5 py-0.5 align-middle text-[10px] font-semibold text-emerald-700"
+                          title="Taken from the lecture reports that were filed. Not editable."
+                        >
                           <Sparkles className="h-2.5 w-2.5" />
-                          filled in
+                          counted
                         </span>
                       )}
                     </td>
 
                     {week.days.map((day) => {
                       const on = Boolean(daily[criterion.key]?.[day.key]);
+                      const counted = Boolean((criterion as EvalCriterion).auto);
                       return (
                         <td
                           key={day.key}
@@ -446,15 +502,24 @@ const EvaluationForm: React.FC<Props> = ({ t_id, tb_id, weekKey, onBack }) => {
                         >
                           <button
                             type="button"
-                            disabled={locked}
+                            disabled={locked || counted}
                             onClick={() => toggle(criterion.key, day.key)}
                             aria-pressed={on}
                             aria-label={`${criterion.label}, ${day.label}: ${on ? "yes" : "no"}`}
+                            title={counted ? "Counted from the lecture reports" : undefined}
                             className={`inline-flex h-8 w-8 items-center justify-center rounded-lg border transition ${
                               on
-                                ? "border-emerald-500 bg-emerald-500 text-white shadow-sm"
-                                : "border-slate-200 bg-white text-slate-300"
-                            } ${locked ? "cursor-default opacity-70" : "hover:border-emerald-400"}`}
+                                ? counted
+                                  ? "border-emerald-200 bg-emerald-100 text-emerald-700"
+                                  : "border-emerald-500 bg-emerald-500 text-white shadow-sm"
+                                : counted
+                                  ? "border-slate-200 bg-slate-50 text-slate-300"
+                                  : "border-slate-200 bg-white text-slate-300"
+                            } ${
+                              locked || counted
+                                ? "cursor-default"
+                                : "hover:border-emerald-400"
+                            }`}
                           >
                             {on ? <Check className="h-4 w-4" /> : <X className="h-4 w-4" />}
                           </button>
@@ -466,6 +531,11 @@ const EvaluationForm: React.FC<Props> = ({ t_id, tb_id, weekKey, onBack }) => {
               </tbody>
             </table>
           </div>
+
+          <AttendanceRow
+            days={week.days}
+            attendance={report?.we_attendance || metrics?.attendance}
+          />
 
           {/* The blank fifth row the paper form leaves for a criterion added
               by hand. Only becomes a row once it is named. */}
@@ -486,19 +556,15 @@ const EvaluationForm: React.FC<Props> = ({ t_id, tb_id, weekKey, onBack }) => {
             <h2 className="text-sm font-semibold text-slate-800">Assessment</h2>
           </div>
 
-          <CountField
+          <CountedField
             label="Number of Assignments during this week"
-            value={fields.assignments}
             figure={metrics?.assignments}
-            onChange={(value) => set("assignments", value)}
-            disabled={locked}
+            saved={report?.we_assignments}
           />
-          <CountField
+          <CountedField
             label="Number of Quizzes during this week"
-            value={fields.quizzes}
             figure={metrics?.quizzes}
-            onChange={(value) => set("quizzes", value)}
-            disabled={locked}
+            saved={report?.we_quizzes}
           />
 
           {/* Grading of Training Quality */}
@@ -543,57 +609,49 @@ const EvaluationForm: React.FC<Props> = ({ t_id, tb_id, weekKey, onBack }) => {
             />
           </div>
 
-          <CountField
+          <CountedField
             label="Number of Enrolled Students in the start of the week"
-            value={fields.enrolled_start}
             figure={metrics?.enrolled_start}
-            onChange={(value) => set("enrolled_start", value)}
-            disabled={locked}
+            saved={report?.we_enrolled_start}
           />
-          <CountField
+          <CountedField
             label="Number of Drop-outs during this week"
-            value={fields.dropouts}
             figure={metrics?.dropouts}
-            onChange={(value) => set("dropouts", value)}
-            disabled={locked}
+            saved={report?.we_dropouts}
           />
-          <CountField
+          <CountedField
             label="Number of newly enrolled during this week"
-            value={fields.new_enrolled}
             figure={metrics?.new_enrolled}
-            onChange={(value) => set("new_enrolled", value)}
-            disabled={locked}
+            saved={report?.we_new_enrolled}
           />
-          <CountField
+          <CountedField
             label="Number of Students on Leave during this week"
-            value={fields.on_leave}
             figure={metrics?.on_leave}
-            onChange={(value) => set("on_leave", value)}
-            disabled={locked}
+            saved={report?.we_on_leave}
           />
 
-          {/* Trainees' Feedback Submission */}
+          {/* Trainees' feedback, on the same four-point scale as the quality
+              grade. It was Yes/No, which recorded whether the exercise happened
+              and not what the trainees actually said. */}
           <div className="grid gap-2 border-b border-slate-100 px-4 py-3 sm:grid-cols-[1fr_auto] sm:items-center">
             <div>
-              <p className="text-sm font-medium text-slate-800">Trainees&rsquo; Feedback Submission</p>
+              <p className="text-sm font-medium text-slate-800">Trainees&rsquo; Feedback</p>
               <SourceNote figure={metrics?.feedback_submission} />
             </div>
-            <div className="flex gap-1.5">
-              {YES_NO.map((option) => (
+            <div className="flex flex-wrap gap-1.5">
+              {grades.map((grade) => (
                 <button
-                  key={option}
+                  key={grade}
                   type="button"
                   disabled={locked}
-                  onClick={() => set("feedback_submission", option)}
-                  className={`w-16 rounded-lg py-1.5 text-xs font-semibold transition ${
-                    fields.feedback_submission === option
-                      ? option === "Yes"
-                        ? "bg-emerald-600 text-white"
-                        : "bg-rose-500 text-white"
+                  onClick={() => set("feedback_submission", grade)}
+                  className={`rounded-lg px-3 py-1.5 text-xs font-semibold transition ${
+                    fields.feedback_submission === grade
+                      ? "bg-emerald-600 text-white shadow-sm"
                       : "bg-slate-100 text-slate-600 hover:bg-slate-200"
                   } ${locked ? "cursor-default opacity-70" : ""}`}
                 >
-                  {option}
+                  {grade}
                 </button>
               ))}
             </div>

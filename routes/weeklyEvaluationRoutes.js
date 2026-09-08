@@ -44,6 +44,10 @@ router.get("/overview", controller.overview);
 // Save a draft, or submit. Master Trainers only; the handler enforces that.
 router.post("/", controller.save);
 
+// Mark a report as read. The M&E officer and Super Admins; the handler
+// enforces that, and a read-only admin is deliberately not among them.
+router.post("/:id/review", controller.review);
+
 // Kept last: "/pending" and the rest would otherwise be read as an id.
 router.get("/:id", controller.show);
 

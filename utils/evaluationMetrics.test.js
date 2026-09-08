@@ -25,6 +25,7 @@ stub("../models/assignmentModel", {});
 stub("../models/StudentQuiz", {});
 stub("../models/studentModel", {});
 stub("../models/studentLeaveModel", {});
+stub("../models/attendanceModel", {});
 
 const { classScope, _internals } = require("./evaluationMetrics");
 const { nextDay } = _internals;

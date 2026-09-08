@@ -2,12 +2,14 @@ import React, { useCallback, useEffect, useMemo, useState } from "react";
 import {
   AlertTriangle,
   ArrowLeft,
+  BadgeCheck,
   CheckCircle2,
   FileEdit,
   Loader2,
   Search,
   ShieldAlert,
 } from "lucide-react";
+import { toast } from "sonner";
 import {
   EvalCriterion,
   EvalOverviewRow,
@@ -15,6 +17,7 @@ import {
   EvalWeek,
   getEvaluation,
   getEvaluationOverview,
+  reviewEvaluation,
 } from "../../services/api";
 import WeekPicker, { describeWeek } from "./WeekPicker";
 import ReportCard from "./ReportCard";
@@ -33,8 +36,13 @@ import { useBatch } from "../../context/BatchContext";
  */
 
 const STATUS_LOOK = {
+  reviewed: {
+    label: "Reviewed",
+    className: "bg-emerald-600 text-white ring-emerald-600",
+    Icon: BadgeCheck,
+  },
   submitted: {
-    label: "Submitted",
+    label: "Awaiting review",
     className: "bg-emerald-50 text-emerald-800 ring-emerald-200",
     Icon: CheckCircle2,
   },
@@ -97,17 +105,31 @@ const EvaluationOverview: React.FC = () => {
   const [week, setWeek] = useState<EvalWeek | null>(null);
   const [weeks, setWeeks] = useState<EvalWeek[]>([]);
   const [rows, setRows] = useState<EvalOverviewRow[]>([]);
-  const [summary, setSummary] = useState({ teaching: 0, submitted: 0, draft: 0, missing: 0 });
+  const [summary, setSummary] = useState({
+    teaching: 0,
+    submitted: 0,
+    reviewed: 0,
+    draft: 0,
+    missing: 0,
+  });
   // False for a week that predates this module. Those reports were filed on
   // paper and are not missing, they are in a folder.
   const [chased, setChased] = useState(true);
 
   const [weekKey, setWeekKey] = useState<string | undefined>();
-  const [filter, setFilter] = useState<"all" | "submitted" | "draft" | "missing">("all");
+  const [filter, setFilter] = useState<
+    "all" | "submitted" | "reviewed" | "draft" | "missing"
+  >("all");
   const [search, setSearch] = useState("");
 
-  const [open, setOpen] = useState<{ report: EvalReport; week: EvalWeek | null } | null>(null);
+  const [open, setOpen] = useState<{
+    report: EvalReport;
+    week: EvalWeek | null;
+    reviewable: boolean;
+  } | null>(null);
   const [opening, setOpening] = useState(false);
+  const [reviewing, setReviewing] = useState(false);
+  const [note, setNote] = useState("");
 
   // A different batch has different trainers and different weeks.
   useEffect(() => {
@@ -154,8 +176,11 @@ const EvaluationOverview: React.FC = () => {
       .sort((a, b) => {
         // Missing, draft, submitted - worst first, because this page exists to
         // find what is outstanding.
-        const rank = (row: EvalOverviewRow) =>
-          row.status === "missing" ? 0 : row.status === "draft" ? 1 : 2;
+        // Missing first, then drafts, then reports waiting to be read, then
+        // the ones already dealt with. The page exists to find what still
+        // needs somebody's attention.
+        const order = { missing: 0, draft: 1, submitted: 2, reviewed: 3 };
+        const rank = (row: EvalOverviewRow) => order[row.status] ?? 4;
         return rank(a) - rank(b) || a.name.localeCompare(b.name);
       });
   }, [rows, filter, search]);
@@ -164,11 +189,31 @@ const EvaluationOverview: React.FC = () => {
     setOpening(true);
     try {
       const data = await getEvaluation(we_id);
-      setOpen({ report: data.report, week: data.week });
+      setOpen({ report: data.report, week: data.week, reviewable: data.reviewable });
+      setNote("");
     } catch {
       setError("Could not open that report.");
     } finally {
       setOpening(false);
+    }
+  };
+
+  /** Mark the open report as read, or withdraw that. */
+  const review = async (reviewed: boolean) => {
+    if (!open) return;
+
+    setReviewing(true);
+    try {
+      const result = await reviewEvaluation(open.report.we_id, { reviewed, note });
+      toast.success(result.message);
+      setOpen({ ...open, report: result.report });
+      // The week's counts have changed underneath, so the list behind this
+      // has to agree with what was just done.
+      load();
+    } catch (caught: any) {
+      toast.error(caught?.response?.data?.message || "Could not review that report.");
+    } finally {
+      setReviewing(false);
     }
   };
 
@@ -188,6 +233,55 @@ const EvaluationOverview: React.FC = () => {
           </h1>
         </div>
         <ReportCard report={open.report} criteria={CRITERIA} week={open.week} />
+
+        {/* The second signature on the paper form. It changes nothing the
+            report says - a reviewer who disagrees has a conversation - and the
+            Master Trainer can see it has happened, which is the point. */}
+        {open.reviewable && (
+          <div className="mt-4 rounded-2xl border border-slate-200 bg-white p-4">
+            {open.report.we_status === "reviewed" ? (
+              <div className="flex flex-wrap items-center justify-between gap-3">
+                <p className="text-sm text-slate-600">
+                  You marked this reviewed. The Master Trainer can see that.
+                </p>
+                <button
+                  onClick={() => review(false)}
+                  disabled={reviewing}
+                  className="rounded-lg border border-slate-300 px-3 py-1.5 text-xs font-medium text-slate-600 transition hover:bg-slate-50 disabled:opacity-50"
+                >
+                  Withdraw review
+                </button>
+              </div>
+            ) : (
+              <>
+                <label className="text-sm font-medium text-slate-800">
+                  Anything to say back? <span className="font-normal text-slate-400">optional</span>
+                </label>
+                <textarea
+                  rows={2}
+                  value={note}
+                  onChange={(event) => setNote(event.target.value)}
+                  placeholder="A note the Master Trainer will see with the report"
+                  className="mt-1.5 w-full resize-y rounded-lg border border-slate-300 px-3 py-2 text-sm text-slate-800 placeholder:text-slate-400 focus:border-emerald-500 focus:outline-none focus:ring-2 focus:ring-emerald-100"
+                />
+                <div className="mt-2 flex justify-end">
+                  <button
+                    onClick={() => review(true)}
+                    disabled={reviewing}
+                    className="inline-flex items-center gap-1.5 rounded-lg bg-emerald-600 px-4 py-2 text-sm font-semibold text-white shadow-sm transition hover:bg-emerald-700 disabled:opacity-50"
+                  >
+                    {reviewing ? (
+                      <Loader2 className="h-4 w-4 animate-spin" />
+                    ) : (
+                      <BadgeCheck className="h-4 w-4" />
+                    )}
+                    Mark as reviewed
+                  </button>
+                </div>
+              </>
+            )}
+          </div>
+        )}
       </div>
     );
   }
@@ -207,7 +301,7 @@ const EvaluationOverview: React.FC = () => {
         )}
       </div>
 
-      <div className="mb-4 grid grid-cols-2 gap-2 sm:grid-cols-4">
+      <div className="mb-4 grid grid-cols-2 gap-2 sm:grid-cols-5">
         <Stat
           label="Trainers teaching"
           value={summary.teaching}
@@ -216,11 +310,18 @@ const EvaluationOverview: React.FC = () => {
           onClick={() => setFilter("all")}
         />
         <Stat
-          label="Submitted"
+          label="Awaiting review"
           value={summary.submitted}
           tone="emerald"
           active={filter === "submitted"}
           onClick={() => setFilter("submitted")}
+        />
+        <Stat
+          label="Reviewed"
+          value={summary.reviewed}
+          tone="emerald"
+          active={filter === "reviewed"}
+          onClick={() => setFilter("reviewed")}
         />
         <Stat
           label="Draft only"
@@ -342,7 +443,11 @@ const EvaluationOverview: React.FC = () => {
                 )}
 
                 <button
-                  disabled={!row.we_id || row.status !== "submitted" || opening}
+                  disabled={
+                    !row.we_id ||
+                    !["submitted", "reviewed"].includes(row.status) ||
+                    opening
+                  }
                   onClick={() => row.we_id && show(row.we_id)}
                   className="rounded-lg px-3 py-1.5 text-xs font-semibold text-emerald-700 transition hover:bg-emerald-50 disabled:cursor-not-allowed disabled:text-slate-300 disabled:hover:bg-transparent"
                 >

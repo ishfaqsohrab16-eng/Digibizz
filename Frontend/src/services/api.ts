@@ -4425,9 +4425,19 @@ export interface EvalFigure {
   note: string;
 }
 
+/** Present, absent and on leave for one teaching day. */
+export interface EvalAttendanceDay {
+  P: number;
+  A: number;
+  L: number;
+  /** False when nobody marked the register that day, which is itself a finding. */
+  marked: boolean;
+}
+
 export interface EvalMetrics {
   classes: Array<{ center_id: number; course_id: number; tb_id: number }>;
   lecture_reports: Record<string, boolean>;
+  attendance: Record<string, EvalAttendanceDay>;
   assignments: EvalFigure;
   quizzes: EvalFigure;
   enrolled_start: EvalFigure;
@@ -4447,6 +4457,7 @@ export interface EvalReport {
   we_week_start: string;
   we_week_end: string;
   we_daily: Record<string, Record<string, boolean>>;
+  we_attendance: Record<string, EvalAttendanceDay> | null;
   we_custom_label: string | null;
   we_assignments: number | null;
   we_quizzes: number | null;
@@ -4461,8 +4472,13 @@ export interface EvalReport {
   we_remarks: string | null;
   we_classes: EvalClass[] | null;
   we_auto: EvalMetrics | null;
-  we_status: "draft" | "submitted";
+  we_status: "draft" | "submitted" | "reviewed";
   we_submitted_on: string | null;
+  /** The second signature: who read it, when, and anything they said. */
+  we_reviewed_by: number | null;
+  we_reviewed_by_name: string | null;
+  we_reviewed_on: string | null;
+  we_review_note: string | null;
   trainer?: { t_id: number; t_cnic: string; user?: { user_name: string } };
 }
 
@@ -4472,7 +4488,13 @@ export interface EvalTrainerRow {
   email: string | null;
   cnic: string;
   classes: EvalClass[];
-  report: { we_id: number; status: "draft" | "submitted"; submitted_on: string | null } | null;
+  report: {
+    we_id: number;
+    status: "draft" | "submitted" | "reviewed";
+    submitted_on: string | null;
+    reviewed_on?: string | null;
+    reviewed_by_name?: string | null;
+  } | null;
 }
 
 const evalAuth = () => ({
@@ -4522,6 +4544,15 @@ export const prepareEvaluation = async (t_id: number, tb_id: number, week?: stri
   };
 };
 
+/**
+ * What a Master Trainer actually fills in.
+ *
+ * The countable figures are absent on purpose. Assignments, quizzes, enrolment,
+ * drop-outs, leave and which days a lecture report was filed all come from the
+ * database and are written by the server; sending them would achieve nothing.
+ * What is left is everything nothing can count: the observations, the grades
+ * and the remarks.
+ */
 export interface EvaluationDraft {
   t_id: number;
   tb_id: number;
@@ -4529,14 +4560,8 @@ export interface EvaluationDraft {
   status: "draft" | "submitted";
   daily: Record<string, Record<string, boolean>>;
   custom_label?: string | null;
-  assignments?: number | string | null;
-  quizzes?: number | string | null;
   quality?: string | null;
   mt_visit_date?: string | null;
-  enrolled_start?: number | string | null;
-  dropouts?: number | string | null;
-  new_enrolled?: number | string | null;
-  on_leave?: number | string | null;
   feedback_submission?: string | null;
   other_tasks?: string | null;
   remarks?: string | null;
@@ -4569,6 +4594,7 @@ export const getEvaluation = async (we_id: number) => {
     criteria: EvalCriterion[];
     week: EvalWeek;
     editable: boolean;
+    reviewable: boolean;
   };
 };
 
@@ -4578,7 +4604,7 @@ export interface EvalOverviewRow {
   master_trainer: string | null;
   mt_id: number | null;
   teaching: boolean;
-  status: "submitted" | "draft" | "missing";
+  status: "submitted" | "reviewed" | "draft" | "missing";
   we_id: number | null;
   quality: string | null;
   submitted_on: string | null;
@@ -4599,8 +4625,33 @@ export const getEvaluationOverview = async (tb_id: number, week?: string) => {
     chased: boolean;
     startWeek: string;
     rows: EvalOverviewRow[];
-    summary: { teaching: number; submitted: number; draft: number; missing: number };
+    summary: {
+      teaching: number;
+      submitted: number;
+      reviewed: number;
+      draft: number;
+      missing: number;
+    };
   };
+};
+
+/**
+ * Mark a report as read, or withdraw that.
+ *
+ * The second signature on the paper form. It changes nothing the report says -
+ * a reviewer who disagrees has a conversation - and the Master Trainer can see
+ * it has happened, which is the point of recording it.
+ */
+export const reviewEvaluation = async (
+  we_id: number,
+  options: { reviewed?: boolean; note?: string } = {}
+) => {
+  const response = await axios.post(
+    `${API_URL}/weekly-evaluations/${we_id}/review`,
+    { reviewed: options.reviewed !== false, note: options.note ?? null },
+    evalAuth()
+  );
+  return response.data as { success: boolean; message: string; report: EvalReport };
 };
 
 /** What this Master Trainer still owes, for the dashboard reminder. */
