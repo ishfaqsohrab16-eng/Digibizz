@@ -39,6 +39,7 @@ const StudentDocumentRoutes = require("./routes/studentsDocsRoutes");
 const activityLogRoutes = require("./routes/activityLogRoutes");
 const quizRoutes = require("./routes/quizRouter");
 const dailyLectureReportRoutes = require("./routes/dailyLectureReport");
+const weeklyEvaluationRoutes = require("./routes/weeklyEvaluationRoutes");
 const dashboardRoutes = require("./routes/dashboardRoutes");
 const classAnnouncementsRoutes = require("./routes/classAnnouncementsRoutes");
 const ticketRoutes = require("./routes/ticketRoutes");
@@ -60,6 +61,7 @@ require("./models/emailSendQuotaModel");
 require("./models/brevoContactModel");
 require("./models/emailOutboxModel");
 require("./models/classScheduleModel");
+require("./models/weeklyEvaluationModel");
 const app = express();
 
 // Security Middleware
@@ -216,6 +218,7 @@ app.use("/api/studentDocs", StudentDocumentRoutes);
 app.use("/api/activityLog", activityLogRoutes);
 app.use("/api/quiz", quizRoutes);
 app.use("/api/dailyLectureReport", dailyLectureReportRoutes);
+app.use("/api/weekly-evaluations", weeklyEvaluationRoutes);
 app.use("/api/dashboard", dashboardRoutes);
 app.use("/api/announcements", classAnnouncementsRoutes);
 app.use("/api/tickets", ticketRoutes);

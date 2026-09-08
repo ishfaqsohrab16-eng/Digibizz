@@ -4355,3 +4355,229 @@ export const uploadCampaignRecipientList = async (file: File) => {
     maxRows: number;
   };
 };
+
+
+/* ---------------------------------------------------------------------------
+ * Weekly M&E report on trainer performance
+ *
+ * A Master Trainer files one per trainer per week; admins read them and see
+ * which are missing. Mirrors the paper form "DigiBizz Program Weekly M&E
+ * Report - Trainers Performance".
+ * ------------------------------------------------------------------------- */
+
+/** One of the five teaching days, with the real date its column heads. */
+export interface EvalDay {
+  key: "mon" | "tue" | "wed" | "thu" | "fri";
+  label: string;
+  date: string;
+}
+
+/** Monday to Friday, keyed as an ISO week. */
+export interface EvalWeek {
+  key: string;
+  start: string;
+  end: string;
+  days: EvalDay[];
+}
+
+export interface EvalCriterion {
+  key: string;
+  label: string;
+  /** True for the one row the LMS can answer for itself. */
+  auto?: boolean;
+}
+
+export interface EvalClass {
+  center_id: number;
+  course_id: number;
+  tb_id: number;
+  center_name: string;
+  course_name: string;
+  tb_name: string;
+}
+
+/**
+ * A figure the LMS worked out, and how.
+ *
+ * `source` is shown beside the field: "counted from the lecture reports" and
+ * "nothing in the system records this" are different kinds of blank, and an MT
+ * who cannot tell them apart will either distrust a good number or accept a
+ * missing one.
+ */
+export interface EvalFigure {
+  value: number | null;
+  source: "counted" | "audit" | "unavailable";
+  note: string;
+}
+
+export interface EvalMetrics {
+  classes: Array<{ center_id: number; course_id: number; tb_id: number }>;
+  lecture_reports: Record<string, boolean>;
+  assignments: EvalFigure;
+  quizzes: EvalFigure;
+  enrolled_start: EvalFigure;
+  new_enrolled: EvalFigure;
+  dropouts: EvalFigure;
+  on_leave: EvalFigure;
+  mt_visit_date: EvalFigure;
+  quality: EvalFigure;
+  feedback_submission: EvalFigure;
+}
+
+export interface EvalReport {
+  we_id: number;
+  t_id: number;
+  mt_id: number;
+  we_week_key: string;
+  we_week_start: string;
+  we_week_end: string;
+  we_daily: Record<string, Record<string, boolean>>;
+  we_custom_label: string | null;
+  we_assignments: number | null;
+  we_quizzes: number | null;
+  we_quality: string | null;
+  we_mt_visit_date: string | null;
+  we_enrolled_start: number | null;
+  we_dropouts: number | null;
+  we_new_enrolled: number | null;
+  we_on_leave: number | null;
+  we_feedback_submission: string | null;
+  we_other_tasks: string | null;
+  we_remarks: string | null;
+  we_classes: EvalClass[] | null;
+  we_auto: EvalMetrics | null;
+  we_status: "draft" | "submitted";
+  we_submitted_on: string | null;
+  trainer?: { t_id: number; t_cnic: string; user?: { user_name: string } };
+}
+
+export interface EvalTrainerRow {
+  t_id: number;
+  name: string;
+  email: string | null;
+  cnic: string;
+  classes: EvalClass[];
+  report: { we_id: number; status: "draft" | "submitted"; submitted_on: string | null } | null;
+}
+
+const evalAuth = () => ({
+  headers: { Authorization: `Bearer ${getCurrentUserToken()}` },
+});
+
+/** The trainers reporting to this Master Trainer, and where each report stands. */
+export const getMyTrainersForEvaluation = async (week?: string) => {
+  const response = await axios.get(`${API_URL}/weekly-evaluations/my-trainers`, {
+    ...evalAuth(),
+    params: week ? { week } : {},
+  });
+  return response.data as {
+    success: boolean;
+    week: EvalWeek;
+    weeks: EvalWeek[];
+    trainers: EvalTrainerRow[];
+  };
+};
+
+/** One trainer's form for one week, pre-filled from the LMS. */
+export const prepareEvaluation = async (t_id: number, week?: string) => {
+  const response = await axios.get(`${API_URL}/weekly-evaluations/prepare`, {
+    ...evalAuth(),
+    params: { t_id, ...(week ? { week } : {}) },
+  });
+  return response.data as {
+    success: boolean;
+    week: EvalWeek;
+    weeks: EvalWeek[];
+    criteria: EvalCriterion[];
+    grades: string[];
+    trainer: { t_id: number; name: string; email: string | null; cnic: string };
+    classes: EvalClass[];
+    metrics: EvalMetrics | null;
+    report: EvalReport | null;
+    editable: boolean;
+  };
+};
+
+export interface EvaluationDraft {
+  t_id: number;
+  week_key: string;
+  status: "draft" | "submitted";
+  daily: Record<string, Record<string, boolean>>;
+  custom_label?: string | null;
+  assignments?: number | string | null;
+  quizzes?: number | string | null;
+  quality?: string | null;
+  mt_visit_date?: string | null;
+  enrolled_start?: number | string | null;
+  dropouts?: number | string | null;
+  new_enrolled?: number | string | null;
+  on_leave?: number | string | null;
+  feedback_submission?: string | null;
+  other_tasks?: string | null;
+  remarks?: string | null;
+}
+
+export const saveEvaluation = async (draft: EvaluationDraft) => {
+  const response = await axios.post(`${API_URL}/weekly-evaluations`, draft, evalAuth());
+  return response.data as { success: boolean; message: string; report: EvalReport };
+};
+
+/** Every report written about one trainer, newest week first. */
+export const getEvaluationHistory = async (t_id: number) => {
+  const response = await axios.get(`${API_URL}/weekly-evaluations/history`, {
+    ...evalAuth(),
+    params: { t_id },
+  });
+  return response.data as { success: boolean; reports: EvalReport[] };
+};
+
+export const getEvaluation = async (we_id: number) => {
+  const response = await axios.get(`${API_URL}/weekly-evaluations/${we_id}`, evalAuth());
+  return response.data as {
+    success: boolean;
+    report: EvalReport;
+    criteria: EvalCriterion[];
+    week: EvalWeek;
+    editable: boolean;
+  };
+};
+
+export interface EvalOverviewRow {
+  t_id: number;
+  name: string;
+  master_trainer: string | null;
+  mt_id: number | null;
+  teaching: boolean;
+  status: "submitted" | "draft" | "missing";
+  we_id: number | null;
+  quality: string | null;
+  submitted_on: string | null;
+}
+
+/** Every trainer for one week, reported on or not. The missing rows are the point. */
+export const getEvaluationOverview = async (week?: string) => {
+  const response = await axios.get(`${API_URL}/weekly-evaluations/overview`, {
+    ...evalAuth(),
+    params: week ? { week } : {},
+  });
+  return response.data as {
+    success: boolean;
+    week: EvalWeek;
+    weeks: EvalWeek[];
+    /** False for a week filed on paper, before this module took over. */
+    chased: boolean;
+    startWeek: string;
+    rows: EvalOverviewRow[];
+    summary: { teaching: number; submitted: number; draft: number; missing: number };
+  };
+};
+
+/** What this Master Trainer still owes, for the dashboard reminder. */
+export const getEvaluationsPending = async () => {
+  const response = await axios.get(`${API_URL}/weekly-evaluations/pending`, evalAuth());
+  return response.data as {
+    success: boolean;
+    pending: Array<{ week: EvalWeek; outstanding: number }>;
+    trainers?: number;
+  };
+};

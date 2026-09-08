@@ -16,6 +16,7 @@ import {
   BookOpen,
   Mail,
   Sparkles,
+  ClipboardCheck,
 } from "lucide-react";
 import { NavItem } from "../NavItem";
 import { useEffect, useState } from "react";
@@ -193,6 +194,31 @@ export const DashboardNav = ({
           label="Support Tickets"
           onClick={() => openForm("Tickets")}
           href={createNavUrl("/dashboard/Tickets")}
+        />
+      )}
+
+      {/* The weekly M&E report on trainer performance.
+          Two audiences, one entry: a Master Trainer opens their own trainers
+          and fills reports in; an admin opens every trainer in the programme
+          and sees which reports are missing. The trainer being evaluated is
+          not offered it at all - it is an assessment written about them. */}
+      {(userType === "SuperAdmin" ||
+        userType === "ContentAdmin" ||
+        userType === "ReadOnlyAdmin" ||
+        userType === "MasterTrainer") && (
+        <NavItem
+          icon={<ClipboardCheck size={20} />}
+          label="Weekly M&E Reports"
+          onClick={() =>
+            openForm(
+              userType === "MasterTrainer" ? "WeeklyEvaluations" : "WeeklyEvaluationOverview"
+            )
+          }
+          href={createNavUrl(
+            userType === "MasterTrainer"
+              ? "/dashboard/WeeklyEvaluations"
+              : "/dashboard/WeeklyEvaluationOverview"
+          )}
         />
       )}
 

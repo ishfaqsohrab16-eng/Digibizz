@@ -41,6 +41,8 @@ import Suspend from "../StudentForm/Suspend/Suspend";
 import QuizForm from "../Quiz/QuizForm";
 import DailyLectureReportTable from "../DailyLectureReport/DailyLectureReportTable";
 import DailyLectureReportForm from "../DailyLectureReport/DailyLectureReportForm";
+import MyTrainers from "../WeeklyEvaluation/MyTrainers";
+import EvaluationOverview from "../WeeklyEvaluation/EvaluationOverview";
 import QuizStudentTable from "../Quiz/QuizStudentTable";
 import AnnouncementList from "../Announcements/AnnouncementList";
 import AttendanceHistory from "../Attendance/AttendanceHistory";
@@ -336,6 +338,13 @@ const ResponsiveLayout: React.FC = () => {
         return <DailyLectureReportTable openForm={openForm} />;
       case "DailyLectureReportForm":
         return <DailyLectureReportForm />;
+      // Two screens behind one idea. A Master Trainer sees the trainers who
+      // report to them and fills reports in; an admin sees every trainer in
+      // the programme and, more usefully, which reports are missing.
+      case "WeeklyEvaluations":
+        return <MyTrainers />;
+      case "WeeklyEvaluationOverview":
+        return <EvaluationOverview />;
       case "Admission Portal":
         return <AddmissionPortal />;
       case "StudentQuizTable":

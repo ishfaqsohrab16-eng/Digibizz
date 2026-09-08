@@ -11,6 +11,7 @@ import Loader from "../Loader";
 import StatCard from "./StudentDashboardItems/StatCard";
 import { useBatch } from "../../context/BatchContext";
 import { createSubUserSessionUrl } from "../../utils/navigationUtils";
+import EvaluationReminder from "../WeeklyEvaluation/EvaluationReminder";
 interface AdminDashboardProps {
     openForm: (formName: string) => void;
   }
@@ -121,6 +122,13 @@ const MasterTrainerDashboard: React.FC<AdminDashboardProps> = ({ openForm }) => 
   return (
     <div className="min-h-screen bg-background p-4 md:p-6">
       <div className="max-w-7xl mx-auto">
+        {/* Above the statistics on purpose. This is the one thing on the page
+            that is asking for something back, and it shows nothing at all when
+            there is nothing outstanding. */}
+        <div className="mb-6">
+          <EvaluationReminder onOpen={() => openForm("WeeklyEvaluations")} />
+        </div>
+
         <div className="grid grid-cols-1 md:grid-cols-3 gap-4 mb-6">
           <StatCard
             icon={<Users className="h-5 w-5" />}
