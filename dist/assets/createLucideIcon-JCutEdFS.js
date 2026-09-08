@@ -1,4 +1,4 @@
-import{bu as a}from"./index-Bg-N4Eoj.js";/**
+import{bz as a}from"./index-wRZo9xuY.js";/**
  * @license lucide-react v0.462.0 - ISC
  *
  * This source code is licensed under the ISC license.
@@ -13,7 +13,7 @@ import{bu as a}from"./index-Bg-N4Eoj.js";/**
  *
  * This source code is licensed under the ISC license.
  * See the LICENSE file in the root directory of this source tree.
- */const p=a.forwardRef(({color:r="currentColor",size:e=24,strokeWidth:t=2,absoluteStrokeWidth:o,className:s="",children:n,iconNode:i,...u},l)=>a.createElement("svg",{ref:l,...f,width:e,height:e,stroke:r,strokeWidth:o?Number(t)*24/Number(e):t,className:c("lucide",s),...u},[...i.map(([m,d])=>a.createElement(m,d)),...Array.isArray(n)?n:[n]]));/**
+ */const p=a.forwardRef(({color:r="currentColor",size:e=24,strokeWidth:t=2,absoluteStrokeWidth:o,className:s="",children:n,iconNode:i,...l},u)=>a.createElement("svg",{ref:u,...f,width:e,height:e,stroke:r,strokeWidth:o?Number(t)*24/Number(e):t,className:c("lucide",s),...l},[...i.map(([m,d])=>a.createElement(m,d)),...Array.isArray(n)?n:[n]]));/**
  * @license lucide-react v0.462.0 - ISC
  *
  * This source code is licensed under the ISC license.

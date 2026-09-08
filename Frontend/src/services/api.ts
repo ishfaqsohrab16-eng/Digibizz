@@ -4663,3 +4663,218 @@ export const getEvaluationsPending = async () => {
     trainers?: number;
   };
 };
+
+
+/* ---------------------------------------------------------------------------
+ * Weekly centre visit
+ *
+ * A Master Trainer goes to every centre with a class running, fills in the
+ * Visit Report Proforma, and attaches photographs or video. A Super Admin
+ * reads it and marks it reviewed.
+ *
+ * One report per centre per week across ALL Master Trainers - a centre is
+ * visited, not visited-by-each-of-us. The Online Cell is one virtual centre
+ * standing for every online and hybrid centre, and follows the same rule.
+ * ------------------------------------------------------------------------- */
+
+export interface VisitQuestion {
+  key: string;
+  label: string;
+}
+
+/** Yes or No, and the note that explains it. */
+export interface VisitAnswer {
+  answer: "Yes" | "No" | null;
+  note: string | null;
+}
+
+export interface VisitMedia {
+  file: string;
+  type: "image" | "video";
+  size: number;
+}
+
+export interface VisitCenter {
+  center_id: number;
+  center_name: string;
+  medium: string;
+  /** True for the single virtual centre covering online and hybrid. */
+  online_cell: boolean;
+  dates: { start: string; end: string } | null;
+  visit: {
+    cv_id: number;
+    status: "draft" | "submitted" | "reviewed";
+    visit_date: string | null;
+    submitted_on: string | null;
+    media: number;
+    by: string | null;
+    /** True when the person looking is the one who started it. */
+    mine: boolean;
+  } | null;
+}
+
+export interface CenterVisit {
+  cv_id: number;
+  mt_id: number;
+  cv_center_id: number;
+  cv_center_name: string;
+  tb_id: number;
+  cv_week_key: string;
+  cv_week_start: string;
+  cv_week_end: string;
+  cv_visit_date: string | null;
+  cv_visit_time: string | null;
+  cv_answers: Record<string, VisitAnswer>;
+  cv_remarks: string | null;
+  cv_media: VisitMedia[] | null;
+  cv_status: "draft" | "submitted" | "reviewed";
+  cv_submitted_on: string | null;
+  cv_reviewed_by_name: string | null;
+  cv_reviewed_on: string | null;
+  cv_review_note: string | null;
+}
+
+/** Every centre needing a visit this week, and who has been. */
+export const getVisitCenters = async (tb_id: number, week?: string) => {
+  const response = await axios.get(`${API_URL}/center-visits/centers`, {
+    ...evalAuth(),
+    params: { tb_id, ...(week ? { week } : {}) },
+  });
+  return response.data as {
+    success: boolean;
+    week: EvalWeek;
+    weeks: EvalWeek[];
+    chased: boolean;
+    centers: VisitCenter[];
+  };
+};
+
+/** The form for one centre. */
+export const prepareVisit = async (tb_id: number, center_id: number, week?: string) => {
+  const response = await axios.get(`${API_URL}/center-visits/prepare`, {
+    ...evalAuth(),
+    params: { tb_id, center_id, ...(week ? { week } : {}) },
+  });
+  return response.data as {
+    success: boolean;
+    week: EvalWeek;
+    weeks: EvalWeek[];
+    questions: VisitQuestion[];
+    center: VisitCenter;
+    visit: CenterVisit | null;
+    filed_by: string | null;
+    editable: boolean;
+    /** Somebody else got there first. Shown read-only rather than hidden. */
+    claimed: boolean;
+    reviewable: boolean;
+  };
+};
+
+/**
+ * Save a visit, as a draft or submitted.
+ *
+ * Multipart, because photographs and video come with it. The answers travel as
+ * a JSON string: multipart cannot carry a nested object on its own.
+ */
+export const saveVisit = async (input: {
+  tb_id: number;
+  center_id: number;
+  week_key: string;
+  status: "draft" | "submitted";
+  answers: Record<string, VisitAnswer>;
+  visit_date?: string | null;
+  visit_time?: string | null;
+  remarks?: string | null;
+  media?: File[];
+}) => {
+  const form = new FormData();
+  form.append("tb_id", String(input.tb_id));
+  form.append("center_id", String(input.center_id));
+  form.append("week_key", input.week_key);
+  form.append("status", input.status);
+  form.append("answers", JSON.stringify(input.answers));
+  if (input.visit_date) form.append("visit_date", input.visit_date);
+  if (input.visit_time) form.append("visit_time", input.visit_time);
+  if (input.remarks) form.append("remarks", input.remarks);
+  for (const file of input.media || []) form.append("media", file);
+
+  const response = await axios.post(`${API_URL}/center-visits`, form, {
+    headers: { Authorization: `Bearer ${getCurrentUserToken()}` },
+    // Video off a phone is easily tens of megabytes on a slow connection.
+    timeout: 600000,
+  });
+  return response.data as { success: boolean; message: string; visit: CenterVisit };
+};
+
+export const removeVisitMedia = async (cv_id: number, file: string) => {
+  const response = await axios.post(
+    `${API_URL}/center-visits/${cv_id}/media/remove`,
+    { file },
+    evalAuth()
+  );
+  return response.data as { success: boolean; visit: CenterVisit };
+};
+
+export const getVisit = async (cv_id: number) => {
+  const response = await axios.get(`${API_URL}/center-visits/${cv_id}`, evalAuth());
+  return response.data as {
+    success: boolean;
+    visit: CenterVisit;
+    questions: VisitQuestion[];
+    filed_by: string | null;
+    week: EvalWeek | null;
+    reviewable: boolean;
+  };
+};
+
+export interface VisitOverviewRow {
+  center_id: number;
+  center_name: string;
+  online_cell: boolean;
+  status: "draft" | "submitted" | "reviewed" | "missing";
+  cv_id: number | null;
+  by: string | null;
+  visit_date: string | null;
+  visit_time: string | null;
+  media: number;
+}
+
+/** Every centre for one week, visited or not. The unvisited rows are the point. */
+export const getVisitOverview = async (tb_id: number, week?: string) => {
+  const response = await axios.get(`${API_URL}/center-visits/overview`, {
+    ...evalAuth(),
+    params: { tb_id, ...(week ? { week } : {}) },
+  });
+  return response.data as {
+    success: boolean;
+    week: EvalWeek;
+    weeks: EvalWeek[];
+    chased: boolean;
+    rows: VisitOverviewRow[];
+    summary: {
+      centers: number;
+      submitted: number;
+      reviewed: number;
+      draft: number;
+      missing: number;
+    };
+  };
+};
+
+export const reviewVisit = async (
+  cv_id: number,
+  options: { reviewed?: boolean; note?: string } = {}
+) => {
+  const response = await axios.post(
+    `${API_URL}/center-visits/${cv_id}/review`,
+    { reviewed: options.reviewed !== false, note: options.note ?? null },
+    evalAuth()
+  );
+  return response.data as { success: boolean; message: string; visit: CenterVisit };
+};
+
+/** How many centres this Master Trainer still owes a visit, for the dashboard. */
+export const getVisitsPending = async () => {
+  const response = await axios.get(`${API_URL}/center-visits/pending`, evalAuth());
+  return response.data as { success: boolean; pending: number; week?: EvalWeek };
+};

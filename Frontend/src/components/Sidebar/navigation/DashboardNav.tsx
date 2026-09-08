@@ -17,6 +17,7 @@ import {
   Mail,
   Sparkles,
   ClipboardCheck,
+  MapPinned,
 } from "lucide-react";
 import { NavItem } from "../NavItem";
 import { useEffect, useState } from "react";
@@ -218,6 +219,28 @@ export const DashboardNav = ({
             userType === "MasterTrainer"
               ? "/dashboard/WeeklyEvaluations"
               : "/dashboard/WeeklyEvaluationOverview"
+          )}
+        />
+      )}
+
+      {/* The weekly centre visit. A Master Trainer opens the centres they
+          have to reach; an admin opens every centre and sees which were
+          missed. Trainers are not offered it - they are what is being
+          visited. */}
+      {(userType === "SuperAdmin" ||
+        userType === "ContentAdmin" ||
+        userType === "ReadOnlyAdmin" ||
+        userType === "MasterTrainer") && (
+        <NavItem
+          icon={<MapPinned size={20} />}
+          label="Centre Visits"
+          onClick={() =>
+            openForm(userType === "MasterTrainer" ? "CenterVisits" : "CenterVisitOverview")
+          }
+          href={createNavUrl(
+            userType === "MasterTrainer"
+              ? "/dashboard/CenterVisits"
+              : "/dashboard/CenterVisitOverview"
           )}
         />
       )}

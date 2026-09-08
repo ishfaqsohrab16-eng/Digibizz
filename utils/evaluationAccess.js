@@ -44,15 +44,17 @@ const isViewer = (user) => VIEWER_ROLES.includes(roleOf(user));
 /**
  * Who may mark a report as reviewed.
  *
- * The Monitoring & Evaluation officer and the Super Admin - the two people the
- * paper form has signature lines for. There is no distinct M&E role in this
- * system, so it is the admin accounts they hold.
+ * Super Admins alone. Reviewing is the second signature on the paper form -
+ * the Monitoring & Evaluation officer's - and it is recorded with a name
+ * against it, so it has to be someone who genuinely holds that authority.
  *
- * NOT a read-only admin. The whole point of that role is that it changes
- * nothing, and "somebody senior has read this" is a claim, recorded with a
- * name against it.
+ * Content Admins were briefly included, on the reasoning that an M&E officer
+ * would hold one. They should not be: a Content Admin manages courses and
+ * material, and signing off a named person's performance assessment is not
+ * that job. Read-only admins are excluded for the same reason and more
+ * obviously - the point of that role is that it changes nothing.
  */
-const REVIEWER_ROLES = [ROLES.SUPER_ADMIN, ROLES.CONTENT_ADMIN];
+const REVIEWER_ROLES = [ROLES.SUPER_ADMIN];
 
 const canReview = (user) => REVIEWER_ROLES.includes(roleOf(user));
 

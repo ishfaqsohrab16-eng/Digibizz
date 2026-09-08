@@ -43,6 +43,8 @@ import DailyLectureReportTable from "../DailyLectureReport/DailyLectureReportTab
 import DailyLectureReportForm from "../DailyLectureReport/DailyLectureReportForm";
 import MyTrainers from "../WeeklyEvaluation/MyTrainers";
 import EvaluationOverview from "../WeeklyEvaluation/EvaluationOverview";
+import MyVisits from "../CenterVisit/MyVisits";
+import VisitOverview from "../CenterVisit/VisitOverview";
 import QuizStudentTable from "../Quiz/QuizStudentTable";
 import AnnouncementList from "../Announcements/AnnouncementList";
 import AttendanceHistory from "../Attendance/AttendanceHistory";
@@ -345,6 +347,13 @@ const ResponsiveLayout: React.FC = () => {
         return <MyTrainers />;
       case "WeeklyEvaluationOverview":
         return <EvaluationOverview />;
+      // The weekly centre visit. Same two audiences as the M&E report: a
+      // Master Trainer sees the centres they still have to reach, an admin
+      // sees which ones nobody reached.
+      case "CenterVisits":
+        return <MyVisits />;
+      case "CenterVisitOverview":
+        return <VisitOverview />;
       case "Admission Portal":
         return <AddmissionPortal />;
       case "StudentQuizTable":

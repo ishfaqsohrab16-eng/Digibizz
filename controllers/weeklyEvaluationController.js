@@ -780,7 +780,7 @@ exports.review = async (req, res) => {
     if (!canReview(req.user)) {
       return res.status(403).json({
         success: false,
-        message: "Only the M&E officer or a Super Admin can review a report",
+        message: "Only a Super Admin can review a report",
       });
     }
 
