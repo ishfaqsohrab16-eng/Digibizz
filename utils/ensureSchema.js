@@ -21,6 +21,29 @@ const { sequelize } = require("../config/db");
  */
 const REQUIRED_COLUMNS = [
   {
+    // The weekly M&E report was first deployed keyed on (trainer, week) and
+    // then corrected to (trainer, BATCH, week) - a trainer running classes in
+    // two batches is doing two separable jobs. The table already existed by
+    // then, and sync({alter:false}) never adds a column to an existing table,
+    // so the model had a tb_id the database did not:
+    //
+    //   ER_KEY_COLUMN_DOES_NOT_EXITS: Key column 'tb_id' doesn't exist in table
+    //   ALTER TABLE weekly_evaluations ADD UNIQUE INDEX ... (t_id, tb_id, ...)
+    //
+    // which failed sync, failed initializeDatabase, and crash-looped the whole
+    // server - not just this module.
+    //
+    // DEFAULT 0 so the ALTER succeeds whatever is already stored. A report
+    // written in the few hours the first version was live would land on batch
+    // 0, which matches no batch and is therefore visibly orphaned rather than
+    // silently attached to the wrong one.
+    table: "weekly_evaluations",
+    column: "tb_id",
+    definition:
+      "INT NOT NULL DEFAULT 0 COMMENT 'The batch this report covers. Part of the one-per-week key.'",
+    migration: "migration/027_weekly_evaluations_batch.sql",
+  },
+  {
     table: "assignments",
     column: "as_group_id",
     definition:
@@ -164,6 +187,28 @@ const REQUIRED_ENUM_VALUES = [
     definition:
       "ENUM('candidates','students','list') NOT NULL DEFAULT 'candidates' COMMENT 'candidates | students | list (uploaded spreadsheet)'",
     migration: "migration/018_campaign_uploaded_lists.sql",
+  },
+];
+
+/**
+ * Indexes that must NOT exist any more.
+ *
+ * The counterpart of REQUIRED_COLUMNS, and rarer: an index is usually additive
+ * and harmless, so this is only for one that has become actively wrong.
+ *
+ * Dropping is safe in a way that creating is not - an index carries no data,
+ * and the worst case of dropping one that has already gone is nothing at all.
+ * A UNIQUE index that is wrong, on the other hand, silently refuses correct
+ * writes, and that is a bug nobody attributes to a leftover index.
+ */
+const FORBIDDEN_INDEXES = [
+  {
+    table: "weekly_evaluations",
+    index: "weekly_evaluations_trainer_week",
+    reason:
+      "it allowed one report per trainer per week across ALL batches, so a " +
+      "trainer teaching in two batches could only ever be evaluated for one",
+    migration: "migration/027_weekly_evaluations_batch.sql",
   },
 ];
 
@@ -330,6 +375,41 @@ const getColumnType = async (table, column) => {
   return rows?.[0]?.type || null;
 };
 
+const indexExists = async (table, index) => {
+  const [rows] = await sequelize.query(
+    `SELECT COUNT(*) AS present
+       FROM information_schema.STATISTICS
+      WHERE TABLE_SCHEMA = DATABASE()
+        AND TABLE_NAME = :table
+        AND INDEX_NAME = :index`,
+    { replacements: { table, index } }
+  );
+  return Number(rows?.[0]?.present) > 0;
+};
+
+const dropForbiddenIndexes = async () => {
+  for (const item of FORBIDDEN_INDEXES) {
+    try {
+      // Checked first, because DROP INDEX on one that is not there is an error
+      // and would fill the log on every boot forever.
+      if (!(await indexExists(item.table, item.index))) continue;
+
+      await sequelize.query(
+        `ALTER TABLE \`${item.table}\` DROP INDEX \`${item.index}\``
+      );
+      console.log(`[schema] dropped ${item.table}.${item.index} - ${item.reason}`);
+    } catch (error) {
+      console.error(
+        `[schema] COULD NOT DROP INDEX ${item.table}.${item.index}: ${error.message}\n` +
+          `[schema] It is still in place, and ${item.reason}.\n` +
+          `[schema] Run it manually:\n` +
+          `[schema]   ALTER TABLE \`${item.table}\` DROP INDEX \`${item.index}\`;\n` +
+          `[schema] (or apply ${item.migration})`
+      );
+    }
+  }
+};
+
 const ensureWiderColumns = async () => {
   for (const item of REQUIRED_WIDER_COLUMNS) {
     try {
@@ -431,12 +511,18 @@ const ensureSchema = async () => {
   await ensureEnumValues();
   await ensureWiderColumns();
   await ensureNullableColumns();
+
+  // Last. The columns a replacement index needs have to exist first, and
+  // sync() runs after all of this to create the replacement itself.
+  await dropForbiddenIndexes();
 };
 
 module.exports = {
   ensureSchema,
   REQUIRED_COLUMNS,
+  FORBIDDEN_INDEXES,
   REQUIRED_ENUM_VALUES,
   REQUIRED_WIDER_COLUMNS,
   REQUIRED_NULLABLE_COLUMNS,
+  _internals: { dropForbiddenIndexes, indexExists },
 };

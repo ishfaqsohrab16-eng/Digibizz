@@ -355,23 +355,66 @@ app.use((err, req, res, next) => {
 });
 
 // Database Connection and Sync
+/**
+ * Connect, reconcile the schema, start recording changes.
+ *
+ * TWO KINDS OF FAILURE, AND THEY ARE NOT THE SAME.
+ *
+ * No database at all is fatal. Nothing in this application works without one,
+ * and a process that stays up answering every request with a 500 is harder to
+ * diagnose than one that exits.
+ *
+ * A SCHEMA problem is not. It is almost always one table - a model attribute
+ * whose column was never created, an index over it - and the other forty-six
+ * are fine. Exiting there takes registration, attendance, email and everything
+ * else down over one feature, which is what happened: a unique index on a
+ * column sync() had never added crash-looped the whole server.
+ *
+ * So a schema failure is logged as loudly as this can manage and the server
+ * carries on. The affected module will fail on its own endpoints, which is
+ * proportionate and visible; the rest of the programme keeps working.
+ */
 const initializeDatabase = async () => {
   try {
     await testConnection();
+  } catch (error) {
+    console.error("[boot] FATAL: the database is unreachable.", error?.message || error);
+    process.exit(1);
+  }
+
+  try {
     // Add any missing additive columns before models are used. sync({alter:false})
     // never adds columns, so a model attribute without its column breaks every
     // query against that table - not just the new feature.
     await ensureSchema();
     await sequelize.sync({ alter: false });
 
-    // Record every database change to activity_log. Installed after sync so
-    // the hooks never fire during schema creation, which has no actor anyway.
-    require("./utils/auditHooks").install();
-
     console.log("Database connected and models synced successfully");
   } catch (error) {
-    console.error("Database initialization error:", error);
-    process.exit(1);
+    console.error(
+      "\n" +
+        "[boot] ===================================================================\n" +
+        "[boot] THE SCHEMA IS NOT WHAT THE MODELS EXPECT. The server is still up,\n" +
+        "[boot] and everything that does not touch the affected table still works,\n" +
+        "[boot] but the feature that owns it will fail until this is fixed.\n" +
+        "[boot]\n" +
+        `[boot] ${error?.parent?.sqlMessage || error?.message || error}\n` +
+        (error?.sql ? `[boot] ${error.sql}\n` : "") +
+        "[boot]\n" +
+        "[boot] Usually: a column a model declares that sync({alter:false}) will\n" +
+        "[boot] never add to a table that already exists. Add it to\n" +
+        "[boot] utils/ensureSchema.js REQUIRED_COLUMNS, or apply the matching file\n" +
+        "[boot] in migration/ by hand.\n" +
+        "[boot] ===================================================================\n"
+    );
+  }
+
+  // Installed whatever happened above, so changes to the tables that ARE
+  // correct still reach the audit log. Its own failures are already non-fatal.
+  try {
+    require("./utils/auditHooks").install();
+  } catch (error) {
+    console.error("[boot] audit logging could not be installed:", error?.message || error);
   }
 };
 

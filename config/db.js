@@ -28,12 +28,20 @@ const sequelize = new Sequelize(
 );
 
 // Test the database connection
+/**
+ * Prove the database is reachable.
+ *
+ * Throws. It used to log and return, which made every caller believe it had
+ * succeeded - so the only failure app.js could actually catch was a schema
+ * error, which is the one case where taking the server down is wrong.
+ */
 const testConnection = async () => {
   try {
     await sequelize.authenticate();
     console.log("Database connection has been established successfully.");
   } catch (error) {
     console.error("Unable to connect to the database:", error);
+    throw error;
   }
 };
 
