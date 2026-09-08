@@ -29,18 +29,16 @@ export const TableHeaderCell: React.FC<TableHeaderProps> = ({
 
   return (
     <TableHead
-      className={`whitespace-nowrap px-4 py-3 text-[11px] font-semibold uppercase tracking-wider ${
-        isSorted
-          ? "text-[hsl(var(--primary))]"
-          : "text-[hsl(var(--muted-foreground))]"
-      } ${column.headerClassName || ""} ${
-        column.sortable ? "cursor-pointer select-none" : ""
-      }`}
+      className={`whitespace-nowrap border-r border-[hsl(var(--primary)/0.12)] px-4 py-3.5 text-[10px] font-bold uppercase tracking-[0.12em] text-[hsl(var(--primary))] last:border-r-0 ${
+        column.headerClassName || ""
+      } ${column.sortable ? "cursor-pointer select-none" : ""}`}
       onClick={() => column.sortable && onSort(column.key)}
       title={column.sortable ? `Sort by ${column.header}` : undefined}
     >
       <div className="flex items-center gap-1.5">
-        {column.header}
+        <span className={isSorted ? "underline underline-offset-4" : ""}>
+          {column.header}
+        </span>
         {column.sortable && (
           /* Faint until this is the sorted column, so the one that IS
              sorted is the one that stands out. */

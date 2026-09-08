@@ -49,10 +49,10 @@ export function DynamicTable<T extends {}>({
   );
 
   return (
-    <div className="w-full overflow-hidden rounded-xl border border-[hsl(var(--border))] bg-[hsl(var(--card))] shadow-sm">
-      <Table containerClassName="max-h-[70vh]">
+    <div className="w-full overflow-hidden rounded-2xl bg-[hsl(var(--card))] shadow-[0_1px_2px_rgba(0,0,0,0.04),0_8px_24px_-12px_rgba(0,0,0,0.18)] ring-1 ring-[hsl(var(--border))]">
+      <Table containerClassName="max-h-[68vh]">
         <TableHeader className="sticky top-0 z-10">
-          <TableRow className="border-b border-[hsl(var(--border))] bg-[hsl(var(--muted))] hover:bg-[hsl(var(--muted))]">
+          <TableRow className="border-0 bg-[hsl(var(--primary)/0.08)] hover:bg-[hsl(var(--primary)/0.08)]">
             {columns.map((column, index) => (
               <TableHeaderCell
                 key={index}
@@ -64,7 +64,7 @@ export function DynamicTable<T extends {}>({
             ))}
           </TableRow>
         </TableHeader>
-        <TableBody>
+        <TableBody className="border-t-2 border-[hsl(var(--primary)/0.35)]">
           {sortedData.map((item, index) => (
             /*
              * Striping through the theme, not through bg-gray-50/bg-white.
@@ -73,7 +73,7 @@ export function DynamicTable<T extends {}>({
              */
             <TableRow
               key={index}
-              className="border-b border-[hsl(var(--border))] transition-colors even:bg-[hsl(var(--muted))/0.35] hover:bg-[hsl(var(--primary))/0.06]"
+              className="group border-b border-[hsl(var(--border)/0.6)] transition-colors hover:bg-[hsl(var(--primary)/0.05)]"
             >
               {columns.map((column) => (
                 <DataTableCell

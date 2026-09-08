@@ -483,7 +483,7 @@ const InterviewPortal = () => {
     icon: any;
     children: React.ReactNode;
   }) => (
-    <section className="border-b border-[hsl(var(--border))] hover:bg-[hsl(var(--muted))/0.5] transition-colors">
+    <section className="border-b border-[hsl(var(--border))] hover:bg-[hsl(var(--muted)/0.5)] transition-colors">
       <div className="bg-[hsl(var(--primary))] px-4 py-3 flex items-center gap-2">
         <span className="w-8 h-8 flex items-center justify-center bg-[hsl(var(--card))] rounded-full text-[hsl(var(--primary))]">
           <Icon className="w-5 h-5" />
@@ -531,7 +531,7 @@ const InterviewPortal = () => {
     disabled?: boolean;
     forceDisabled?: boolean;
   }) => (
-    <div className="flex items-center gap-4 group p-2 -mx-2 rounded-lg hover:bg-[hsl(var(--muted))/0.5] transition-colors">
+    <div className="flex items-center gap-4 group p-2 -mx-2 rounded-lg hover:bg-[hsl(var(--muted)/0.5)] transition-colors">
       <label className="block text-sm font-medium text-[hsl(var(--foreground))] flex-1 group-hover:text-[hsl(var(--primary))] transition-colors">
         {label}
       </label>
@@ -595,7 +595,7 @@ const InterviewPortal = () => {
           {label}
         </label>
         <div className="flex gap-4">
-          <label className="flex items-center gap-2 p-2 -m-2 rounded-lg hover:bg-[hsl(var(--muted))/0.5] transition-colors cursor-pointer">
+          <label className="flex items-center gap-2 p-2 -m-2 rounded-lg hover:bg-[hsl(var(--muted)/0.5)] transition-colors cursor-pointer">
             <input
               type="radio"
               checked={checkedValue === true}
@@ -612,7 +612,7 @@ const InterviewPortal = () => {
               Yes
             </span>
           </label>
-          <label className="flex items-center gap-2 p-2 -m-2 rounded-lg hover:bg-[hsl(var(--muted))/0.5] transition-colors cursor-pointer">
+          <label className="flex items-center gap-2 p-2 -m-2 rounded-lg hover:bg-[hsl(var(--muted)/0.5)] transition-colors cursor-pointer">
             <input
               type="radio"
               checked={checkedValue === false}
@@ -744,7 +744,7 @@ const InterviewPortal = () => {
 
             <InfoSection title="Admission Information" icon={BookOpen}>
               <div className="p-6 grid grid-cols-1 sm:grid-cols-3 gap-4">
-                <div className="px-4 py-3 bg-[hsl(var(--accent))/0.1] rounded-lg border border-[hsl(var(--accent))/0.2] hover:bg-[hsl(var(--accent))/0.15] transition-colors">
+                <div className="px-4 py-3 bg-[hsl(var(--accent)/0.1)] rounded-lg border border-[hsl(var(--accent)/0.2)] hover:bg-[hsl(var(--accent)/0.15)] transition-colors">
                   <span className="block text-sm text-[hsl(var(--muted-foreground))] mb-1">
                     Course
                   </span>
@@ -752,7 +752,7 @@ const InterviewPortal = () => {
                     {admissionInfo.courseName}
                   </span>
                 </div>
-                <div className="px-4 py-3 bg-[hsl(var(--navy))/0.1] rounded-lg border border-[hsl(var(--navy))/0.2] hover:bg-[hsl(var(--navy))/0.15] transition-colors">
+                <div className="px-4 py-3 bg-[hsl(var(--navy)/0.1)] rounded-lg border border-[hsl(var(--navy)/0.2)] hover:bg-[hsl(var(--navy)/0.15)] transition-colors">
                   <span className="block text-sm text-[hsl(var(--muted-foreground))] mb-1">
                     Center
                   </span>
@@ -760,7 +760,7 @@ const InterviewPortal = () => {
                     {admissionInfo.centerName}
                   </span>
                 </div>
-                {/* <div className="px-4 py-3 bg-[hsl(var(--teal))/0.1] rounded-lg border border-[hsl(var(--teal))/0.2] hover:bg-[hsl(var(--teal))/0.15] transition-colors">
+                {/* <div className="px-4 py-3 bg-[hsl(var(--teal)/0.1)] rounded-lg border border-[hsl(var(--teal)/0.2)] hover:bg-[hsl(var(--teal)/0.15)] transition-colors">
                   <span className="block text-sm text-[hsl(var(--muted-foreground))] mb-1">
                     Test Marks
                   </span>
@@ -813,7 +813,7 @@ const InterviewPortal = () => {
                     />
                     <div className="space-y-4">
                       {/* Remove ScoreInput components and use normal label/input */}
-                      <div className="flex items-center gap-4 group p-2 -mx-2 rounded-lg hover:bg-[hsl(var(--muted))/0.5] transition-colors">
+                      <div className="flex items-center gap-4 group p-2 -mx-2 rounded-lg hover:bg-[hsl(var(--muted)/0.5)] transition-colors">
                         <label className="block text-sm font-medium text-[hsl(var(--foreground))] flex-1 group-hover:text-[hsl(var(--primary))] transition-colors">
                           Basic IT & English Skills
                         </label>
@@ -830,7 +830,7 @@ const InterviewPortal = () => {
                         )} />
                         <span className="ml-2 text-[hsl(var(--muted-foreground))]">/ 5</span>
                       </div>
-                      <div className="flex items-center gap-4 group p-2 -mx-2 rounded-lg hover:bg-[hsl(var(--muted))/0.5] transition-colors">
+                      <div className="flex items-center gap-4 group p-2 -mx-2 rounded-lg hover:bg-[hsl(var(--muted)/0.5)] transition-colors">
                         <label className="block text-sm font-medium text-[hsl(var(--foreground))] flex-1 group-hover:text-[hsl(var(--primary))] transition-colors">
                           Personality
                         </label>
@@ -847,7 +847,7 @@ const InterviewPortal = () => {
                         )} />
                         <span className="ml-2 text-[hsl(var(--muted-foreground))]">/ 5</span>
                       </div>
-                      <div className="flex items-center gap-4 group p-2 -mx-2 rounded-lg hover:bg-[hsl(var(--muted))/0.5] transition-colors">
+                      <div className="flex items-center gap-4 group p-2 -mx-2 rounded-lg hover:bg-[hsl(var(--muted)/0.5)] transition-colors">
                         <label className="block text-sm font-medium text-[hsl(var(--foreground))] flex-1 group-hover:text-[hsl(var(--primary))] transition-colors">
                           Freelancing
                         </label>
@@ -864,7 +864,7 @@ const InterviewPortal = () => {
                         )} />
                         <span className="ml-2 text-[hsl(var(--muted-foreground))]">/ 10</span>
                       </div>
-                      <div className="flex items-center gap-4 group p-2 -mx-2 rounded-lg hover:bg-[hsl(var(--muted))/0.5] transition-colors">
+                      <div className="flex items-center gap-4 group p-2 -mx-2 rounded-lg hover:bg-[hsl(var(--muted)/0.5)] transition-colors">
                         <label className="block text-sm font-medium text-[hsl(var(--foreground))] flex-1 group-hover:text-[hsl(var(--primary))] transition-colors">
                           Course Domain
                         </label>
@@ -886,7 +886,7 @@ const InterviewPortal = () => {
                   </div>
                 </div>
                 <div>
-                  <div className="p-6 bg-[hsl(var(--destructive))/0.1] rounded-lg border border-[hsl(var(--destructive))/0.2]">
+                  <div className="p-6 bg-[hsl(var(--destructive)/0.1)] rounded-lg border border-[hsl(var(--destructive)/0.2)]">
                     <h4 className="font-medium text-[hsl(var(--destructive))] mb-2 flex items-center gap-2">
                       <Info className="w-5 h-5" />
                       Attention
@@ -907,7 +907,7 @@ const InterviewPortal = () => {
                       <button
                         type="button"
                         className={cn(
-                          "mt-3 w-full px-4 py-2 bg-[hsl(var(--navy))] text-[hsl(var(--navy-foreground))] rounded-md hover:bg-[hsl(var(--navy))/0.9] transition-colors flex items-center justify-center gap-2",
+                          "mt-3 w-full px-4 py-2 bg-[hsl(var(--navy))] text-[hsl(var(--navy-foreground))] rounded-md hover:bg-[hsl(var(--navy)/0.9)] transition-colors flex items-center justify-center gap-2",
                           isRejectButtonDisabled &&
                             "opacity-50 cursor-not-allowed"
                         )}
@@ -920,7 +920,7 @@ const InterviewPortal = () => {
                       </button>
                     )}
                     {hasInterviewMarks && (
-                      <div className="mt-3 p-2 bg-[hsl(var(--accent))/0.1] text-[hsl(var(--accent))] rounded-md text-center">
+                      <div className="mt-3 p-2 bg-[hsl(var(--accent)/0.1)] text-[hsl(var(--accent))] rounded-md text-center">
                         Interview marks have already been submitted
                       </div>
                     )}
@@ -1031,7 +1031,7 @@ const InterviewPortal = () => {
                   disabled={hideButtons}
                   className={cn(
                     "w-full px-6 py-3 bg-[hsl(var(--primary))] text-[hsl(var(--primary-foreground))] rounded-md font-medium transition-all",
-                    "hover:bg-[hsl(var(--primary))/0.9] focus:outline-none focus:ring-2 focus:ring-[hsl(var(--primary))] focus:ring-offset-2",
+                    "hover:bg-[hsl(var(--primary)/0.9)] focus:outline-none focus:ring-2 focus:ring-[hsl(var(--primary))] focus:ring-offset-2",
                     "flex items-center justify-center gap-2",
                     hideButtons && "opacity-50 cursor-not-allowed"
                   )}
@@ -1039,7 +1039,7 @@ const InterviewPortal = () => {
                   {isSubmitting ? <>Submitting...</> : <>Submit Form</>}
                 </button>
               ) : (
-                <div className="w-full p-4 bg-[hsl(var(--navy))/0.1] border border-[hsl(var(--navy))/0.2] rounded-md text-center text-[hsl(var(--navy))]">
+                <div className="w-full p-4 bg-[hsl(var(--navy)/0.1)] border border-[hsl(var(--navy)/0.2)] rounded-md text-center text-[hsl(var(--navy))]">
                   This candidate's interview has already been processed.   <span className="text-bold">interview Status: <StatusBadge /></span>
                 </div>
               )}

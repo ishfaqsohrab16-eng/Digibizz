@@ -31,22 +31,22 @@ const getColorClasses = (themeColor: string) => {
       };
     case "accent":
       return {
-        bg: "bg-[hsl(var(--accent))/0.15]",
+        bg: "bg-[hsl(var(--accent)/0.15)]",
         text: "text-[hsl(var(--accent))]",
-        hover: "hover:bg-[hsl(var(--accent))/0.25] hover:shadow-md"
+        hover: "hover:bg-[hsl(var(--accent)/0.25)] hover:shadow-md"
       };
     case "destructive":
       return {
-        bg: "bg-[hsl(var(--destructive))/0.15]",
+        bg: "bg-[hsl(var(--destructive)/0.15)]",
         text: "text-[hsl(var(--destructive))]",
-        hover: "hover:bg-[hsl(var(--destructive))/0.25] hover:shadow-md"
+        hover: "hover:bg-[hsl(var(--destructive)/0.25)] hover:shadow-md"
       };
     case "primary":
     default:
       return {
-        bg: "bg-[hsl(var(--primary))/0.15]",
+        bg: "bg-[hsl(var(--primary)/0.15)]",
         text: "text-[hsl(var(--primary))]",
-        hover: "hover:bg-[hsl(var(--primary))/0.25] hover:shadow-md"
+        hover: "hover:bg-[hsl(var(--primary)/0.25)] hover:shadow-md"
       };
   }
 };

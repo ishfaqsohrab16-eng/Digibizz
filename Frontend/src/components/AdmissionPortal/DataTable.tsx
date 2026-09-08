@@ -9,6 +9,12 @@ import {
 } from "../../components/ui/table";
 import { Button } from "../../components/ui/button";
 import {
+  DropdownMenu,
+  DropdownMenuContent,
+  DropdownMenuItem,
+  DropdownMenuTrigger,
+} from "../../components/ui/dropdown-menu";
+import {
   Select,
   SelectContent,
   SelectItem,
@@ -25,15 +31,17 @@ import {
   ChevronsUpDown,
   Download,
   Eye,
-  Pencil,
-  Trash2,
   FileDown,
   FileSpreadsheet,
   FileText,
   Inbox,
   LogIn,
   Mail,
+  Pencil,
+  Rows3,
+  Rows4,
   Search,
+  Trash2,
   X,
 } from "lucide-react";
 import { ColumnSelector } from "./ColumnSelector";
@@ -50,24 +58,31 @@ import PersonAvatar from "../ui/PersonAvatar";
  * The table every list in the LMS is drawn with.
  *
  * Thirty screens render through this one component, so what it looks like is
- * what the product looks like. It is built for the way these lists are
- * actually used - long, wide, scanned rather than read, and exported - which
- * drives most of the decisions here:
+ * what the product looks like. It is drawn as a SHEET rather than a boxed-in
+ * grid: no heavy frame, no zebra banding, one hairline between rows, and the
+ * weight moved off the container and onto the data sitting in it.
  *
- *   THE HEADER STAYS PUT while the body scrolls, because a table of four
- *   hundred trainees is unreadable once the column names are off the screen.
+ *   THE HEADER IS THE ANCHOR - tinted with the brand colour, ruled underneath,
+ *   set in small wide capitals, and pinned while the body scrolls. A table of
+ *   four hundred trainees is unreadable once the column names have gone.
  *
- *   ROWS ALTERNATE FAINTLY and the hovered one is marked down its leading
- *   edge. Tracking a single record across eight columns is the whole job.
+ *   THE HOVERED ROW IS MARKED DOWN ITS LEADING EDGE. Following one record
+ *   across eight columns is the whole job, and a bar at the start of the row
+ *   holds the eye better than a change of background on its own.
  *
- *   SORTING SAYS WHICH COLUMN AND WHICH WAY. A single unchanging icon on
- *   every header cannot answer the one question a sorted table raises.
+ *   HAIRLINES BETWEEN COLUMNS, because these tables are wide and the eye needs
+ *   rails when it travels sideways.
  *
- *   NUMBERS AND DATES ARE TABULAR so digits line up in a column, and long
- *   text wraps instead of stretching the table sideways.
+ *   ROW ACTIONS STAY FAINT until the row is under the cursor. Four identical
+ *   icons repeated down two hundred rows is noise, and it competes with the
+ *   data for exactly the attention the data needs.
  *
- * Everything about which data appears is unchanged; the props below are the
+ * Everything about WHICH data appears is unchanged - the props below are the
  * same ones the thirty callers already pass.
+ *
+ * Colours come from theme tokens throughout. Several themes ship here and some
+ * of them invert - --navy is dark in one and pale in another - so anything
+ * hard-coded is unreadable in at least one of them.
  */
 
 interface DataTableProps {
@@ -118,9 +133,7 @@ const CHARACTER_LIMIT = 80;
  * The name and gender on a row, whatever this particular table calls them.
  *
  * One component serves candidates, students, trainers and centre managers, and
- * each table names these differently. The alt text used to be hard-coded to
- * `cand_name`, so every table that was not the admissions list rendered
- * "undefined's photo" beside a broken image.
+ * each names these differently.
  */
 const NAME_KEYS = ["user_name", "cand_name", "t_name", "name", "std_name", "title"];
 const GENDER_KEYS = ["std_gender", "cand_gender", "gender", "user_gender"];
@@ -139,6 +152,32 @@ const firstValue = (row: any, keys: string[]) => {
 const looksNumeric = (value: any) =>
   typeof value === "number" ||
   (typeof value === "string" && value.trim() !== "" && !Number.isNaN(Number(value)));
+
+/**
+ * The page numbers to offer: the ends, the neighbours, and gaps for the rest.
+ *
+ * "Page 7 of 40" says where you are and offers one step either way. Numbers
+ * let somebody jump, which is what people actually do with a list they are
+ * working through.
+ */
+const pageWindow = (current: number, total: number): (number | "gap")[] => {
+  if (total <= 7) return Array.from({ length: total }, (_, i) => i + 1);
+
+  const pages = new Set<number>([1, total, current]);
+  if (current - 1 > 1) pages.add(current - 1);
+  if (current + 1 < total) pages.add(current + 1);
+  if (current <= 3) [2, 3, 4].forEach((p) => p < total && pages.add(p));
+  if (current >= total - 2)
+    [total - 3, total - 2, total - 1].forEach((p) => p > 1 && pages.add(p));
+
+  const sorted = [...pages].sort((a, b) => a - b);
+  const out: (number | "gap")[] = [];
+  sorted.forEach((page, index) => {
+    if (index > 0 && page - sorted[index - 1] > 1) out.push("gap");
+    out.push(page);
+  });
+  return out;
+};
 
 export function DataTable({
   data,
@@ -176,6 +215,8 @@ export function DataTable({
   } | null>(null);
   const [searchTerm, setSearchTerm] = useState("");
   const [itemsPerPage, setItemsPerPage] = useState(30);
+  /** A wide table is worked through differently from a short one. */
+  const [compact, setCompact] = useState(false);
 
   const BACKEND_URL = import.meta.env.VITE_BACKEND_URL;
 
@@ -202,15 +243,14 @@ export function DataTable({
     }
     return processed;
     // `columns` belongs here: the search only looks at visible ones, so hiding
-    // a column has to re-run it. It was missing, and the results went stale.
+    // a column has to re-run it.
   }, [data, columns, filterStatus, searchTerm, sortConfig]);
 
   const totalPages = Math.max(1, Math.ceil(filteredData.length / itemsPerPage));
 
   /**
    * Searching from page 5 used to leave you looking at an empty table, because
-   * the filtered results no longer reached that far. Going back to the first
-   * page is what every other table does and what people expect.
+   * the filtered results no longer reached that far.
    */
   useEffect(() => {
     if (currentPage > totalPages) setCurrentPage(1);
@@ -246,21 +286,19 @@ export function DataTable({
   };
 
   const exportToCSV = () => {
-    const visibleColumns = columns.filter((col) => col.visible);
-    const headers = visibleColumns.map((col) => col.label).join(",");
+    const visibleCols = columns.filter((col) => col.visible);
+    const headers = visibleCols.map((col) => col.label).join(",");
     const rows = filteredData
-      .map((row) =>
-        visibleColumns.map((col) => row[col.id as keyof StudentData]).join(",")
-      )
+      .map((row) => visibleCols.map((col) => row[col.id as keyof StudentData]).join(","))
       .join("\n");
     downloadFile(`${headers}\n${rows}`, "students_data.csv", "text/csv");
   };
 
   const exportToXLSX = () => {
     import("xlsx").then((XLSX) => {
-      const visibleColumns = columns.filter((col) => col.visible);
+      const visibleCols = columns.filter((col) => col.visible);
       const exportData = filteredData.map((row) =>
-        visibleColumns.reduce(
+        visibleCols.reduce(
           (acc, col) => ({ ...acc, [col.label]: row[col.id as keyof StudentData] }),
           {}
         )
@@ -279,14 +317,12 @@ export function DataTable({
       import("jspdf-autotable").then((autoTable) => {
         autoTable.default(jsPDF, {});
         const doc = new jsPDF();
-        const visibleColumns = columns.filter(
-          (col) => col.visible && col.id !== photo
-        );
+        const visibleCols = columns.filter((col) => col.visible && col.id !== photo);
 
         (doc as any).autoTable({
-          head: [visibleColumns.map((col) => col.label)],
+          head: [visibleCols.map((col) => col.label)],
           body: filteredData.map((row) =>
-            visibleColumns.map((col) => row[col.id as keyof StudentData])
+            visibleCols.map((col) => row[col.id as keyof StudentData])
           ),
         });
         doc.save("students_data.pdf");
@@ -305,121 +341,117 @@ export function DataTable({
     (isProofBtn ? 1 : 0) +
     (isEarningStatusBtn ? 1 : 0);
 
+  /* Small wide capitals in the brand colour: the header reads as a label for
+     the data rather than as a first row of it. */
   const headCell =
-    "whitespace-nowrap px-4 py-3 text-[11px] font-semibold uppercase tracking-wider text-[hsl(var(--muted-foreground))]";
+    "whitespace-nowrap border-r border-[hsl(var(--primary)/0.12)] px-4 py-3.5 text-[10px] font-bold uppercase tracking-[0.12em] text-[hsl(var(--primary))] last:border-r-0";
+
+  const cellPad = compact ? "px-4 py-1.5" : "px-4 py-3";
+  const cellEdge = "border-r border-[hsl(var(--border)/0.55)] last:border-r-0";
 
   return (
-    <div className="w-full overflow-hidden rounded-xl border border-[hsl(var(--border))] bg-[hsl(var(--card))] shadow-sm">
-      {/* ---------------------------------------------------------- toolbar */}
-      <div className="flex flex-col gap-3 border-b border-[hsl(var(--border))] p-4">
-        <div className="flex flex-wrap items-center gap-3">
-          <div className="relative min-w-[15rem] flex-1">
-            <Search className="pointer-events-none absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-[hsl(var(--muted-foreground))]" />
-            <input
-              type="text"
-              className="w-full rounded-lg border border-[hsl(var(--border))] bg-[hsl(var(--background))] py-2 pl-9 pr-9 text-sm text-[hsl(var(--foreground))] outline-none transition focus:border-[hsl(var(--primary))] focus:ring-2 focus:ring-[hsl(var(--primary))/0.15]"
-              placeholder="Search in all columns..."
-              value={searchTerm}
-              onChange={(e) => {
-                setSearchTerm(e.target.value);
-                setCurrentPage(1);
-              }}
-            />
-            {searchTerm && (
-              <button
-                type="button"
-                onClick={() => setSearchTerm("")}
-                title="Clear search"
-                className="absolute right-2 top-1/2 -translate-y-1/2 rounded p-1 text-[hsl(var(--muted-foreground))] transition hover:bg-[hsl(var(--muted))] hover:text-[hsl(var(--foreground))]"
-              >
-                <X className="h-3.5 w-3.5" />
-              </button>
-            )}
-          </div>
-
-          {(filterBy ?? []).length > 0 && (
-            <Select
-              value={filterStatus}
-              onValueChange={(value: FilterStatus) => {
-                setFilterStatus && setFilterStatus(value);
-                setCurrentPage(1);
-              }}
+    <div className="w-full">
+      {/* ------------------------------------------------------ command bar */}
+      <div className="mb-3 flex flex-wrap items-center gap-2">
+        <div className="relative min-w-[16rem] flex-1">
+          <Search className="pointer-events-none absolute left-3.5 top-1/2 h-4 w-4 -translate-y-1/2 text-[hsl(var(--muted-foreground))]" />
+          <input
+            type="text"
+            className="h-10 w-full rounded-full border border-[hsl(var(--border))] bg-[hsl(var(--card))] pl-10 pr-9 text-sm text-[hsl(var(--foreground))] shadow-sm outline-none transition focus:border-[hsl(var(--primary))] focus:ring-4 focus:ring-[hsl(var(--primary)/0.12)]"
+            placeholder="Search anything in this table..."
+            value={searchTerm}
+            onChange={(e) => {
+              setSearchTerm(e.target.value);
+              setCurrentPage(1);
+            }}
+          />
+          {searchTerm && (
+            <button
+              type="button"
+              onClick={() => setSearchTerm("")}
+              title="Clear search"
+              className="absolute right-3 top-1/2 -translate-y-1/2 rounded-full p-1 text-[hsl(var(--muted-foreground))] transition hover:bg-[hsl(var(--muted))] hover:text-[hsl(var(--foreground))]"
             >
-              <SelectTrigger className="h-9 w-[170px]">
-                <SelectValue placeholder="Filter by status" />
-              </SelectTrigger>
-              <SelectContent>
-                {(filterBy ?? []).map((item) => (
-                  <SelectItem key={item.id} value={item.value}>
-                    {item.value}
-                  </SelectItem>
-                ))}
-              </SelectContent>
-            </Select>
+              <X className="h-3.5 w-3.5" />
+            </button>
           )}
-
-          <ColumnSelector columns={columns} onColumnToggle={toggleColumn} />
-
-          {/* One segmented control rather than three loose buttons. */}
-          <div className="ml-auto flex items-center overflow-hidden rounded-lg border border-[hsl(var(--border))]">
-            <button
-              onClick={exportToCSV}
-              title="Download as CSV"
-              className="flex items-center gap-1.5 px-3 py-2 text-xs font-medium text-[hsl(var(--muted-foreground))] transition hover:bg-[hsl(var(--muted))] hover:text-[hsl(var(--foreground))]"
-            >
-              <Download className="h-3.5 w-3.5" />
-              CSV
-            </button>
-            <span className="h-5 w-px bg-[hsl(var(--border))]" />
-            <button
-              onClick={exportToXLSX}
-              title="Download as Excel"
-              className="flex items-center gap-1.5 px-3 py-2 text-xs font-medium text-[hsl(var(--muted-foreground))] transition hover:bg-[hsl(var(--teal-light))] hover:text-[hsl(var(--teal))]"
-            >
-              <FileSpreadsheet className="h-3.5 w-3.5" />
-              Excel
-            </button>
-            <span className="h-5 w-px bg-[hsl(var(--border))]" />
-            <button
-              onClick={exportToPDF}
-              title="Download as PDF"
-              className="flex items-center gap-1.5 px-3 py-2 text-xs font-medium text-[hsl(var(--muted-foreground))] transition hover:bg-[hsl(var(--primary))/0.12] hover:text-[hsl(var(--primary))]"
-            >
-              <FileText className="h-3.5 w-3.5" />
-              PDF
-            </button>
-          </div>
         </div>
 
-        {/* What is on screen, in words, so a filtered table cannot be mistaken
-            for the whole list. */}
-        {!isLoading && (
-          <p className="text-xs text-[hsl(var(--muted-foreground))]">
-            {filteredData.length === data.length
-              ? `${data.length} ${data.length === 1 ? "record" : "records"}`
-              : `${filteredData.length} of ${data.length} records match`}
-            {sortConfig && (
-              <>
-                {" · sorted by "}
-                <span className="font-medium text-[hsl(var(--foreground))]">
-                  {columns.find((col) => col.id === sortConfig.key)?.label ||
-                    String(sortConfig.key)}
-                </span>
-                {sortConfig.direction === "asc" ? " ↑" : " ↓"}
-              </>
-            )}
-          </p>
+        {(filterBy ?? []).length > 0 && (
+          <Select
+            value={filterStatus}
+            onValueChange={(value: FilterStatus) => {
+              setFilterStatus && setFilterStatus(value);
+              setCurrentPage(1);
+            }}
+          >
+            <SelectTrigger className="h-10 w-[170px] rounded-full border-[hsl(var(--border))] bg-[hsl(var(--card))] shadow-sm">
+              <SelectValue placeholder="Filter by status" />
+            </SelectTrigger>
+            <SelectContent>
+              {(filterBy ?? []).map((item) => (
+                <SelectItem key={item.id} value={item.value}>
+                  {item.value}
+                </SelectItem>
+              ))}
+            </SelectContent>
+          </Select>
         )}
+
+        <ColumnSelector columns={columns} onColumnToggle={toggleColumn} />
+
+        {/* How tight the rows sit. A wide table is read differently from a
+            short one, and one setting does not suit both. */}
+        <button
+          type="button"
+          onClick={() => setCompact((value) => !value)}
+          title={compact ? "Comfortable rows" : "Compact rows"}
+          className="flex h-10 w-10 shrink-0 items-center justify-center rounded-full border border-[hsl(var(--border))] bg-[hsl(var(--card))] text-[hsl(var(--muted-foreground))] shadow-sm transition hover:text-[hsl(var(--primary))]"
+        >
+          {compact ? <Rows3 className="h-4 w-4" /> : <Rows4 className="h-4 w-4" />}
+        </button>
+
+        {/* One export control, instead of three buttons competing with the
+            things people press far more often. */}
+        <DropdownMenu>
+          <DropdownMenuTrigger asChild>
+            <Button
+              variant="outline"
+              size="sm"
+              className="h-10 gap-2 rounded-full border-[hsl(var(--border))] bg-[hsl(var(--card))] px-4 shadow-sm"
+            >
+              <Download className="h-4 w-4" />
+              Export
+            </Button>
+          </DropdownMenuTrigger>
+          <DropdownMenuContent
+            align="end"
+            className="w-[180px] rounded-xl border border-[hsl(var(--border))] bg-[hsl(var(--card))] shadow-lg"
+          >
+            <DropdownMenuItem onClick={exportToCSV} className="gap-2 text-sm">
+              <FileText className="h-4 w-4" />
+              CSV
+            </DropdownMenuItem>
+            <DropdownMenuItem onClick={exportToXLSX} className="gap-2 text-sm">
+              <FileSpreadsheet className="h-4 w-4" />
+              Excel
+            </DropdownMenuItem>
+            <DropdownMenuItem onClick={exportToPDF} className="gap-2 text-sm">
+              <FileDown className="h-4 w-4" />
+              PDF
+            </DropdownMenuItem>
+          </DropdownMenuContent>
+        </DropdownMenu>
       </div>
 
-      {/* ------------------------------------------------------------ table */}
-      {/* The height belongs on the primitive's own scroll box, or the sticky
-          header sticks to a container that never scrolls. */}
-      <div className="relative">
-        <Table containerClassName="max-h-[70vh]">
+      {/* ------------------------------------------------------------ sheet */}
+      <div className="overflow-hidden rounded-2xl bg-[hsl(var(--card))] shadow-[0_1px_2px_rgba(0,0,0,0.04),0_8px_24px_-12px_rgba(0,0,0,0.18)] ring-1 ring-[hsl(var(--border))]">
+        {/* The height belongs on the primitive's own scroll box, or the sticky
+            header sticks to a container that never scrolls. */}
+        <Table containerClassName="max-h-[68vh]">
           <TableHeader className="sticky top-0 z-10">
-            <TableRow className="border-b border-[hsl(var(--border))] bg-[hsl(var(--muted))] hover:bg-[hsl(var(--muted))]">
-              <TableHead className={`${headCell} w-[64px]`}>#</TableHead>
+            <TableRow className="border-0 bg-[hsl(var(--primary)/0.08)] hover:bg-[hsl(var(--primary)/0.08)]">
+              <TableHead className={`${headCell} w-[62px]`}>#</TableHead>
 
               {/* Order must match the body cells below. */}
               {rowAction && (
@@ -437,14 +469,13 @@ export function DataTable({
                   <TableHead key={column.id} className={headCell}>
                     <button
                       onClick={() => handleSort(column.id as keyof StudentData)}
-                      className={`group -mx-2 flex w-full items-center gap-1.5 rounded px-2 py-1 text-left uppercase tracking-wider transition hover:bg-[hsl(var(--background))] ${
-                        active ? "text-[hsl(var(--primary))]" : ""
-                      }`}
+                      className="group flex w-full items-center gap-1.5 text-left uppercase tracking-[0.12em]"
                       title={`Sort by ${column.label}`}
                     >
-                      {column.label}
-                      {/* Which column, and which way. A single unchanging icon
-                          on every header answered neither. */}
+                      <span className={active ? "underline underline-offset-4" : ""}>
+                        {column.label}
+                      </span>
+                      {/* Which column, and which way. */}
                       {active ? (
                         sortConfig?.direction === "asc" ? (
                           <ChevronUp className="h-3.5 w-3.5 shrink-0" />
@@ -452,7 +483,7 @@ export function DataTable({
                           <ChevronDown className="h-3.5 w-3.5 shrink-0" />
                         )
                       ) : (
-                        <ChevronsUpDown className="h-3.5 w-3.5 shrink-0 opacity-0 transition group-hover:opacity-40" />
+                        <ChevronsUpDown className="h-3.5 w-3.5 shrink-0 opacity-0 transition group-hover:opacity-50" />
                       )}
                     </button>
                   </TableHead>
@@ -470,16 +501,21 @@ export function DataTable({
             </TableRow>
           </TableHeader>
 
-          <TableBody>
+          {/* A single rule under the header, in the brand colour, so the header
+              reads as a band rather than as another row. */}
+          <TableBody className="border-t-2 border-[hsl(var(--primary)/0.35)]">
             {isLoading ? (
               // Skeleton rows rather than a lone spinner: the table keeps its
               // shape, so the page does not jump when the data lands.
               Array.from({ length: 8 }).map((_, rowIndex) => (
-                <TableRow key={rowIndex} className="border-b border-[hsl(var(--border))]">
+                <TableRow
+                  key={rowIndex}
+                  className="border-b border-[hsl(var(--border)/0.6)]"
+                >
                   {Array.from({ length: totalColumnCount }).map((__, cellIndex) => (
-                    <TableCell key={cellIndex} className="px-4 py-3.5">
+                    <TableCell key={cellIndex} className={cellPad}>
                       <div
-                        className="h-3.5 animate-pulse rounded bg-[hsl(var(--muted))]"
+                        className="h-3.5 animate-pulse rounded-full bg-[hsl(var(--muted))]"
                         style={{ width: `${55 + ((rowIndex * 7 + cellIndex * 13) % 40)}%` }}
                       />
                     </TableCell>
@@ -490,21 +526,25 @@ export function DataTable({
               paginatedData.map((row, index) => (
                 <TableRow
                   key={row.id ?? row.std_id ?? row.cand_id ?? `${startIndex}-${index}`}
-                  className="group border-b border-[hsl(var(--border))] transition-colors even:bg-[hsl(var(--muted))/0.35] hover:bg-[hsl(var(--primary))/0.06]"
+                  className="group border-b border-[hsl(var(--border)/0.6)] transition-colors hover:bg-[hsl(var(--primary)/0.05)]"
                 >
-                  <TableCell className="w-[64px] whitespace-nowrap px-4 py-3 text-xs font-medium tabular-nums text-[hsl(var(--muted-foreground))]">
-                    {/* Continues across pages - it used to restart at 1 on
-                        every page, so row 31 was labelled 1. */}
+                  <TableCell
+                    className={`${cellPad} ${cellEdge} relative w-[62px] whitespace-nowrap text-xs font-medium tabular-nums text-[hsl(var(--muted-foreground))]`}
+                  >
+                    {/* The leading-edge marker. It holds the eye across a wide
+                        row better than a change of background alone. */}
+                    <span className="absolute inset-y-0 left-0 w-[3px] origin-center scale-y-0 rounded-r bg-[hsl(var(--primary))] transition-transform duration-150 group-hover:scale-y-100" />
+                    {/* Continues across pages rather than restarting at 1. */}
                     {startIndex + index + 1}
                   </TableCell>
 
                   {rowAction && (
-                    <TableCell className="w-[120px] px-4 py-3">
+                    <TableCell className={`${cellPad} ${cellEdge} w-[120px]`}>
                       <Button
                         size="sm"
                         disabled={rowAction.isEnabled ? !rowAction.isEnabled(row) : false}
                         onClick={() => rowAction.onClick(row)}
-                        className="h-8 bg-emerald-600 px-3 text-xs font-semibold text-white hover:bg-emerald-700 disabled:cursor-not-allowed disabled:opacity-40"
+                        className="h-8 rounded-full bg-emerald-600 px-3.5 text-xs font-semibold text-white shadow-sm hover:bg-emerald-700 disabled:cursor-not-allowed disabled:opacity-40"
                         title={
                           rowAction.isEnabled && !rowAction.isEnabled(row)
                             ? "Only recommended candidates can be enrolled"
@@ -517,13 +557,16 @@ export function DataTable({
                   )}
 
                   {isActionBtn && (
-                    <TableCell className="w-[150px] px-4 py-3">
-                      <div className="flex items-center gap-0.5">
+                    <TableCell className={`${cellPad} ${cellEdge} w-[150px]`}>
+                      {/* Faint until the row is under the cursor: hundreds of
+                          identical icon rows are noise, and they compete with
+                          the data for the attention the data needs. */}
+                      <div className="flex items-center gap-0.5 opacity-55 transition group-hover:opacity-100">
                         {onView && (
                           <button
                             onClick={() => onView(row)}
                             title="View details"
-                            className="rounded-md p-1.5 text-[hsl(var(--muted-foreground))] transition hover:bg-[hsl(var(--navy-light))] hover:text-[hsl(var(--navy))]"
+                            className="rounded-lg p-1.5 text-[hsl(var(--muted-foreground))] transition hover:bg-[hsl(var(--navy-light))] hover:text-[hsl(var(--navy))]"
                           >
                             <Eye className="h-4 w-4" />
                             <span className="sr-only">View</span>
@@ -533,7 +576,7 @@ export function DataTable({
                           <button
                             onClick={() => onEdit(row)}
                             title="Edit record"
-                            className="rounded-md p-1.5 text-[hsl(var(--muted-foreground))] transition hover:bg-[hsl(var(--accent))/0.15] hover:text-[hsl(var(--accent))]"
+                            className="rounded-lg p-1.5 text-[hsl(var(--muted-foreground))] transition hover:bg-[hsl(var(--accent)/0.15)] hover:text-[hsl(var(--accent))]"
                           >
                             <Pencil className="h-4 w-4" />
                             <span className="sr-only">Edit</span>
@@ -543,7 +586,7 @@ export function DataTable({
                           <button
                             onClick={() => onEmail(row)}
                             title="Send email"
-                            className="rounded-md p-1.5 text-[hsl(var(--muted-foreground))] transition hover:bg-[hsl(var(--teal-light))] hover:text-[hsl(var(--teal))]"
+                            className="rounded-lg p-1.5 text-[hsl(var(--muted-foreground))] transition hover:bg-[hsl(var(--teal-light))] hover:text-[hsl(var(--teal))]"
                           >
                             <Mail className="h-4 w-4" />
                             <span className="sr-only">Send Email</span>
@@ -553,19 +596,19 @@ export function DataTable({
                           <button
                             onClick={() => onLogin(row)}
                             title={logInAsSubUser}
-                            className="rounded-md p-1.5 text-[hsl(var(--muted-foreground))] transition hover:bg-[hsl(var(--primary))/0.15] hover:text-[hsl(var(--primary))]"
+                            className="rounded-lg p-1.5 text-[hsl(var(--muted-foreground))] transition hover:bg-[hsl(var(--primary)/0.15)] hover:text-[hsl(var(--primary))]"
                           >
                             <LogIn className="h-4 w-4" />
                             <span className="sr-only">Login</span>
                           </button>
                         )}
-                        {/* Destructive last, and set apart, so it is not next
-                            to the button people press most. */}
+                        {/* Destructive last, and set apart from the button
+                            people press most. */}
                         {onDelete && (
                           <button
                             onClick={() => onDelete(row)}
                             title="Delete record"
-                            className="ml-auto rounded-md p-1.5 text-[hsl(var(--muted-foreground))] transition hover:bg-[hsl(var(--destructive))/0.15] hover:text-[hsl(var(--destructive))]"
+                            className="ml-auto rounded-lg p-1.5 text-[hsl(var(--muted-foreground))] transition hover:bg-[hsl(var(--destructive)/0.15)] hover:text-[hsl(var(--destructive))]"
                           >
                             <Trash2 className="h-4 w-4" />
                             <span className="sr-only">Delete</span>
@@ -580,7 +623,10 @@ export function DataTable({
 
                     if (isLink && column.id === linkColumn) {
                       return (
-                        <TableCell key={column.id} className="px-4 py-3 text-sm">
+                        <TableCell
+                          key={column.id}
+                          className={`${cellPad} ${cellEdge} text-sm`}
+                        >
                           <a
                             href={value}
                             target="_blank"
@@ -598,7 +644,10 @@ export function DataTable({
                       const hasPhoto =
                         value && String(value) !== "null" && String(value) !== "undefined";
                       return (
-                        <TableCell key={column.id} className="px-4 py-2.5">
+                        <TableCell
+                          key={column.id}
+                          className={`${compact ? "px-4 py-1" : "px-4 py-2"} ${cellEdge}`}
+                        >
                           <button
                             type="button"
                             disabled={!hasPhoto}
@@ -610,14 +659,14 @@ export function DataTable({
                               )
                             }
                             title={hasPhoto ? "Open the full picture" : "No photo on file"}
-                            className="relative block rounded-full transition enabled:hover:ring-2 enabled:hover:ring-[hsl(var(--primary))/0.4] disabled:cursor-default"
+                            className="relative block rounded-full transition enabled:hover:ring-2 enabled:hover:ring-[hsl(var(--primary)/0.45)] disabled:cursor-default"
                           >
                             <PersonAvatar
                               src={value}
                               baseUrl={BACKEND_URL}
                               name={name}
                               gender={firstValue(row, GENDER_KEYS)}
-                              className="h-11 w-11"
+                              className={compact ? "h-8 w-8" : "h-11 w-11"}
                             />
                           </button>
                         </TableCell>
@@ -628,12 +677,16 @@ export function DataTable({
                     return (
                       <TableCell
                         key={column.id}
-                        className={`px-4 py-3 text-sm text-[hsl(var(--foreground))] ${
+                        className={`${cellPad} ${cellEdge} text-sm text-[hsl(var(--foreground))] ${
                           looksNumeric(value) ? "tabular-nums" : ""
                         }`}
                       >
                         <span
-                          className={long ? "block max-w-[26rem] whitespace-pre-wrap break-words" : "whitespace-nowrap"}
+                          className={
+                            long
+                              ? "block max-w-[26rem] whitespace-pre-wrap break-words"
+                              : "whitespace-nowrap"
+                          }
                         >
                           {value}
                         </span>
@@ -642,7 +695,7 @@ export function DataTable({
                   })}
 
                   {isProofBtn && (
-                    <TableCell className="w-[100px] px-4 py-3">
+                    <TableCell className={`${cellPad} ${cellEdge} w-[100px]`}>
                       {row.proof && (
                         <a
                           href={`${BACKEND_URL}${row.proof}`}
@@ -659,13 +712,13 @@ export function DataTable({
                   )}
 
                   {isEarningStatusBtn && (
-                    <TableCell className="w-[170px] px-4 py-3">
+                    <TableCell className={`${cellPad} ${cellEdge} w-[170px]`}>
                       <div className="flex items-center gap-2">
                         {row.earningStatus === 2 && (
                           <Button
                             variant="outline"
                             size="sm"
-                            className="h-8 border-[hsl(var(--teal))] text-xs text-[hsl(var(--teal))] hover:bg-[hsl(var(--teal))] hover:text-[hsl(var(--primary-foreground))]"
+                            className="h-8 rounded-full border-[hsl(var(--teal))] text-xs text-[hsl(var(--teal))] hover:bg-[hsl(var(--teal))] hover:text-[hsl(var(--primary-foreground))]"
                             onClick={() =>
                               onEarningStatusChange && onEarningStatusChange(row, "approved")
                             }
@@ -677,10 +730,7 @@ export function DataTable({
                           <Button
                             variant="outline"
                             size="sm"
-                            /* These class strings had a comma where a bracket
-                               belonged - "hsl(var,--teal))" - so they produced
-                               no colour at all. */
-                            className="h-8 border-[hsl(var(--destructive))] text-xs text-[hsl(var(--destructive))] hover:bg-[hsl(var(--destructive))] hover:text-[hsl(var(--destructive-foreground))]"
+                            className="h-8 rounded-full border-[hsl(var(--destructive))] text-xs text-[hsl(var(--destructive))] hover:bg-[hsl(var(--destructive))] hover:text-[hsl(var(--destructive-foreground))]"
                             onClick={() =>
                               onEarningStatusChange && onEarningStatusChange(row, "rejected")
                             }
@@ -693,7 +743,7 @@ export function DataTable({
                             <Button
                               variant="outline"
                               size="sm"
-                              className="h-8 border-[hsl(var(--teal))] text-xs text-[hsl(var(--teal))] hover:bg-[hsl(var(--teal))] hover:text-[hsl(var(--primary-foreground))]"
+                              className="h-8 rounded-full border-[hsl(var(--teal))] text-xs text-[hsl(var(--teal))] hover:bg-[hsl(var(--teal))] hover:text-[hsl(var(--primary-foreground))]"
                               onClick={() =>
                                 onEarningStatusChange && onEarningStatusChange(row, "approved")
                               }
@@ -703,7 +753,7 @@ export function DataTable({
                             <Button
                               variant="outline"
                               size="sm"
-                              className="h-8 border-[hsl(var(--destructive))] text-xs text-[hsl(var(--destructive))] hover:bg-[hsl(var(--destructive))] hover:text-[hsl(var(--destructive-foreground))]"
+                              className="h-8 rounded-full border-[hsl(var(--destructive))] text-xs text-[hsl(var(--destructive))] hover:bg-[hsl(var(--destructive))] hover:text-[hsl(var(--destructive-foreground))]"
                               onClick={() =>
                                 onEarningStatusChange && onEarningStatusChange(row, "rejected")
                               }
@@ -719,12 +769,12 @@ export function DataTable({
               ))
             ) : (
               <TableRow>
-                <TableCell colSpan={totalColumnCount} className="h-56 text-center">
+                <TableCell colSpan={totalColumnCount} className="h-64 text-center">
                   <div className="flex flex-col items-center justify-center gap-2 p-8">
-                    <span className="flex h-12 w-12 items-center justify-center rounded-full bg-[hsl(var(--muted))]">
-                      <Inbox className="h-6 w-6 text-[hsl(var(--muted-foreground))]" />
+                    <span className="flex h-14 w-14 items-center justify-center rounded-2xl bg-[hsl(var(--primary)/0.08)] text-[hsl(var(--primary))]">
+                      <Inbox className="h-7 w-7" />
                     </span>
-                    <p className="text-sm font-semibold text-[hsl(var(--foreground))]">
+                    <p className="mt-1 text-sm font-semibold text-[hsl(var(--foreground))]">
                       {searchTerm ? "Nothing matches that search" : "No data available"}
                     </p>
                     <p className="text-xs text-[hsl(var(--muted-foreground))]">
@@ -735,7 +785,7 @@ export function DataTable({
                     {searchTerm && (
                       <button
                         onClick={() => setSearchTerm("")}
-                        className="mt-1 rounded-lg border border-[hsl(var(--border))] px-3 py-1.5 text-xs font-medium text-[hsl(var(--foreground))] transition hover:bg-[hsl(var(--muted))]"
+                        className="mt-2 rounded-full border border-[hsl(var(--border))] px-4 py-1.5 text-xs font-medium text-[hsl(var(--foreground))] transition hover:bg-[hsl(var(--muted))]"
                       >
                         Clear search
                       </button>
@@ -750,28 +800,28 @@ export function DataTable({
 
       {/* ------------------------------------------------------- pagination */}
       {!isLoading && filteredData.length > 0 && (
-        <div className="flex flex-wrap items-center justify-between gap-3 border-t border-[hsl(var(--border))] px-4 py-3">
+        <div className="mt-3 flex flex-wrap items-center justify-between gap-3">
           <div className="flex items-center gap-3">
             <span className="text-xs text-[hsl(var(--muted-foreground))]">
-              Showing{" "}
-              <span className="font-medium text-[hsl(var(--foreground))] tabular-nums">
+              <span className="font-semibold text-[hsl(var(--foreground))] tabular-nums">
                 {startIndex + 1}–{Math.min(startIndex + itemsPerPage, filteredData.length)}
               </span>{" "}
               of{" "}
-              <span className="font-medium text-[hsl(var(--foreground))] tabular-nums">
+              <span className="font-semibold text-[hsl(var(--foreground))] tabular-nums">
                 {filteredData.length}
               </span>
+              {filteredData.length !== data.length && (
+                <span> (filtered from {data.length})</span>
+              )}
             </span>
 
-            {/* Long lists are worked through at different speeds, and 30 was
-                not a choice anybody made. */}
             <select
               value={itemsPerPage}
               onChange={(e) => {
                 setItemsPerPage(Number(e.target.value));
                 setCurrentPage(1);
               }}
-              className="rounded-lg border border-[hsl(var(--border))] bg-[hsl(var(--background))] px-2 py-1 text-xs text-[hsl(var(--foreground))] outline-none focus:border-[hsl(var(--primary))]"
+              className="rounded-full border border-[hsl(var(--border))] bg-[hsl(var(--card))] px-3 py-1 text-xs text-[hsl(var(--foreground))] shadow-sm outline-none focus:border-[hsl(var(--primary))]"
               title="Rows per page"
             >
               {PAGE_SIZES.map((size) => (
@@ -787,7 +837,7 @@ export function DataTable({
               onClick={() => setCurrentPage(1)}
               disabled={currentPage === 1}
               title="First page"
-              className="rounded-md p-1.5 text-[hsl(var(--muted-foreground))] transition enabled:hover:bg-[hsl(var(--muted))] enabled:hover:text-[hsl(var(--foreground))] disabled:opacity-30"
+              className="rounded-full p-2 text-[hsl(var(--muted-foreground))] transition enabled:hover:bg-[hsl(var(--muted))] enabled:hover:text-[hsl(var(--foreground))] disabled:opacity-25"
             >
               <ChevronsLeft className="h-4 w-4" />
             </button>
@@ -795,24 +845,41 @@ export function DataTable({
               onClick={() => setCurrentPage(Math.max(1, currentPage - 1))}
               disabled={currentPage === 1}
               title="Previous page"
-              className="rounded-md p-1.5 text-[hsl(var(--muted-foreground))] transition enabled:hover:bg-[hsl(var(--muted))] enabled:hover:text-[hsl(var(--foreground))] disabled:opacity-30"
+              className="rounded-full p-2 text-[hsl(var(--muted-foreground))] transition enabled:hover:bg-[hsl(var(--muted))] enabled:hover:text-[hsl(var(--foreground))] disabled:opacity-25"
             >
               <ChevronLeft className="h-4 w-4" />
             </button>
 
-            <span className="px-2 text-xs text-[hsl(var(--muted-foreground))]">
-              Page{" "}
-              <span className="font-semibold text-[hsl(var(--foreground))] tabular-nums">
-                {currentPage}
-              </span>{" "}
-              of <span className="tabular-nums">{totalPages}</span>
-            </span>
+            {/* Numbers, so a long list can be jumped through rather than
+                stepped through one page at a time. */}
+            {pageWindow(currentPage, totalPages).map((page, index) =>
+              page === "gap" ? (
+                <span
+                  key={`gap-${index}`}
+                  className="px-1 text-xs text-[hsl(var(--muted-foreground))]"
+                >
+                  …
+                </span>
+              ) : (
+                <button
+                  key={page}
+                  onClick={() => setCurrentPage(page)}
+                  className={`h-8 min-w-[2rem] rounded-full px-2.5 text-xs font-semibold tabular-nums transition ${
+                    page === currentPage
+                      ? "bg-[hsl(var(--primary))] text-[hsl(var(--primary-foreground))] shadow-sm"
+                      : "text-[hsl(var(--muted-foreground))] hover:bg-[hsl(var(--muted))] hover:text-[hsl(var(--foreground))]"
+                  }`}
+                >
+                  {page}
+                </button>
+              )
+            )}
 
             <button
               onClick={() => setCurrentPage(Math.min(totalPages, currentPage + 1))}
               disabled={currentPage >= totalPages}
               title="Next page"
-              className="rounded-md p-1.5 text-[hsl(var(--muted-foreground))] transition enabled:hover:bg-[hsl(var(--muted))] enabled:hover:text-[hsl(var(--foreground))] disabled:opacity-30"
+              className="rounded-full p-2 text-[hsl(var(--muted-foreground))] transition enabled:hover:bg-[hsl(var(--muted))] enabled:hover:text-[hsl(var(--foreground))] disabled:opacity-25"
             >
               <ChevronRight className="h-4 w-4" />
             </button>
@@ -820,7 +887,7 @@ export function DataTable({
               onClick={() => setCurrentPage(totalPages)}
               disabled={currentPage >= totalPages}
               title="Last page"
-              className="rounded-md p-1.5 text-[hsl(var(--muted-foreground))] transition enabled:hover:bg-[hsl(var(--muted))] enabled:hover:text-[hsl(var(--foreground))] disabled:opacity-30"
+              className="rounded-full p-2 text-[hsl(var(--muted-foreground))] transition enabled:hover:bg-[hsl(var(--muted))] enabled:hover:text-[hsl(var(--foreground))] disabled:opacity-25"
             >
               <ChevronsRight className="h-4 w-4" />
             </button>

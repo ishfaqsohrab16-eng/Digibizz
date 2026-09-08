@@ -93,11 +93,11 @@ const mapColorToThemeVariable = (color: string): string => {
     case "#00c67d":
       return "bg-[hsl(var(--success-light))] text-[hsl(var(--success))]";
     case "#ff8e6e":
-      return "bg-[hsl(var(--accent))/0.15] text-[hsl(var(--accent))]";
+      return "bg-[hsl(var(--accent)/0.15)] text-[hsl(var(--accent))]";
     case "#ff6b7d":
-      return "bg-[hsl(var(--destructive))/0.15] text-[hsl(var(--destructive))]";
+      return "bg-[hsl(var(--destructive)/0.15)] text-[hsl(var(--destructive))]";
     default:
-      return "bg-[hsl(var(--primary))/0.15] text-[hsl(var(--primary))]";
+      return "bg-[hsl(var(--primary)/0.15)] text-[hsl(var(--primary))]";
   }
 };
 

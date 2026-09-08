@@ -86,17 +86,17 @@ const SummaryCard = ({
       case "text-orange-600":
         return {
           text: "text-[hsl(var(--accent))]",
-          bg: "bg-[hsl(var(--accent))/0.15]",
+          bg: "bg-[hsl(var(--accent)/0.15)]",
         };
       case "text-purple-600":
         return {
           text: "text-[hsl(var(--primary))]",
-          bg: "bg-[hsl(var(--primary))/0.15]",
+          bg: "bg-[hsl(var(--primary)/0.15)]",
         };
       default:
         return {
           text: "text-[hsl(var(--primary))]",
-          bg: "bg-[hsl(var(--primary))/0.15]",
+          bg: "bg-[hsl(var(--primary)/0.15)]",
         };
     }
   };

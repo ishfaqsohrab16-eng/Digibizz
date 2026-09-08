@@ -33,7 +33,7 @@ export const DataTableCell: React.FC<DataTableCellProps> = ({
   ) {
     return (
       <UITableCell
-        className={`whitespace-nowrap px-4 py-3 text-sm tabular-nums ${
+        className={`whitespace-nowrap border-r border-[hsl(var(--border)/0.55)] px-4 py-3 text-sm tabular-nums last:border-r-0 ${
           column.className || ""
         }`}
       >
@@ -46,11 +46,11 @@ export const DataTableCell: React.FC<DataTableCellProps> = ({
     const active = value === 1;
 
     return (
-      <UITableCell className="px-4 py-3">
+      <UITableCell className="border-r border-[hsl(var(--border)/0.55)] px-4 py-3 last:border-r-0">
         <span
           className={`inline-flex items-center gap-1.5 rounded-full px-2.5 py-1 text-xs font-medium ring-1 ring-inset ${
             active
-              ? "bg-[hsl(var(--teal-light))] text-[hsl(var(--teal))] ring-[hsl(var(--teal))/0.25]"
+              ? "bg-[hsl(var(--teal-light))] text-[hsl(var(--teal))] ring-[hsl(var(--teal)/0.25)]"
               : "bg-[hsl(var(--muted))] text-[hsl(var(--muted-foreground))] ring-[hsl(var(--border))]"
           }`}
         >
@@ -65,7 +65,11 @@ export const DataTableCell: React.FC<DataTableCellProps> = ({
     );
   }
   return (
-    <UITableCell className={`px-4 py-3 text-sm ${column.className || ""}`}>
+    <UITableCell
+      className={`border-r border-[hsl(var(--border)/0.55)] px-4 py-3 text-sm last:border-r-0 ${
+        column.className || ""
+      }`}
+    >
       {value}
     </UITableCell>
   );
