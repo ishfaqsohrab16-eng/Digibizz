@@ -32,26 +32,41 @@ export const DataTableCell: React.FC<DataTableCellProps> = ({
     ((isDate(value) && column.key === "tb_start") || column.key === "tb_end")
   ) {
     return (
-      <td className={`px-6 py-4 whitespace-nowrap ${column.className}`}>
+      <UITableCell
+        className={`whitespace-nowrap px-4 py-3 text-sm tabular-nums ${
+          column.className || ""
+        }`}
+      >
         {formatDate(value.toString())}
-      </td>
+      </UITableCell>
     );
   }
   var keyChick = String(column.key);
   if (keyChick.includes("status")) {
-    const statusText = value === 1 ? "Active" : "Inactive";
-    const statusClass =
-      value === 1 ? "bg-green-100 text-green-800" : "bg-red-100 text-red-800";
+    const active = value === 1;
 
     return (
-      <UITableCell>
+      <UITableCell className="px-4 py-3">
         <span
-          className={`px-2 py-1 rounded-full text-xs font-medium ${statusClass}`}
+          className={`inline-flex items-center gap-1.5 rounded-full px-2.5 py-1 text-xs font-medium ring-1 ring-inset ${
+            active
+              ? "bg-[hsl(var(--teal-light))] text-[hsl(var(--teal))] ring-[hsl(var(--teal))/0.25]"
+              : "bg-[hsl(var(--muted))] text-[hsl(var(--muted-foreground))] ring-[hsl(var(--border))]"
+          }`}
         >
-          {statusText}
+          <span
+            className={`h-1.5 w-1.5 rounded-full ${
+              active ? "bg-[hsl(var(--teal))]" : "bg-[hsl(var(--muted-foreground))]"
+            }`}
+          />
+          {active ? "Active" : "Inactive"}
         </span>
       </UITableCell>
     );
   }
-  return <UITableCell className={column.className}>{value}</UITableCell>;
+  return (
+    <UITableCell className={`px-4 py-3 text-sm ${column.className || ""}`}>
+      {value}
+    </UITableCell>
+  );
 };

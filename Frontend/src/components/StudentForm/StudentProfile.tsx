@@ -23,6 +23,7 @@ import { toast } from "sonner";
 import StudentForm from "./StudentForm";
 import StudentSendMail from "./StudentSendMail";
 import StudentPassword from "./StudentPassword";
+import PersonAvatar from "../ui/PersonAvatar";
 import { ROLE, isRole } from "../../utils/roles";
 import { useBatch } from "../../context/BatchContext";
 
@@ -124,7 +125,6 @@ const StudentProfile: React.FC<StudentProfileProps> = ({
     initialData || null
   );
   const [loading, setLoading] = useState<boolean>(false);
-  const [imageError, setImageError] = useState<boolean>(false);
   const [isEditMode, setIsEditMode] = useState(false);
   const [editData, setEditData] = useState<any>(null);
   const [showSendMail, setShowSendMail] = useState(false);
@@ -134,10 +134,6 @@ const StudentProfile: React.FC<StudentProfileProps> = ({
   const canSetPassword = isRole(userType, ROLE.SUPER_ADMIN);
 
   const BACKEND_URL = import.meta.env.VITE_BACKEND_URL;
-
-  // Fallback image as base64 or simple SVG
-  const defaultAvatarUrl =
-    "data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='24' height='24' viewBox='0 0 24 24' fill='none' stroke='currentColor' stroke-width='2' stroke-linecap='round' stroke-linejoin='round'%3E%3Cpath d='M20 21v-2a4 4 0 0 0-4-4H8a4 4 0 0 0-4 4v2'/%3E%3Ccircle cx='12' cy='7' r='4'/%3E%3C/svg%3E";
 
   const handlePrint = () => {
     window.print();
@@ -318,12 +314,6 @@ const StudentProfile: React.FC<StudentProfileProps> = ({
       .join(" ");
   };
 
-  const getProfileImage = () => {
-    if (!studentData?.user_profile_photo) return defaultAvatarUrl;
-    if (imageError) return defaultAvatarUrl;
-    return `${BACKEND_URL}${studentData.user_profile_photo}`;
-  };
-
   if (loading) {
     return (
       <div className="flex justify-center items-center min-h-screen">
@@ -431,11 +421,12 @@ const StudentProfile: React.FC<StudentProfileProps> = ({
 
         <div className="header-gradient-student rounded-lg p-6 mb-8 flex items-center transform hover:scale-[1.02] transition-all duration-300 bg-[hsl(var(--sidebar-bg))] text-[hsl(var(--sidebar-fg))]">
           <div className="flex-shrink-0">
-            <img
-              src={getProfileImage()}
-              alt={studentData.user_name}
-              className="w-48 h-48 rounded-full border-4 border-[hsl(var(--card))] shadow-lg hover:border-[hsl(var(--primary))] transition-colors"
-              onError={() => setImageError(true)}
+            <PersonAvatar
+              src={studentData.user_profile_photo}
+              baseUrl={BACKEND_URL}
+              name={studentData.user_name}
+              gender={studentData.std_gender}
+              className="w-48 h-48 border-4 border-[hsl(var(--card))] shadow-lg"
             />
           </div>
           <div className="ml-6 flex-1">

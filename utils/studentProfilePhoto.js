@@ -36,8 +36,14 @@ const PASSPORT_DOC_TYPE = "passport_photo";
  *
  * A path out of the database is not to be trusted with a filesystem read; one
  * containing ".." would otherwise reach anywhere on the disk.
+ *
+ * UPLOAD_ROOT overrides it, which the tests use so they never write into the
+ * real upload tree - a test that creates and deletes files where the running
+ * application keeps its own is a test that can disturb it.
  */
-const UPLOAD_ROOT = path.resolve(__dirname, "..", "uploads");
+const UPLOAD_ROOT = process.env.UPLOAD_ROOT
+  ? path.resolve(process.env.UPLOAD_ROOT)
+  : path.resolve(__dirname, "..", "uploads");
 
 /**
  * A profile picture has to be an image.

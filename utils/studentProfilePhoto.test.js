@@ -2,13 +2,24 @@
  * Tests for falling back to the passport photograph.
  *
  * Run with:  node utils/studentProfilePhoto.test.js
- * Exits non-zero if any rule regresses. Real files in a temporary directory;
- * the documents table is stubbed, so no database.
+ * Exits non-zero if any rule regresses. Real files, but in a directory of its
+ * own under the OS temp folder - never the application's own uploads tree,
+ * which a test has no business creating and deleting files in. The documents
+ * table is stubbed, so no database.
  */
 
 const fs = require("fs");
 const path = require("path");
 const os = require("os");
+
+// Set before the module under test is loaded: it reads UPLOAD_ROOT once, at
+// require time, to decide where uploads live.
+const UPLOAD_ROOT = path.join(
+  os.tmpdir(),
+  `lms-photo-test-${process.pid}-${Date.now()}`
+);
+fs.mkdirSync(UPLOAD_ROOT, { recursive: true });
+process.env.UPLOAD_ROOT = UPLOAD_ROOT;
 
 // Stubbed before the module under test is required, so nothing opens a socket.
 let docRows = [];
@@ -31,8 +42,6 @@ const {
   findPassportPhoto,
   ensureProfilePhoto,
 } = require("./studentProfilePhoto");
-
-const UPLOAD_ROOT = path.resolve(__dirname, "..", "uploads");
 
 let passed = 0;
 let failed = 0;
@@ -186,15 +195,8 @@ const main = async () => {
 
 main()
   .then(() => {
-    for (const file of written) {
-      try {
-        fs.unlinkSync(file);
-      } catch {
-        /* already gone */
-      }
-    }
     try {
-      fs.rmSync(path.resolve(UPLOAD_ROOT, scratch), { recursive: true, force: true });
+      fs.rmSync(UPLOAD_ROOT, { recursive: true, force: true });
     } catch {
       /* already gone */
     }

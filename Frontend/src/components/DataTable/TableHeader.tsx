@@ -19,27 +19,32 @@ export const TableHeaderCell: React.FC<TableHeaderProps> = ({
   const isSorted = sortColumn === column.key;
 
   const getSortIcon = () => {
-    if (!isSorted) return <ArrowUpDown size={16} />;
+    if (!isSorted) return <ArrowUpDown size={14} />;
     return sortDirection === "asc" ? (
-      <ArrowUp size={16} />
+      <ArrowUp size={14} />
     ) : (
-      <ArrowDown size={16} />
+      <ArrowDown size={14} />
     );
   };
 
   return (
     <TableHead
-      className={`${column.headerClassName} ${
+      className={`whitespace-nowrap px-4 py-3 text-[11px] font-semibold uppercase tracking-wider ${
+        isSorted
+          ? "text-[hsl(var(--primary))]"
+          : "text-[hsl(var(--muted-foreground))]"
+      } ${column.headerClassName || ""} ${
         column.sortable ? "cursor-pointer select-none" : ""
       }`}
       onClick={() => column.sortable && onSort(column.key)}
+      title={column.sortable ? `Sort by ${column.header}` : undefined}
     >
-      <div className="flex items-center gap-2">
+      <div className="flex items-center gap-1.5">
         {column.header}
         {column.sortable && (
-          <span className="text-gray-400 hover:text-gray-600">
-            {getSortIcon()}
-          </span>
+          /* Faint until this is the sorted column, so the one that IS
+             sorted is the one that stands out. */
+          <span className={isSorted ? "" : "opacity-30"}>{getSortIcon()}</span>
         )}
       </div>
     </TableHead>

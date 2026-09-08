@@ -4,9 +4,18 @@ import { cn } from "../../lib/utils"
 
 const Table = React.forwardRef<
   HTMLTableElement,
-  React.HTMLAttributes<HTMLTableElement>
->(({ className, ...props }, ref) => (
-  <div className="relative w-full overflow-auto">
+  React.HTMLAttributes<HTMLTableElement> & { containerClassName?: string }
+>(({ className, containerClassName, ...props }, ref) => (
+  /*
+   * The scrolling box, which callers need to be able to reach.
+   *
+   * A sticky header sticks to its nearest scrolling ancestor, and this div is
+   * always one. Without a height on it there is nothing to scroll, so the
+   * header stayed where it was and scrolled away with the rows - "sticky top-0"
+   * on the header looked right in the markup and did nothing on screen.
+   * Passing a max-height in here is what makes it work.
+   */
+  <div className={cn("relative w-full overflow-auto", containerClassName)}>
     <table
       ref={ref}
       className={cn("w-full caption-bottom text-sm", className)}
