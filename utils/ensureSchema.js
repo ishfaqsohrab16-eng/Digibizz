@@ -20,6 +20,21 @@ const { sequelize } = require("../config/db");
  * exact SQL to run by hand.
  */
 const REQUIRED_COLUMNS = [
+  {
+    // The centre visit was first released with one report per centre per week
+    // across everybody. That is right for the Online Cell and wrong for a
+    // physical centre, which every Master Trainer visits and files their own
+    // report on. cv_owner_id carries the difference: the MT's id at a physical
+    // centre, 0 at the Online Cell, so one unique index expresses both rules.
+    //
+    // DEFAULT 0 matches what a report filed under the old rule meant - one
+    // between everybody - so nothing already stored changes meaning.
+    table: "center_visits",
+    column: "cv_owner_id",
+    definition:
+      "INT NOT NULL DEFAULT 0 COMMENT 'mt_id at a physical centre; 0 for the Online Cell.'",
+    migration: "migration/030_center_visits_owner.sql",
+  },
   // The weekly M&E report gained attendance and a review stage after it was
   // already deployed. Same reason as tb_id below: sync({alter:false}) creates
   // tables and never adds a column to one that exists.
@@ -238,6 +253,15 @@ const REQUIRED_ENUM_VALUES = [
  * writes, and that is a bug nobody attributes to a leftover index.
  */
 const FORBIDDEN_INDEXES = [
+  {
+    table: "center_visits",
+    index: "center_visits_center_batch_week",
+    reason:
+      "it allowed one visit report per centre per week across ALL Master " +
+      "Trainers, so only the first of them could ever file one for a physical " +
+      "centre - which every MT is supposed to visit and report on separately",
+    migration: "migration/030_center_visits_owner.sql",
+  },
   {
     table: "weekly_evaluations",
     index: "weekly_evaluations_trainer_week",

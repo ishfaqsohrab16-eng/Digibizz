@@ -19,9 +19,10 @@ const { isoDate } = require("./evaluationWeek");
  *   on their own schedule, so a centre that has not opened yet is not on the
  *   list - a visit report about it would be a page of blanks.
  *
- *   IT IS PHYSICAL. Online and hybrid centres are folded into a single Online
- *   Cell: nobody travels to them, so one form covers them all, and only one
- *   Master Trainer files it.
+ * Online and hybrid centres are folded into a single Online Cell: nobody
+ * travels to them, so one form covers them all and one Master Trainer files
+ * it. It appears on the same terms as anything else - only while one of the
+ * centres it covers still has a class running.
  */
 
 /**
@@ -78,14 +79,14 @@ const centersToVisit = async (tb_id, week) => {
   };
 
   const physical = [];
-  let onlineCellRunning = false;
+  const folded = [];
 
   for (const center of centers) {
     if (!running(center.center_id)) continue;
 
     if (isOnlineMedium(center.center_medium)) {
       // Folded into the one Online Cell rather than listed separately.
-      onlineCellRunning = true;
+      folded.push(center.center_name);
       continue;
     }
 
@@ -100,7 +101,19 @@ const centersToVisit = async (tb_id, week) => {
 
   physical.sort((a, b) => a.center_name.localeCompare(b.center_name));
 
-  return onlineCellRunning
+  /**
+   * The Online Cell appears on exactly the same terms as a physical centre:
+   * only while something it covers still has a class running.
+   *
+   * `folded` is empty when no online or hybrid centre is teaching this week -
+   * either because none is allocated to this batch, or because their own dates
+   * have not started or have finished - and in that case there is nothing to
+   * report on and the entry is not offered at all.
+   *
+   * Which centres it covers travels with it, so a Master Trainer opening the
+   * form knows what they are reporting on rather than guessing.
+   */
+  return folded.length > 0
     ? [
         ...physical,
         {
@@ -109,6 +122,7 @@ const centersToVisit = async (tb_id, week) => {
           medium: ONLINE_CELL.medium,
           online_cell: true,
           dates: null,
+          covers: folded,
         },
       ]
     : physical;

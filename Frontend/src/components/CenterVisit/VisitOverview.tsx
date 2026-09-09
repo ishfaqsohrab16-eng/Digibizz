@@ -6,15 +6,19 @@ import {
   Building2,
   Camera,
   CheckCircle2,
+  ChevronDown,
+  ChevronRight,
   FileEdit,
   Globe,
   Loader2,
   ShieldAlert,
+  Users,
 } from "lucide-react";
 import { toast } from "sonner";
 import {
   CenterVisit,
   EvalWeek,
+  VisitOverviewEntry,
   VisitOverviewRow,
   VisitQuestion,
   getVisit,
@@ -26,14 +30,39 @@ import WeekPicker, { describeWeek } from "../WeeklyEvaluation/WeekPicker";
 import VisitReport from "./VisitReport";
 
 /**
- * Every centre for one week, visited or not.
+ * Every centre for one week, and how much of it has come in.
  *
- * The admin view, and the unvisited centres are the point of it. A list of
- * where somebody went answers "what do we have"; the question that changes
- * anyone's behaviour is "which centre did nobody go to".
+ * The admin view, and the gaps are the point of it. A list of where somebody
+ * went answers "what do we have"; the question that changes anyone's behaviour
+ * is "who has not been".
+ *
+ * Every Master Trainer visits every physical centre, so a centre is not
+ * visited-or-not but counted: five expected, three filed, two people to chase.
+ * Opening a centre lists them by name. The Online Cell is the exception -
+ * nobody travels to it, one report covers it, and its count is one.
  */
 
-const STATUS_LOOK = {
+/** How a centre is doing: what came in against what was expected. */
+const CENTER_LOOK = {
+  complete: {
+    label: "All in",
+    className: "bg-emerald-600 text-white ring-emerald-600",
+    Icon: CheckCircle2,
+  },
+  partial: {
+    label: "Some missing",
+    className: "bg-amber-50 text-amber-800 ring-amber-200",
+    Icon: AlertTriangle,
+  },
+  missing: {
+    label: "Nobody has been",
+    className: "bg-rose-50 text-rose-700 ring-rose-200",
+    Icon: ShieldAlert,
+  },
+} as const;
+
+/** How one report is doing. */
+const REPORT_LOOK = {
   reviewed: {
     label: "Reviewed",
     className: "bg-emerald-600 text-white ring-emerald-600",
@@ -49,12 +78,72 @@ const STATUS_LOOK = {
     className: "bg-amber-50 text-amber-800 ring-amber-200",
     Icon: FileEdit,
   },
-  missing: {
-    label: "Not visited",
-    className: "bg-rose-50 text-rose-700 ring-rose-200",
-    Icon: AlertTriangle,
-  },
 } as const;
+
+/**
+ * The reports filed about one centre, once it is opened.
+ *
+ * A draft is listed but cannot be read: it is somebody's unfinished writing,
+ * and counting it as filed would let a Master Trainer clear the chase without
+ * saying anything.
+ */
+const Filed: React.FC<{
+  visits: VisitOverviewEntry[];
+  onOpen: (cv_id: number) => void;
+}> = ({ visits, onOpen }) => {
+  if (visits.length === 0) {
+    return (
+      <p className="px-4 pb-3 pl-16 text-xs text-slate-500">
+        Nothing has been filed about this centre yet.
+      </p>
+    );
+  }
+
+  return (
+    <ul className="space-y-1 px-4 pb-3 pl-16">
+      {visits.map((entry) => {
+        const look = REPORT_LOOK[entry.status];
+        return (
+          <li
+            key={entry.cv_id}
+            className="flex flex-wrap items-center gap-2 rounded-lg bg-slate-50 px-3 py-2"
+          >
+            <span className="min-w-0 flex-1 truncate text-xs font-medium text-slate-700">
+              {entry.by || "A Master Trainer"}
+              {entry.visit_date ? ` · ${entry.visit_date}` : ""}
+              {entry.visit_time ? ` at ${entry.visit_time}` : ""}
+            </span>
+
+            {entry.media > 0 && (
+              <span
+                className="inline-flex items-center gap-1 rounded bg-white px-1.5 py-0.5 text-[11px] font-medium text-slate-600 ring-1 ring-inset ring-slate-200"
+                title={`${entry.media} photograph${entry.media === 1 ? "" : "s"} or video`}
+              >
+                <Camera className="h-3 w-3" />
+                {entry.media}
+              </span>
+            )}
+
+            <span
+              className={`inline-flex items-center gap-1 whitespace-nowrap rounded-full px-2 py-0.5 text-[11px] font-semibold ring-1 ring-inset ${look.className}`}
+            >
+              <look.Icon className="h-3 w-3" />
+              {look.label}
+            </span>
+
+            <button
+              disabled={entry.status === "draft"}
+              onClick={() => onOpen(entry.cv_id)}
+              className="rounded-lg px-2 py-1 text-xs font-semibold text-sky-700 transition hover:bg-sky-100 disabled:cursor-not-allowed disabled:text-slate-300 disabled:hover:bg-transparent"
+            >
+              View
+            </button>
+          </li>
+        );
+      })}
+    </ul>
+  );
+};
 
 const Stat: React.FC<{
   label: string;
@@ -96,18 +185,21 @@ const VisitOverview: React.FC = () => {
   const [weeks, setWeeks] = useState<EvalWeek[]>([]);
   const [rows, setRows] = useState<VisitOverviewRow[]>([]);
   const [chased, setChased] = useState(true);
+  const [masterTrainers, setMasterTrainers] = useState(0);
   const [summary, setSummary] = useState({
     centers: 0,
-    submitted: 0,
-    reviewed: 0,
-    draft: 0,
+    expected: 0,
+    done: 0,
+    complete: 0,
+    partial: 0,
     missing: 0,
   });
 
   const [weekKey, setWeekKey] = useState<string | undefined>();
-  const [filter, setFilter] = useState<
-    "all" | "submitted" | "reviewed" | "draft" | "missing"
-  >("all");
+  const [filter, setFilter] = useState<"all" | "complete" | "partial" | "missing">("all");
+  // Which centres are open. Several at once, because comparing two centres is
+  // the reason to open them at all.
+  const [expanded, setExpanded] = useState<number[]>([]);
 
   const [open, setOpen] = useState<{
     visit: CenterVisit;
@@ -137,6 +229,7 @@ const VisitOverview: React.FC = () => {
       setRows(data.rows);
       setSummary(data.summary);
       setChased(data.chased !== false);
+      setMasterTrainers(data.masterTrainers || 0);
     } catch (caught: any) {
       setError(caught?.response?.data?.message || "Could not load the overview.");
     } finally {
@@ -278,35 +371,40 @@ const VisitOverview: React.FC = () => {
           active={filter === "all"}
           onClick={() => setFilter("all")}
         />
+        <Stat label="Reports filed" value={summary.done} tone="emerald" />
         <Stat
-          label="Awaiting review"
-          value={summary.submitted}
+          label="All in"
+          value={summary.complete}
           tone="emerald"
-          active={filter === "submitted"}
-          onClick={() => setFilter("submitted")}
+          active={filter === "complete"}
+          onClick={() => setFilter("complete")}
         />
         <Stat
-          label="Reviewed"
-          value={summary.reviewed}
-          tone="emerald"
-          active={filter === "reviewed"}
-          onClick={() => setFilter("reviewed")}
-        />
-        <Stat
-          label="Draft only"
-          value={summary.draft}
+          label="Some missing"
+          value={summary.partial}
           tone="amber"
-          active={filter === "draft"}
-          onClick={() => setFilter("draft")}
+          active={filter === "partial"}
+          onClick={() => setFilter("partial")}
         />
         <Stat
-          label={chased ? "Not visited" : "On paper"}
+          label={chased ? "Nobody has been" : "On paper"}
           value={summary.missing}
           tone={chased ? "rose" : "slate"}
           active={filter === "missing"}
           onClick={() => setFilter("missing")}
         />
       </div>
+
+      {chased && week && summary.expected > 0 && (
+        <p className="mb-4 flex items-center gap-1.5 text-xs text-slate-500">
+          <Users className="h-3.5 w-3.5" />
+          {summary.done} of {summary.expected} reports in for {describeWeek(week)} —
+          {masterTrainers === 1
+            ? " one Master Trainer visits"
+            : ` each of ${masterTrainers} Master Trainers visits`}{" "}
+          every physical centre, and one of them files the Online Cell.
+        </p>
+      )}
 
       {chased && week && summary.missing > 0 && filter === "all" && (
         <button
@@ -316,7 +414,7 @@ const VisitOverview: React.FC = () => {
           <ShieldAlert className="h-5 w-5 shrink-0 text-rose-600" />
           <div>
             <p className="text-sm font-semibold text-rose-900">
-              {summary.missing} of {summary.centers} centres were not visited in{" "}
+              Nobody went to {summary.missing} of {summary.centers} centres in{" "}
               {describeWeek(week)}
             </p>
             <p className="text-xs text-rose-800">Show only those</p>
@@ -345,61 +443,69 @@ const VisitOverview: React.FC = () => {
           )}
 
           {visible.map((row) => {
-            const look = STATUS_LOOK[row.status];
+            const look = CENTER_LOOK[row.status];
+            const open = expanded.includes(row.center_id);
+
             return (
-              <div
-                key={row.center_id}
-                className="flex flex-wrap items-center gap-3 border-b border-slate-100 px-4 py-3 last:border-0"
-              >
-                <span
-                  className={`flex h-8 w-8 shrink-0 items-center justify-center rounded-lg ring-1 ring-inset ${
-                    row.online_cell
-                      ? "bg-indigo-50 text-indigo-600 ring-indigo-200"
-                      : "bg-slate-100 text-slate-500 ring-slate-200"
-                  }`}
-                >
-                  {row.online_cell ? (
-                    <Globe className="h-4 w-4" />
-                  ) : (
-                    <Building2 className="h-4 w-4" />
-                  )}
-                </span>
-
-                <div className="min-w-0 flex-1">
-                  <p className="truncate text-sm font-semibold text-slate-900">
-                    {row.center_name}
-                  </p>
-                  <p className="truncate text-xs text-slate-500">
-                    {row.by ? `Visited by ${row.by}` : "Nobody has been"}
-                    {row.visit_date ? ` · ${row.visit_date}` : ""}
-                    {row.visit_time ? ` at ${row.visit_time}` : ""}
-                  </p>
-                </div>
-
-                {row.media > 0 && (
-                  <span
-                    className="hidden items-center gap-1 rounded bg-slate-100 px-2 py-0.5 text-[11px] font-medium text-slate-600 sm:inline-flex"
-                    title={`${row.media} photograph${row.media === 1 ? "" : "s"} or video`}
-                  >
-                    <Camera className="h-3 w-3" />
-                    {row.media}
-                  </span>
-                )}
-
-                <span
-                  className={`inline-flex items-center gap-1.5 whitespace-nowrap rounded-full px-2.5 py-1 text-xs font-semibold ring-1 ring-inset ${look.className}`}
-                >
-                  <look.Icon className="h-3.5 w-3.5" />
-                  {look.label}
-                </span>
-
+              <div key={row.center_id} className="border-b border-slate-100 last:border-0">
                 <button
-                  disabled={!row.cv_id || row.status === "missing" || row.status === "draft"}
-                  onClick={() => row.cv_id && show(row.cv_id)}
-                  className="rounded-lg px-3 py-1.5 text-xs font-semibold text-sky-700 transition hover:bg-sky-50 disabled:cursor-not-allowed disabled:text-slate-300 disabled:hover:bg-transparent"
+                  onClick={() =>
+                    setExpanded((current) =>
+                      current.includes(row.center_id)
+                        ? current.filter((id) => id !== row.center_id)
+                        : [...current, row.center_id]
+                    )
+                  }
+                  className="flex w-full flex-wrap items-center gap-3 px-4 py-3 text-left transition hover:bg-slate-50"
                 >
-                  View
+                  <span className="shrink-0 text-slate-400">
+                    {open ? (
+                      <ChevronDown className="h-4 w-4" />
+                    ) : (
+                      <ChevronRight className="h-4 w-4" />
+                    )}
+                  </span>
+
+                  <span
+                    className={`flex h-8 w-8 shrink-0 items-center justify-center rounded-lg ring-1 ring-inset ${
+                      row.online_cell
+                        ? "bg-indigo-50 text-indigo-600 ring-indigo-200"
+                        : "bg-slate-100 text-slate-500 ring-slate-200"
+                    }`}
+                  >
+                    {row.online_cell ? (
+                      <Globe className="h-4 w-4" />
+                    ) : (
+                      <Building2 className="h-4 w-4" />
+                    )}
+                  </span>
+
+                  <span className="min-w-0 flex-1">
+                    <span className="block truncate text-sm font-semibold text-slate-900">
+                      {row.center_name}
+                    </span>
+                    <span className="block truncate text-xs text-slate-500">
+                      {row.online_cell
+                        ? row.covers.length > 0
+                          ? `One report for ${row.covers.join(", ")}`
+                          : "Every online and hybrid centre — one report between them"
+                        : `${row.done} of ${row.expected} Master Trainer${
+                            row.expected === 1 ? "" : "s"
+                          } have filed`}
+                    </span>
+                  </span>
+
+                  <span
+                    className={`inline-flex items-center gap-1.5 whitespace-nowrap rounded-full px-2.5 py-1 text-xs font-semibold ring-1 ring-inset ${look.className}`}
+                  >
+                    <look.Icon className="h-3.5 w-3.5" />
+                    {row.online_cell || row.expected === 1
+                      ? look.label
+                      : `${row.done}/${row.expected}`}
+                  </span>
                 </button>
+
+                {open && <Filed visits={row.visits} onOpen={show} />}
               </div>
             );
           })}

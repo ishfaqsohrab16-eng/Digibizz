@@ -5,7 +5,13 @@ const CenterVisit = require("../models/centerVisitModel");
 const MasterTrainer = require("../models/masterTrainersModel");
 const User = require("../models/userModel");
 const { centersToVisit, centerToVisit } = require("../utils/visitScope");
-const { VISIT_QUESTIONS, cleanAnswers, unanswered } = require("../utils/visitForm");
+const {
+  VISIT_QUESTIONS,
+  SHARED_OWNER,
+  cleanAnswers,
+  unanswered,
+  ownerFor,
+} = require("../utils/visitForm");
 const {
   weekOf,
   weekFromKey,
@@ -23,16 +29,21 @@ const { canReview, isMasterTrainer, isViewer } = require("../utils/evaluationAcc
  * Visit Report Proforma, and attaches photographs or video from the visit. A
  * Super Admin reads it and marks it reviewed.
  *
- * ONE REPORT PER CENTRE PER WEEK, ACROSS ALL MASTER TRAINERS. A centre is
- * visited; it is not visited-by-each-of-us. Two reports about the same room on
- * the same day would be two answers to "was there electricity", so whoever
- * gets there first files it and the rest see it is done. The unique index
- * makes that true in the database; the checks here make the refusal say
- * something useful rather than surfacing as a constraint error.
+ * WHO FILES WHAT DIFFERS BY CENTRE.
  *
- * The Online Cell follows the same rule and is the reason it is stated so
- * plainly: it is one virtual centre standing for every online and hybrid
- * centre, nobody travels to it, and exactly one Master Trainer files it.
+ *   EVERY MASTER TRAINER VISITS EVERY PHYSICAL CENTRE and files their own
+ *   report, so a centre with five MTs has five. They go on different days and
+ *   see different things - one arrives to find the projector broken, another
+ *   finds it fixed - and collapsing that into one report would throw away the
+ *   disagreement, which is the most informative part of it.
+ *
+ *   THE ONLINE CELL is filed once, by whoever gets there first. Nobody travels
+ *   to it and there is nothing to see twice.
+ *
+ * utils/visitForm.js turns that into one value, cv_owner_id, so the database
+ * enforces both rules with a single unique index. The checks here exist to
+ * make a refusal say something useful rather than surfacing as a constraint
+ * error.
  */
 
 const masterTrainerFor = async (user) => {
@@ -104,16 +115,23 @@ exports.centers = async (req, res) => {
 
     const centers = await centersToVisit(tb_id, week);
 
+    // Only the reports that belong to this Master Trainer: their own at each
+    // physical centre, plus the single shared one for the Online Cell. Another
+    // MT's report on the same centre is theirs and not shown as this one's.
+    const owners = mt ? [Number(mt.mt_id), SHARED_OWNER] : [SHARED_OWNER];
+
     const visits = centers.length
       ? await CenterVisit.findAll({
           where: {
             tb_id,
             cv_week_key: week.key,
+            cv_owner_id: { [Op.in]: owners },
             cv_center_id: { [Op.in]: centers.map((entry) => entry.center_id) },
           },
           attributes: [
             "cv_id",
             "cv_center_id",
+            "cv_owner_id",
             "mt_id",
             "cv_status",
             "cv_visit_date",
@@ -185,8 +203,15 @@ exports.prepare = async (req, res) => {
       });
     }
 
+    // The report this person would be filling in: their own at a physical
+    // centre, the shared one at the Online Cell.
     const existing = await CenterVisit.findOne({
-      where: { tb_id, cv_week_key: week.key, cv_center_id: center.center_id },
+      where: {
+        tb_id,
+        cv_week_key: week.key,
+        cv_center_id: center.center_id,
+        cv_owner_id: ownerFor(center, mt?.mt_id ?? -1),
+      },
     });
 
     const names = existing ? await namesFor([existing.mt_id]) : {};
@@ -201,10 +226,12 @@ exports.prepare = async (req, res) => {
       visit: existing,
       filed_by: existing ? names[existing.mt_id] || null : null,
       // Editable only by the person who started it, and only while it is a
-      // draft. Once submitted the centre is covered and nobody rewrites it.
+      // draft. Once submitted it is signed off and nobody rewrites it.
       editable: Boolean(mt) && (!existing || (mine && existing.cv_status === "draft")),
-      // Somebody else got there first. The form is shown read-only rather than
-      // hidden, because knowing what they found is the useful part.
+      // Only ever true for the Online Cell: at a physical centre this MT has
+      // their own report, so somebody else's cannot be in the way. The form is
+      // shown read-only rather than hidden, because knowing what they found is
+      // the useful part.
       claimed: Boolean(existing) && !mine,
       reviewable: canReview(req.user) && existing && existing.cv_status !== "draft",
     });
@@ -266,13 +293,20 @@ exports.save = async (req, res) => {
 
     const submitting = req.body?.status === "submitted";
 
+    const owner = ownerFor(center, mt.mt_id);
+
     const existing = await CenterVisit.findOne({
-      where: { tb_id, cv_week_key: week.key, cv_center_id: center.center_id },
+      where: {
+        tb_id,
+        cv_week_key: week.key,
+        cv_center_id: center.center_id,
+        cv_owner_id: owner,
+      },
     });
 
-    // THE RULE THAT MATTERS. One report per centre per week, whoever gets
-    // there first - and the Online Cell is the same, which is why this is not
-    // scoped to the Master Trainer asking.
+    // At a physical centre the owner is this MT, so the row found can only ever be
+    // their own report. At the Online Cell it is the shared sentinel, so it may
+    // be a colleague's - and that one is first-come.
     if (existing) {
       const mine = Number(existing.mt_id) === Number(mt.mt_id);
 
@@ -281,7 +315,7 @@ exports.save = async (req, res) => {
         const names = await namesFor([existing.mt_id]);
         return res.status(409).json({
           success: false,
-          message: `${names[existing.mt_id] || "Another Master Trainer"} has already filed the visit to ${center.center_name} for this week.`,
+          message: `${names[existing.mt_id] || "Another Master Trainer"} has already filed the Online Cell visit for this week. There is one between everybody.`,
         });
       }
 
@@ -344,6 +378,7 @@ exports.save = async (req, res) => {
 
     const values = {
       mt_id: mt.mt_id,
+      cv_owner_id: owner,
       cv_center_id: center.center_id,
       cv_center_name: center.center_name,
       tb_id,
@@ -379,7 +414,8 @@ exports.save = async (req, res) => {
     if (error?.name === "SequelizeUniqueConstraintError") {
       return res.status(409).json({
         success: false,
-        message: "Somebody else filed that visit while you were writing. Reload to see it.",
+        message:
+          "Somebody else filed the Online Cell visit while you were writing. Reload to see it.",
       });
     }
 
@@ -475,38 +511,60 @@ exports.overview = async (req, res) => {
 
     const centers = await centersToVisit(tb_id, week);
 
-    const visits = centers.length
-      ? await CenterVisit.findAll({
-          where: { tb_id, cv_week_key: week.key },
-          attributes: [
-            "cv_id",
-            "cv_center_id",
-            "mt_id",
-            "cv_status",
-            "cv_visit_date",
-            "cv_visit_time",
-            "cv_submitted_on",
-            "cv_media",
-          ],
-          raw: true,
-        })
-      : [];
+    const visits = await CenterVisit.findAll({
+      where: { tb_id, cv_week_key: week.key },
+      attributes: [
+        "cv_id",
+        "cv_center_id",
+        "cv_owner_id",
+        "mt_id",
+        "cv_status",
+        "cv_visit_date",
+        "cv_visit_time",
+        "cv_submitted_on",
+        "cv_media",
+      ],
+      raw: true,
+    });
+
+    // How many reports a physical centre SHOULD have: one per Master Trainer,
+    // because every one of them visits every centre. The Online Cell expects
+    // exactly one however many there are.
+    const expected = await MasterTrainer.count();
 
     const names = await namesFor([...new Set(visits.map((row) => row.mt_id))]);
-    const visitBy = Object.fromEntries(visits.map((row) => [row.cv_center_id, row]));
+
+    const byCenter = {};
+    for (const row of visits) {
+      if (!byCenter[row.cv_center_id]) byCenter[row.cv_center_id] = [];
+      byCenter[row.cv_center_id].push(row);
+    }
 
     const rows = centers.map((center) => {
-      const visit = visitBy[center.center_id];
+      const filed = (byCenter[center.center_id] || []).map((row) => ({
+        cv_id: row.cv_id,
+        status: row.cv_status,
+        by: names[row.mt_id] || null,
+        visit_date: row.cv_visit_date,
+        visit_time: row.cv_visit_time,
+        media: Array.isArray(row.cv_media) ? row.cv_media.length : 0,
+      }));
+
+      const done = filed.filter((entry) => entry.status !== "draft").length;
+      const wanted = center.online_cell ? 1 : Math.max(expected, 1);
+
       return {
         center_id: center.center_id,
         center_name: center.center_name,
         online_cell: center.online_cell,
-        status: visit ? visit.cv_status : "missing",
-        cv_id: visit?.cv_id || null,
-        by: visit ? names[visit.mt_id] || null : null,
-        visit_date: visit?.cv_visit_date || null,
-        visit_time: visit?.cv_visit_time || null,
-        media: Array.isArray(visit?.cv_media) ? visit.cv_media.length : 0,
+        covers: center.covers || [],
+        // Per centre now, not per report: a physical centre is expected to
+        // collect one from each Master Trainer, so "3 of 5" is the fact that
+        // matters and a single status would hide four of them.
+        expected: wanted,
+        done,
+        status: done === 0 ? "missing" : done >= wanted ? "complete" : "partial",
+        visits: filed,
       };
     });
 
@@ -520,12 +578,15 @@ exports.overview = async (req, res) => {
       weeks: recentWeeks(12),
       chased,
       startWeek: START_WEEK,
+      masterTrainers: expected,
       rows,
       summary: {
         centers: rows.length,
-        submitted: rows.filter((row) => row.status === "submitted").length,
-        reviewed: rows.filter((row) => row.status === "reviewed").length,
-        draft: rows.filter((row) => row.status === "draft").length,
+        // Reports, not centres - the unit people are counting is the visit.
+        expected: chased ? rows.reduce((sum, row) => sum + row.expected, 0) : 0,
+        done: rows.reduce((sum, row) => sum + row.done, 0),
+        complete: rows.filter((row) => row.status === "complete").length,
+        partial: rows.filter((row) => row.status === "partial").length,
         missing: chased ? rows.filter((row) => row.status === "missing").length : 0,
       },
     });
@@ -619,11 +680,14 @@ exports.pending = async (req, res) => {
       const centers = await centersToVisit(row.tb_id, week);
       if (centers.length === 0) continue;
 
+      // This Master Trainer's own reports: theirs at each physical centre,
+      // and the shared one at the Online Cell whoever filed it.
       const done = await CenterVisit.count({
         where: {
           tb_id: row.tb_id,
           cv_week_key: week.key,
           cv_status: { [Op.in]: ["submitted", "reviewed"] },
+          cv_owner_id: { [Op.in]: [Number(mt.mt_id), SHARED_OWNER] },
           cv_center_id: { [Op.in]: centers.map((entry) => entry.center_id) },
         },
       });

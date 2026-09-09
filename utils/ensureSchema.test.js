@@ -105,14 +105,27 @@ const main = async () => {
   answer = () => [[{ present: 1 }]];
   await dropForbiddenIndexes();
 
-  const dropped = queries.find((entry) => /DROP INDEX/i.test(entry.sql));
-  check("an index that exists is dropped", Boolean(dropped), queries.map((e) => e.sql).join(" | "));
+  const drops = queries.filter((entry) => /DROP INDEX/i.test(entry.sql));
+  check("an index that exists is dropped", drops.length > 0, queries.map((e) => e.sql).join(" | "));
+
+  // Every entry, by name and on its own table. Checked against the list rather
+  // than against one hard-coded index: the list grows each time a shipped
+  // index turns out to express the wrong rule, and a test that only looked at
+  // the first would quietly stop covering the newest one.
   check(
-    "by name, on the right table",
-    /ALTER TABLE `weekly_evaluations` DROP INDEX `weekly_evaluations_trainer_week`/.test(
-      dropped?.sql || ""
+    "each forbidden index is dropped by name, on the right table",
+    FORBIDDEN_INDEXES.every((item) =>
+      drops.some(
+        (entry) =>
+          entry.sql === `ALTER TABLE \`${item.table}\` DROP INDEX \`${item.index}\``
+      )
     ),
-    dropped?.sql
+    drops.map((entry) => entry.sql).join(" | ")
+  );
+  check(
+    "and nothing else is",
+    drops.length === FORBIDDEN_INDEXES.length,
+    drops.map((entry) => entry.sql).join(" | ")
   );
 
   // A failure here must not stop the boot. The whole point of the change around

@@ -16,11 +16,21 @@ const TrainingBatch = require("./trainingBatcheModel");
  * make that impossible to represent without inventing a row in `centers` that
  * is not a centre.
  *
- * ONE FORM PER CENTRE PER WEEK, across all Master Trainers rather than per MT.
- * A centre is visited, not visited-by-each-of-us: two reports about the same
- * room on the same day would be two answers to "was there electricity", and
- * the unique index makes that impossible rather than merely unlikely. Whoever
- * files it is recorded on it.
+ * WHO FILES WHAT DIFFERS BY CENTRE, and cv_owner_id is how that is expressed.
+ *
+ *   A PHYSICAL CENTRE is visited by every Master Trainer, each filing their
+ *   own report. cv_owner_id is their mt_id, so the unique index permits one
+ *   report per MT per centre per week. They go on different days and see
+ *   different things, and collapsing that into one report would throw away
+ *   the disagreement - which is the most informative part of it.
+ *
+ *   THE ONLINE CELL is filed once by whoever gets to it first. cv_owner_id is
+ *   0 for every such report, so the unique index permits exactly one.
+ *
+ * A single column rather than two constraints, because "unique on these
+ * columns, except when this other column is 0" is not something a database can
+ * express - and enforcing it in the application alone would race between two
+ * browser tabs. mt_id still records who actually filed it either way.
  */
 const CenterVisit = sequelize.define(
   "CenterVisit",
@@ -36,6 +46,19 @@ const CenterVisit = sequelize.define(
       allowNull: false,
       references: { model: MasterTrainer, key: "mt_id" },
       comment: "The Master Trainer who made the visit.",
+    },
+
+    /**
+     * Whose report this is, for uniqueness. See the note above.
+     *
+     * The Master Trainer's id at a physical centre; 0 for the Online Cell,
+     * which has one report between everybody.
+     */
+    cv_owner_id: {
+      type: DataTypes.INTEGER,
+      allowNull: false,
+      defaultValue: 0,
+      comment: "mt_id at a physical centre; 0 for the Online Cell.",
     },
 
     /** 0 for the Online Cell. See the note above. */
@@ -135,8 +158,8 @@ const CenterVisit = sequelize.define(
     indexes: [
       {
         unique: true,
-        fields: ["cv_center_id", "tb_id", "cv_week_key"],
-        name: "center_visits_center_batch_week",
+        fields: ["cv_owner_id", "cv_center_id", "tb_id", "cv_week_key"],
+        name: "center_visits_owner_center_batch_week",
       },
       { fields: ["mt_id", "cv_week_key"], name: "center_visits_mt_week" },
       { fields: ["tb_id", "cv_week_key", "cv_status"], name: "center_visits_batch_week" },

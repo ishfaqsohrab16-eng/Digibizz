@@ -8,10 +8,18 @@
  * centre, at one time, with its own photographs. So it is one form per centre
  * here, and the questions are what the columns of the paper form share.
  *
- * THE ONLINE CELL IS ONE CENTRE. Every centre whose medium is Online or Hybrid
- * is grouped into a single virtual centre with a single form, because nobody
- * travels to them - and only one Master Trainer files it, since there is
- * nothing to see twice. Physical centres are visited individually.
+ * TWO DIFFERENT RULES ABOUT WHO FILES WHAT, and they are the crux of this
+ * module:
+ *
+ *   A PHYSICAL CENTRE is visited by EVERY Master Trainer, each filing their
+ *   own report. They go on different days and see different things - one
+ *   arrives to find the projector broken, another finds it fixed - and
+ *   collapsing that into a single report would throw away the disagreement,
+ *   which is the most informative part of it.
+ *
+ *   THE ONLINE CELL is filed ONCE, by whoever gets to it first. Every centre
+ *   whose medium is Online or Hybrid folds into one virtual centre, because
+ *   nobody travels to them and there is nothing to see twice.
  *
  * EVERY ANSWER IS YES, NO, AND A REMARK. The paper leaves a box per cell and
  * people write in it; a bare tick loses the reason. "Is the electricity
@@ -93,9 +101,27 @@ const unanswered = (answers) =>
     (question) => question.label
   );
 
+/**
+ * Who a report belongs to, for the purpose of "one per week".
+ *
+ * The Master Trainer for a physical centre, so each of them files their own.
+ * A shared sentinel for the Online Cell, so the first one filed is the only
+ * one there can be.
+ *
+ * Stored in its own column and indexed with the centre, batch and week. The
+ * alternative - two different unique constraints depending on a value in the
+ * row - is not something a database can express, and enforcing it in the
+ * application alone would race between two browser tabs.
+ */
+const SHARED_OWNER = 0;
+
+const ownerFor = (center, mt_id) => (center?.online_cell ? SHARED_OWNER : Number(mt_id));
+
 module.exports = {
   VISIT_QUESTIONS,
   ONLINE_CELL,
+  SHARED_OWNER,
+  ownerFor,
   isOnlineMedium,
   cleanAnswers,
   cleanAnswer,

@@ -21,12 +21,17 @@ import VisitForm from "./VisitForm";
  * The centres a Master Trainer has to visit this week.
  *
  * Organised around the one question they have on a Monday morning: where do I
- * still need to go. So unvisited centres come first, and a centre a colleague
- * has already covered says who went rather than merely disappearing - two
- * people setting off to the same place is exactly what this list prevents.
+ * still need to go. So centres they have not been to come first.
  *
- * The Online Cell sits at the end, marked as what it is: one entry standing
- * for every online and hybrid centre, filed once by whoever gets to it.
+ * Everything here is theirs. Every Master Trainer visits every physical centre
+ * and files their own report, so a colleague having been already changes
+ * nothing about whether this one still has to go - and their report is not
+ * shown as this one's.
+ *
+ * The Online Cell is the exception and sits at the end, marked as what it is:
+ * one entry standing for every online and hybrid centre, filed once by
+ * whoever gets to it. That is the only row where somebody else's name can
+ * appear, and the only one that can be closed by somebody else.
  */
 
 type View = { name: "list" } | { name: "form"; centerId: number };
@@ -163,12 +168,13 @@ const MyVisits: React.FC = () => {
             >
               {outstanding > 0
                 ? `${outstanding} centre${outstanding === 1 ? "" : "s"} still to visit for ${describeWeek(week)}`
-                : `Every centre has been visited for ${describeWeek(week)}`}
+                : `You have visited every centre for ${describeWeek(week)}`}
             </p>
             <p
               className={`mt-0.5 text-xs ${outstanding > 0 ? "text-sky-800" : "text-emerald-800"}`}
             >
-              One report per centre — if a colleague has already been, it shows here.
+              Your own report for each physical centre. The Online Cell is one between
+              everybody — whoever files it first.
             </p>
           </div>
         </div>
@@ -252,7 +258,9 @@ const MyVisits: React.FC = () => {
 
                   <p className="mt-1 text-xs text-slate-500">
                     {center.online_cell
-                      ? "Every online and hybrid centre — one report between them"
+                      ? center.covers && center.covers.length > 0
+                        ? `One report for ${center.covers.join(", ")}`
+                        : "Every online and hybrid centre — one report between them"
                       : center.medium}
                     {visit?.by && !visit.mine ? ` · filed by ${visit.by}` : ""}
                     {visit?.visit_date ? ` · visited ${visit.visit_date}` : ""}
