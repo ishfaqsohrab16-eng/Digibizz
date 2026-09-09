@@ -26,6 +26,20 @@ const text = (value) => {
 const isBlank = (value) => text(value) === "";
 
 /**
+ * True when a stored district or qualification needs replacing.
+ *
+ * Blank, or a bare number. The student edit form used to render these two as
+ * dropdowns keyed by position, so saving it wrote the position - "31" for
+ * Quetta - over the words. No district and no qualification is a number, so
+ * one that is can only have come from that, and it is worth as little as an
+ * empty column while looking like a real value.
+ */
+const needsRepair = (value) => {
+  const clean = text(value);
+  return clean === "" || /^\d+$/.test(clean);
+};
+
+/**
  * The applicant's district.
  *
  * cand_local_domicile is the field the registration form labels "District",
@@ -77,6 +91,7 @@ const missingFromCandidate = (candidate) =>
 module.exports = {
   text,
   isBlank,
+  needsRepair,
   districtOf,
   qualificationOf,
   profileFromCandidate,

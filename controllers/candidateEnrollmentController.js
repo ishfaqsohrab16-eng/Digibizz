@@ -9,10 +9,7 @@ const { Op } = require("sequelize");
 const { sendEmail, escapeHtml } = require("../servec/emailConfig");
 const { enrolmentConfirmed } = require("../servec/emailTemplates");
 const { studentContactConflicts } = require("../utils/contactUniqueness");
-const {
-  profileFromCandidate,
-  missingFromCandidate,
-} = require("../utils/candidateProfile");
+const { profileFromCandidate } = require("../utils/candidateProfile");
 
 /**
  * Required lazily: this controller is loaded by scripts and tests that have
@@ -265,21 +262,8 @@ const createStudentFromCandidate = async (candidate, overrides, transaction) => 
    * The applicant's own details, through the shared mapping rather than read
    * off the candidate inline - scripts/backfill-student-details.js repairs old
    * rows with the same one, and two copies of a mapping drift apart.
-   *
-   * A candidate who cannot supply one is named in the log as it happens. The
-   * columns are NOT NULL, so the row is still written with a blank rather than
-   * refused: an applicant who has been interviewed and recommended should not
-   * be turned away at the last step over a field somebody can type in later.
    */
   const inherited = profileFromCandidate(candidate);
-  const missing = missingFromCandidate(candidate);
-
-  if (missing.length > 0) {
-    console.warn(
-      `[enrol] candidate ${candidate.cand_id} (${candidate.cand_cnic}) has no ` +
-        `${missing.join(" or ")} to copy - the student row will start blank there`
-    );
-  }
 
   const centerId = overrides.center_id || candidate.center_id;
   const courseId = overrides.course_id || candidate.course_id;

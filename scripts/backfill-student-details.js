@@ -2,10 +2,17 @@
  * One-time repair: give already-enrolled students the district and
  * qualification from the candidate record they were enrolled from.
  *
- * Enrolling copies an applicant's details onto their student row. Students who
- * were enrolled before that copying existed - or from a candidate record that
- * was itself blank - have empty columns, and nothing fills them in afterwards
- * because nothing looks back at the application once somebody is a student.
+ * Enrolling copies an applicant's details onto their student row, and nothing
+ * looks back at the application afterwards, so a student whose columns are
+ * wrong stays wrong. Two ways they get that way:
+ *
+ *   ENROLLED BEFORE THE COPY EXISTED, or from a candidate record that was
+ *   itself blank. The column is empty.
+ *
+ *   EDITED AND SAVED through the student form while it rendered these two as
+ *   dropdowns keyed by position. It wrote the position - "31" for Quetta -
+ *   over the words. The form no longer does this; the rows it already wrote
+ *   are repaired here.
  *
  * WHAT IT WILL NOT DO
  *
@@ -40,7 +47,7 @@ const { sequelize } = require("../config/db");
 const Student = require("../models/studentModel");
 const Candidate = require("../models/CandidateModel");
 const { normaliseCnic } = require("../utils/cnicListParser");
-const { isBlank, profileFromCandidate } = require("../utils/candidateProfile");
+const { needsRepair, profileFromCandidate } = require("../utils/candidateProfile");
 
 const args = process.argv.slice(2);
 const apply = args.includes("--apply");
@@ -102,16 +109,17 @@ const main = async () => {
     attributes: ["std_id", "std_cnic", "tb_id", "std_district", "std_qualification"],
   });
 
-  // Only the ones with something missing. Reading every student and filtering
-  // here rather than in SQL keeps "blank" meaning one thing - see isBlank,
-  // which also treats the string "null" as empty.
+  // Reading every student and filtering here rather than in SQL keeps
+  // "needs replacing" meaning one thing - see needsRepair, which counts the
+  // string "null" and a bare index as empty as well as an empty column.
   const gaps = students.filter(
-    (student) => isBlank(student.std_district) || isBlank(student.std_qualification)
+    (student) =>
+      needsRepair(student.std_district) || needsRepair(student.std_qualification)
   );
 
   console.log(
     `${students.length} students${onlyBatch ? ` in batch ${onlyBatch}` : ""}, ` +
-      `${gaps.length} with a missing district or qualification.`
+      `${gaps.length} with a missing or damaged district or qualification.`
   );
 
   if (gaps.length === 0) {
@@ -157,14 +165,14 @@ const main = async () => {
 
     const available = profileFromCandidate(candidate);
 
-    // Only the columns that are BOTH empty on the student and present on the
-    // candidate. A student missing only a district keeps the qualification
+    // Only the columns that BOTH need replacing on the student and exist on
+    // the candidate. A student missing only a district keeps the qualification
     // they already have, whatever the application says.
     const changes = {};
-    if (isBlank(student.std_district) && available.std_district) {
+    if (needsRepair(student.std_district) && available.std_district) {
       changes.std_district = available.std_district;
     }
-    if (isBlank(student.std_qualification) && available.std_qualification) {
+    if (needsRepair(student.std_qualification) && available.std_qualification) {
       changes.std_qualification = available.std_qualification;
     }
 

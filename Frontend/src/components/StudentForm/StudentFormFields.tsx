@@ -1,6 +1,7 @@
 import React from "react";
 import { StudentRegistrationData } from "../../types/student";
 import { Option } from "../../types/form";
+import { digreeOptions, domicileOptions } from "../../types/degreeAreas";
 import SelectField from "../form/SelectField";
 import InputField from "../form/InputField";
 import CheckboxField from "../form/CheckboxField";
@@ -38,26 +39,27 @@ const StudentFormFields = ({
     id: c.center_id,
     name: c.center_name,
   }));
-  const degreeLevels = [
-    "Intermediate",
-    "B.Tech (2 Years)",
-    "B.Tech (3 Years)",
-    "B.Tech (4 Years)",
-    "Bachelors (2 Years)",
-    "Bachelors (4 Years)",
-    "Bachelors (5 Years)",
-    "Masters",
-    "MPHIL",
-    "PHD",
-  ];
-
-  // Format the options with id and name
-  const formattedOptions = degreeLevels.map((degree, index) => ({
-    id: index + 1,
-    name: degree,
-    label: degree,
-    value: degree,
-  }));
+  /**
+   * Options for a field stored as TEXT, keyed by the text itself.
+   *
+   * SelectField renders each option's id as its value, so a list keyed by
+   * position describes a field stored as a number. District and qualification
+   * are stored as words - the applicant picked them by name and the student
+   * record keeps the name - so keying them by position gave a select that
+   * matched nothing it was handed, showed "Please Select" over a perfectly
+   * good value, and posted an index in place of the words when saved.
+   *
+   * The student's current value stays on the list even when it is not one of
+   * the recognised ones. An unmatched select renders as "Please Select", and
+   * saving from there writes that blank back - so a district spelled
+   * differently in an older record, or one of the indexes this form used to
+   * store, must remain selectable rather than quietly disappear.
+   */
+  const textOptions = (names: string[], current?: string): Option[] => {
+    const value = String(current ?? "").trim();
+    const list = value && !names.includes(value) ? [value, ...names] : names;
+    return list.map((name) => ({ id: name, name }));
+  };
   return (
     <>
       <InputField
@@ -94,7 +96,7 @@ const StudentFormFields = ({
         label="Qualification"
         name="std_qualification"
         value={formData.std_qualification}
-        options={formattedOptions}
+        options={textOptions(digreeOptions, formData.std_qualification)}
         onChange={handleInputChange}
         required
       />
@@ -103,46 +105,7 @@ const StudentFormFields = ({
         label="District"
         name="std_district"
         value={formData.std_district}
-        options={[
-          { id: 2, name: "Awaran" },
-          { id: 3, name: "Barkhan" },
-          { id: 4, name: "Chaghi" },
-          { id: 5, name: "Chaman" },
-          { id: 6, name: "Dera Bugti" },
-          { id: 7, name: "Duki" },
-          { id: 8, name: "Gawadar" },
-          { id: 9, name: "Harnai" },
-          { id: 10, name: "Hub" },
-          { id: 11, name: "Jafarabad" },
-          { id: 12, name: "Jhal Magsi" },
-          { id: 13, name: "Kachhi (Bolan)" },
-          { id: 14, name: "Kallat" },
-          { id: 15, name: "Karezat" },
-          { id: 16, name: "Kech (Turbat)" },
-          { id: 17, name: "Kharan" },
-          { id: 18, name: "Khuzdar" },
-          { id: 19, name: "Killa Abdullah" },
-          { id: 20, name: "Killa Saifullah" },
-          { id: 21, name: "Kohlu" },
-          { id: 22, name: "Lasbela" },
-          { id: 23, name: "Lehri" },
-          { id: 24, name: "Loralai" },
-          { id: 25, name: "Mastung" },
-          { id: 26, name: "Musa Khel" },
-          { id: 27, name: "Naseerabad" },
-          { id: 28, name: "Nushki" },
-          { id: 29, name: "Pishin" },
-          { id: 30, name: "Punjgur" },
-          { id: 31, name: "Quetta" },
-          { id: 32, name: "Sheerani" },
-          { id: 33, name: "Sibi" },
-          { id: 34, name: "Sohbatpur" },
-          { id: 35, name: "Surab" },
-          { id: 36, name: "Usta Mohammad" },
-          { id: 37, name: "Washuk" },
-          { id: 38, name: "Zhob" },
-          { id: 39, name: "Ziarat" },
-        ]}
+        options={textOptions(domicileOptions, formData.std_district)}
         onChange={handleInputChange}
         required
       />
@@ -167,7 +130,7 @@ const StudentFormFields = ({
         readOnly={false}
       />
 
-  
+
 
       <div className="mb-4">
         <label className="block text-gray-700 text-sm font-bold mb-2">

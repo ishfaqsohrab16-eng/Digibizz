@@ -1,5 +1,14 @@
 export interface Option {
-  id: number;
+  /**
+   * Also the option's VALUE in the rendered select, which is what a form
+   * posts and what has to match the stored record.
+   *
+   * A number for anything stored as a foreign key - a centre, a course, a
+   * batch. A string for a field stored as text, such as a district or a
+   * qualification: keying those by position produces a select that matches
+   * nothing it is given and posts an index in place of the words.
+   */
+  id: number | string;
   name: string;
 }
 

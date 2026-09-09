@@ -12,6 +12,7 @@
 const {
   text,
   isBlank,
+  needsRepair,
   districtOf,
   qualificationOf,
   profileFromCandidate,
@@ -71,6 +72,20 @@ check("the string 'null' is blank", isBlank("null"));
 check("the string 'undefined' is blank", isBlank("undefined"));
 check("a real value is not blank", !isBlank(" Quetta "));
 check("and is trimmed", text("  Quetta  ") === "Quetta", text("  Quetta  "));
+
+console.log("\nValues damaged by the dropdown that was keyed by position\n");
+
+// The student edit form rendered district and qualification as selects whose
+// option values were positions, so saving wrote "31" where "Quetta" belonged.
+// It looks like a real value and is worth nothing.
+check("a bare number needs replacing", needsRepair("31"));
+check("and so does a single digit", needsRepair("7"));
+check("an empty column needs replacing", needsRepair(""));
+check("and so does null", needsRepair(null));
+check("a real district does not", !needsRepair("Quetta"));
+check("nor does one containing digits", !needsRepair("B.Tech (4 Years)"));
+// The point of the rule is that no genuine value is ever only digits.
+check("nor a district written with a number in it", !needsRepair("District 9"));
 
 console.log("\nWhat gets copied onto the student\n");
 
