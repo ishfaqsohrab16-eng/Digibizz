@@ -24,6 +24,7 @@ const {
   toDateKey,
 } = require("../utils/attendanceCalculator");
 const { allocationSqlScope } = require("../utils/trainerScope");
+const { safeRollback } = require("../utils/safeRollback");
 exports.registerStudent = async (req, res) => {
   const transaction = await sequelize.transaction(); // Initialize transaction
   try {
@@ -148,7 +149,7 @@ exports.registerStudent = async (req, res) => {
       },
     });
   } catch (error) {
-    await transaction.rollback();
+    await safeRollback(transaction);
     console.error("Student registration error:", error);
 
     if (error.name === "SequelizeUniqueConstraintError") {
@@ -910,7 +911,7 @@ exports.updateStudentProfile = async (req, res) => {
     });
 
     if (!student) {
-      await transaction.rollback();
+      await safeRollback(transaction);
       return res.status(404).json({
         success: false,
         message: "Student not found",
@@ -985,7 +986,7 @@ exports.updateStudentProfile = async (req, res) => {
         { user_id: student.user_id, std_id: student.std_id }
       );
       if (conflicts.length > 0) {
-        await transaction.rollback();
+        await safeRollback(transaction);
         return res.status(409).json({
           success: false,
           field: fields[0],
@@ -1046,7 +1047,7 @@ exports.updateStudentProfile = async (req, res) => {
     });
   } catch (error) {
     // Rollback transaction on error
-    await transaction.rollback();
+    await safeRollback(transaction);
 
     console.error("Profile update error:", error);
     res.status(500).json({
@@ -1137,7 +1138,7 @@ exports.SuspendStudentByCNIC = async (req, res) => {
       );
 
       if (updatedRows === 0) {
-        await transaction.rollback();
+        await safeRollback(transaction);
         return res.status(404).json({
           success: false,
           message: "Student not found",
@@ -1160,7 +1161,7 @@ exports.SuspendStudentByCNIC = async (req, res) => {
         data: updatedStudent,
       });
     } catch (error) {
-      await transaction.rollback();
+      await safeRollback(transaction);
       throw error;
     }
   } catch (error) {
@@ -1200,7 +1201,7 @@ exports.UnSuspendStudentByCNIC = async (req, res) => {
       );
 
       if (updatedRows === 0) {
-        await transaction.rollback();
+        await safeRollback(transaction);
         return res.status(404).json({
           success: false,
           message: "Student not found",
@@ -1222,7 +1223,7 @@ exports.UnSuspendStudentByCNIC = async (req, res) => {
         data: updatedStudent,
       });
     } catch (error) {
-      await transaction.rollback();
+      await safeRollback(transaction);
       throw error;
     }
   } catch (error) {

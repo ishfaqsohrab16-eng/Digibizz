@@ -80,7 +80,7 @@ exports.getStudentDashoard = async (req, res) => {
       .map(doc => doc.doc_type);
 
     // Find missing documents
-    const missingDocuments = requiredDocTypes.filter(docType => 
+    const missingDocuments = requiredDocTypes.filter(docType =>
       !uploadedDocTypes.includes(docType)
     );
 
@@ -267,6 +267,13 @@ exports.getStudentDashoard = async (req, res) => {
       },
     });
 
+    // The account behind the profile. Gone by the time the dashboard loads if
+    // it was deleted while open, and a name read off nothing is a 500 with no
+    // explanation in it.
+    if (!u) {
+      return res.status(404).json({ message: "No account found for this dashboard" });
+    }
+
     const lmsStatus =
       studentProfile.std_lms_status === 1
         ? "Active"
@@ -417,7 +424,7 @@ exports.getStudentDashoard = async (req, res) => {
       order: [["ls_added_on", "DESC"]],
     });
 
-   
+
 
     const feedback = await WeaklyFeedback.findAll({
       where:
@@ -436,7 +443,7 @@ exports.getStudentDashoard = async (req, res) => {
     const courseData = await Course.findAll({
       where: { course_id: studentProfile.course_id },
     });
-    
+
 
     // Return tailored data based on user role
     res.status(200).json({
@@ -673,7 +680,7 @@ exports.getTrainerDashoard = async (req, res) => {
         );
       }
     });
-    
+
     let isAttendance = false;
     const todayFormatted = new Date().toLocaleDateString("en-CA", {
       timeZone: "Asia/Karachi",
@@ -728,7 +735,7 @@ exports.getTrainerDashoard = async (req, res) => {
         ...classScope,
       },
     });
-    
+
     const batchEarnings = await Earnings.sum("earning_amount", {
       where: {
         tb_id,
@@ -850,29 +857,29 @@ exports.getMasterTrainerDashoard = async (req, res) => {
       trainerCenters.map((allocation) => allocation.t_id)
     );
     const totalTrainers = uniqueTrainerIds.size; // Count unique trainers
-    
+
     // Get all specific center IDs supervised by this Master Trainer
     const allowedCenters = trainerCenters.map((allocation) => allocation.center_id);
 
     const totalStudents = await student.count({
-      where: { 
+      where: {
         course_id: { [Op.in]: masterTrainerCourseIds },
         center_id: { [Op.in]: allowedCenters },
-        tb_id: tb_id 
+        tb_id: tb_id
       },
     });
-    
+
     const totalTickets = await Ticket.count({
-      where: { 
-        tb_id, 
+      where: {
+        tb_id,
         course_id: { [Op.in]: masterTrainerCourseIds },
         center_id: { [Op.in]: allowedCenters }
       },
     });
 
     const totalAssignments = await Assignment.count({
-      where: { 
-        tb_id, 
+      where: {
+        tb_id,
         course_id: { [Op.in]: masterTrainerCourseIds },
         center_id: { [Op.in]: allowedCenters }
       },
@@ -1024,6 +1031,15 @@ exports.getCenterUserDashboard = async (req, res) => {
     const centerUser = await CenterUsers.findOne({
       where: { user_id: user_id },
     });
+
+    // Which centre this manager runs is the whole basis of the page below,
+    // so there is nothing to show without it.
+    if (!centerUser) {
+      return res
+        .status(404)
+        .json({ message: "This account is not linked to a centre" });
+    }
+
     const students = await student.findAll({
       where: {
         tb_id: tb_id,

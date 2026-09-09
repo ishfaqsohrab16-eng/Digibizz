@@ -187,6 +187,14 @@ const getAllLeavesAsMTOrAdmin = async (req, res, next) => {
         },
       });
 
+      // The Master Trainer's course decides whose leave this is. Without the
+      // record there is no course, and reading one off nothing throws.
+      if (!MTrainer) {
+        return res
+          .status(404)
+          .json({ message: "No Master Trainer record found for this account" });
+      }
+
       leave = await trainerLeave.findAll({
         where: {
           tb_id: tb_id,

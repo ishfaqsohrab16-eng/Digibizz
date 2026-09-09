@@ -454,6 +454,30 @@ const PORT = process.env.PORT || 5000;
 // `app` was exported, and server.js called `server.close()` on a name that was
 // never defined - so every shutdown died with "server is not defined" instead of
 // draining connections, and the container was killed mid-request.
+/**
+ * A rejected promise nobody awaited must not take the LMS down.
+ *
+ * Express does not await an async route handler, so anything that throws after
+ * the first `await` becomes an unhandled rejection, and Node ends the process
+ * for those. One request finding a null row, or a catch block whose own
+ * cleanup failed, therefore logged out every user in the country and restarted
+ * the container - and then did it again on the next such request.
+ *
+ * A request handler failing leaves nothing shared in a bad state: the request
+ * is lost, and everything else in flight is fine. So this logs loudly and
+ * keeps serving.
+ *
+ * DELIBERATELY NOT uncaughtException. A synchronous throw with no handler can
+ * leave the process genuinely broken, and continuing then hides real damage.
+ * That one is still allowed to end the process.
+ */
+process.on("unhandledRejection", (reason) => {
+  console.error(
+    "[fatal-avoided] unhandled promise rejection:",
+    reason instanceof Error ? reason.stack || reason.message : reason
+  );
+});
+
 const server = app.listen(PORT, () => {
   console.log(`Server running on port ${PORT}`);
 });

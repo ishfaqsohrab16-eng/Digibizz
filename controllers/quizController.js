@@ -13,6 +13,7 @@ const { validationResult } = require("express-validator");
 const { sequelize } = require("../config/db");
 const { Op } = require("sequelize");
 const { FORCE } = require("sequelize/lib/index-hints");
+const { safeRollback } = require("../utils/safeRollback");
 
 // Create Quiz
 exports.createQuiz = async (req, res) => {
@@ -44,7 +45,7 @@ exports.createQuiz = async (req, res) => {
     const trainer = await Teacher.findOne({ where: { user_id: t_id } });
     // Create quiz
     if (!trainer) {
-      await t.rollback();
+      await safeRollback(t);
       return res
         .status(404)
         .json({ message: "Trainer not found", user_id: t_id });
@@ -89,7 +90,7 @@ exports.createQuiz = async (req, res) => {
       },
     });
   } catch (error) {
-    await t.rollback();
+    await safeRollback(t);
     console.error("Quiz creation error:", error);
     res.status(500).json({ message: "Server error during quiz creation" });
   }
@@ -144,10 +145,21 @@ exports.startQuizAttempt = async (req, res) => {
   try {
     const { quiz_code, tb_id, user_id } = req.body;
     const student = await Student.findOne({ where: { user_id } });
+
+    // No student record behind this account - a deleted student whose page is
+    // still open, or an account that was never one. Reading a CNIC off
+    // nothing is a TypeError with the transaction still held open.
+    if (!student) {
+      await safeRollback(t);
+      return res
+        .status(404)
+        .json({ message: "No student record found for this account" });
+    }
+
     // Check if quiz exists
     const quiz = await StudentQuiz.findOne({ where: { quiz_code } });
     if (!quiz) {
-      await t.rollback();
+      await safeRollback(t);
       return res.status(404).json({ message: "Quiz not found" });
     }
 
@@ -160,7 +172,7 @@ exports.startQuizAttempt = async (req, res) => {
     });
 
     if (attemptCount >= quiz.quiz_attempts_limit) {
-      await t.rollback();
+      await safeRollback(t);
       return res
         .status(400)
         .json({ message: "Maximum attempts reached for this quiz" });
@@ -209,7 +221,7 @@ exports.startQuizAttempt = async (req, res) => {
       },
     });
   } catch (error) {
-    await t.rollback();
+    await safeRollback(t);
     console.error("Start quiz attempt error:", error);
     res.status(500).json({ message: "Server error starting quiz attempt" });
   }
@@ -232,12 +244,12 @@ exports.submitQuizAnswers = async (req, res) => {
     });
 
     if (!attempt) {
-      await t.rollback();
+      await safeRollback(t);
       return res.status(404).json({ message: "Attempt not found" });
     }
 
     if (attempt.attempt_status === 1) {
-      await t.rollback();
+      await safeRollback(t);
       return res
         .status(400)
         .json({ message: "This attempt has already been submitted" });
@@ -249,11 +261,35 @@ exports.submitQuizAnswers = async (req, res) => {
       transaction: t,
     });
 
+    /**
+     * The quiz itself, which the result is scored against.
+     *
+     * Checked before anything is written. It is read again after the commit
+     * for the passing score and the answer settings, and a quiz deleted
+     * between starting an attempt and submitting it would fail there instead
+     * - after the marks were saved, with the transaction already gone.
+     */
+    if (!quiz) {
+      await safeRollback(t);
+      return res
+        .status(404)
+        .json({ message: "That quiz no longer exists, so this attempt cannot be marked" });
+    }
+
     // Get all questions for the quiz
     const questions = await StudentQuizQuestions.findAll({
       where: { quiz_code: attempt.quiz_code },
       transaction: t,
     });
+
+    // A quiz with no questions scores nothing rather than dividing by zero,
+    // which would store NaN as the mark and fail on the column.
+    if (questions.length === 0) {
+      await safeRollback(t);
+      return res
+        .status(400)
+        .json({ message: "That quiz has no questions, so it cannot be marked" });
+    }
 
     // Save student answers
     const current_time = new Date().toISOString();
@@ -322,9 +358,14 @@ exports.submitQuizAnswers = async (req, res) => {
       result: resultDetails,
     });
   } catch (error) {
-    await t.rollback();
+    await safeRollback(t);
     console.error("Submit quiz answers error:", error);
-    res.status(500).json({ message: "Server error submitting quiz answers" });
+    // The failure may well BE the response - a client that hung up, or a
+    // second write to a request already answered. Replying again throws, and
+    // a throw from a catch block is what took the server down.
+    if (!res.headersSent) {
+      res.status(500).json({ message: "Server error submitting quiz answers" });
+    }
   }
 };
 
@@ -422,7 +463,7 @@ exports.getTeacherQuizzes = async (req, res) => {
         (question) => question.quiz_code === quiz.quiz_code
       ),
     }));
-  
+
     res.json(formattedQuizzes);
   } catch (error) {
     console.error("Fetch teacher quizzes error:", error);
@@ -440,6 +481,21 @@ exports.getStudentQuizzes = async (req, res) => {
     const student = await Student.findOne({
       where: { user_id: user_id },
     });
+
+    /**
+     * No student record for this account.
+     *
+     * A session outlives the row behind it: a student deleted while their
+     * dashboard is open keeps polling, and an account that was never a
+     * student can reach this too. Reading course_id off nothing threw a
+     * TypeError that surfaced as a 500 with no explanation.
+     */
+    if (!student) {
+      return res
+        .status(404)
+        .json({ message: "No student record found for this account" });
+    }
+
     // Every trainer allocated to this student's class, not just one.
     // A class with two trainers showed the student only one of their quiz
     // sets, and the other trainer's quizzes were invisible.
@@ -545,7 +601,7 @@ exports.updateQuiz = async (req, res) => {
     });
 
     if (!quiz) {
-      await t.rollback();
+      await safeRollback(t);
       return res.status(404).json({ message: "Quiz not found" });
     }
 
@@ -590,7 +646,7 @@ exports.updateQuiz = async (req, res) => {
       message: "Quiz updated successfully",
     });
   } catch (error) {
-    await t.rollback();
+    await safeRollback(t);
     console.error("Quiz update error:", error);
     res.status(500).json({ message: "Server error during quiz update" });
   }
@@ -609,7 +665,7 @@ exports.deleteQuiz = async (req, res) => {
     });
 
     if (!quiz) {
-      await t.rollback();
+      await safeRollback(t);
       return res.status(404).json({ message: "Quiz not found" });
     }
 
@@ -642,7 +698,7 @@ exports.deleteQuiz = async (req, res) => {
       message: "Quiz deleted successfully",
     });
   } catch (error) {
-    await t.rollback();
+    await safeRollback(t);
     console.error("Quiz deletion error:", error);
     res.status(500).json({ message: "Server error during quiz deletion" });
   }

@@ -274,6 +274,12 @@ const getAllLeavesAsTrainer = async (req, res) => {
 const getLeaveById = async (req, res, next) => {
   try {
     const Student = await StudentModel.findByPk(req.params.user_id);
+
+    // Leave is keyed by CNIC, which there is none of without the student.
+    if (!Student) {
+      return res.status(404).json({ message: "Student not found" });
+    }
+
     const leave = await studentLeave.findOne({
       where: {
         std_cnic: Student.std_cnic,

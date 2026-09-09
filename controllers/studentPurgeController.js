@@ -3,6 +3,7 @@ const fs = require("fs").promises;
 const { sequelize } = require("../config/db");
 const Student = require("../models/studentModel");
 const User = require("../models/userModel");
+const { safeRollback } = require("../utils/safeRollback");
 
 /**
  * Permanently delete a student and everything linked to them.
@@ -75,7 +76,7 @@ exports.purgeStudent = async (req, res) => {
     });
 
     if (!student) {
-      await transaction.rollback();
+      await safeRollback(transaction);
       return res.status(404).json({ success: false, message: "Student not found" });
     }
 
@@ -168,7 +169,7 @@ exports.purgeStudent = async (req, res) => {
       filesRemoved,
     });
   } catch (error) {
-    await transaction.rollback();
+    await safeRollback(transaction);
     console.error("Student purge error:", error);
     return res.status(500).json({
       success: false,

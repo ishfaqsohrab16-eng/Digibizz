@@ -6,6 +6,15 @@ const getAllProfiles = async (req, res) => {
     const student = await Student.findOne({
       where: { user_id: user_id },
     });
+
+    // Profiles are keyed by the student's CNIC, so there is nothing to look
+    // up without a student record - and reading one off nothing throws.
+    if (!student) {
+      return res
+        .status(404)
+        .json({ message: "No student record found for this account" });
+    }
+
     const profiles = await StudentsFreelancing.findAll({
       where: { std_cnic: student.std_cnic },
     });

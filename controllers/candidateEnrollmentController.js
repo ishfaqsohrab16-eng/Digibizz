@@ -24,6 +24,7 @@ const outbox = () => {
   return outboxModule;
 };
 const { findScheduleFor } = require("./classScheduleController");
+const { safeRollback } = require("../utils/safeRollback");
 const {
   parseCnicList,
   buildCnicTemplateCsv,
@@ -402,13 +403,13 @@ exports.enrollCandidate = async (req, res) => {
     const candidate = await Candidate.findByPk(cand_id, { transaction });
 
     if (!candidate) {
-      await transaction.rollback();
+      await safeRollback(transaction);
       return res.status(404).json({ success: false, message: "Candidate not found" });
     }
 
     const blocker = await findBlocker(candidate, transaction);
     if (blocker) {
-      await transaction.rollback();
+      await safeRollback(transaction);
       // 409 for a clash with something that already exists, 400 for a
       // candidate record that is not ready to be enrolled.
       const conflict =
@@ -462,7 +463,7 @@ exports.enrollCandidate = async (req, res) => {
       },
     });
   } catch (error) {
-    await transaction.rollback();
+    await safeRollback(transaction);
     console.error("Candidate enrollment error:", error);
 
     if (error.name === "SequelizeUniqueConstraintError") {
@@ -755,7 +756,7 @@ exports.bulkEnrollByCnic = async (req, res) => {
           requireRecommendation: false,
         });
         if (blocker) {
-          await transaction.rollback();
+          await safeRollback(transaction);
           results.push({ ...row, status: blocker.status, message: blocker.message });
           continue;
         }
@@ -788,7 +789,7 @@ exports.bulkEnrollByCnic = async (req, res) => {
           std_rollno: rollNumber,
         });
       } catch (error) {
-        await transaction.rollback();
+        await safeRollback(transaction);
         failed += 1;
 
         const detail =

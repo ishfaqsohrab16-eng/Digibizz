@@ -11,6 +11,7 @@ const {
 const { STARTER_HTML } = require("../servec/campaignTemplates");
 const { isConfigured, provider } = require("../servec/emailConfig");
 const quota = require("../utils/emailQuota");
+const { safeRollback } = require("../utils/safeRollback");
 
 /**
  * Email campaigns: upload a list of addresses, write an email, send it slowly.
@@ -208,21 +209,21 @@ exports.createCampaign = async (req, res) => {
     } = req.body;
 
     if (!String(ec_name || "").trim()) {
-      await transaction.rollback();
+      await safeRollback(transaction);
       return res
         .status(400)
         .json({ success: false, message: "Give the campaign a name." });
     }
 
     if (!String(ec_subject || "").trim()) {
-      await transaction.rollback();
+      await safeRollback(transaction);
       return res
         .status(400)
         .json({ success: false, message: "Give the email a subject." });
     }
 
     if (!String(ec_custom_html || "").trim()) {
-      await transaction.rollback();
+      await safeRollback(transaction);
       return res.status(400).json({
         success: false,
         message: "Write the email body before creating the campaign.",
@@ -231,7 +232,7 @@ exports.createCampaign = async (req, res) => {
 
     const recipients = cleanRecipients(recipientList);
     if (!recipients.length) {
-      await transaction.rollback();
+      await safeRollback(transaction);
       return res.status(400).json({
         success: false,
         message: "Upload a list with at least one valid email address.",
@@ -293,7 +294,7 @@ exports.createCampaign = async (req, res) => {
   } catch (error) {
     // Rolling back an already-finished transaction throws and would mask the
     // real error, so the state is checked first.
-    if (!transaction.finished) await transaction.rollback();
+    if (!transaction.finished) await safeRollback(transaction);
     console.error("Error creating campaign:", error);
     return res.status(500).json({
       success: false,
@@ -640,14 +641,14 @@ exports.deleteCampaign = async (req, res) => {
     const campaign = await EmailCampaign.findByPk(req.params.id);
 
     if (!campaign) {
-      await transaction.rollback();
+      await safeRollback(transaction);
       return res
         .status(404)
         .json({ success: false, message: "Campaign not found" });
     }
 
     if (campaign.ec_status === "running") {
-      await transaction.rollback();
+      await safeRollback(transaction);
       return res.status(400).json({
         success: false,
         message: "Pause or cancel the campaign before deleting it.",
@@ -663,7 +664,7 @@ exports.deleteCampaign = async (req, res) => {
 
     return res.json({ success: true, message: "Campaign deleted." });
   } catch (error) {
-    if (!transaction.finished) await transaction.rollback();
+    if (!transaction.finished) await safeRollback(transaction);
     console.error("Error deleting campaign:", error);
     return res.status(500).json({ success: false, message: "Server error" });
   }

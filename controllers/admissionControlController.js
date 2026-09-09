@@ -4,6 +4,7 @@ const AdmissionControl = require("../models/admissionControlModel");
 const TrainingBatch = require("../models/trainingBatcheModel");
 const Center = require("../models/center");
 const Course = require("../models/course");
+const { safeRollback } = require("../utils/safeRollback");
 
 const normalizeGender = (value = "all") => String(value).toLowerCase();
 
@@ -72,7 +73,7 @@ exports.saveBatchAdmissionControl = async (req, res) => {
     const rules = Array.isArray(req.body.rules) ? req.body.rules : [];
 
     if (!tb_id) {
-      await transaction.rollback();
+      await safeRollback(transaction);
       return res.status(400).json({ success: false, message: "tb_id is required" });
     }
 
@@ -118,7 +119,7 @@ exports.saveBatchAdmissionControl = async (req, res) => {
       totalOpen: dedupedRules.length,
     });
   } catch (error) {
-    await transaction.rollback();
+    await safeRollback(transaction);
     console.error("Error saving admission controls:", error);
     return res.status(500).json({ success: false, message: "Server error" });
   }

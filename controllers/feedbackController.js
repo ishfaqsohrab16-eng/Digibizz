@@ -432,6 +432,15 @@ const getFeedbackForTrainer = async (req, res) => {
     const trainer = await Trainer.findOne({
       where: { user_id: user_id },
     });
+
+    // Without a trainer record there is no id to look feedback up by, and
+    // reading one off nothing throws before the query is even built.
+    if (!trainer) {
+      return res
+        .status(404)
+        .json({ message: "No trainer record found for this account" });
+    }
+
     const feedbacks = await StudentsFeedback.findAll({
       where: { tb_id, t_id: trainer.t_id },
     });
