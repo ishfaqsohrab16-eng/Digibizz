@@ -185,7 +185,7 @@ const fetchBulkStudentStatistics = async (students, tb_id, batchEndDate) => {
 
     const studentCNICs = students.map(s => s.std_cnic);
     const studentRollNos = students.map(s => s.std_rollno);
-    
+
     // Fetch ALL data in parallel bulk queries
     const [
       ticketCounts,
@@ -196,7 +196,7 @@ const fetchBulkStudentStatistics = async (students, tb_id, batchEndDate) => {
     ] = await Promise.all([
       // Bulk ticket counts
       sequelize.query(
-        `SELECT std_rollno, COUNT(*) as count FROM tickets 
+        `SELECT std_rollno, COUNT(*) as count FROM tickets
          WHERE std_rollno IN (:rollnos) GROUP BY std_rollno`,
         {
           replacements: { rollnos: studentRollNos },
@@ -205,7 +205,7 @@ const fetchBulkStudentStatistics = async (students, tb_id, batchEndDate) => {
       ),
       // Bulk feedback counts
       sequelize.query(
-        `SELECT std_rollno, COUNT(*) as count FROM students_feedback 
+        `SELECT std_rollno, COUNT(*) as count FROM students_feedback
          WHERE std_rollno IN (:rollnos) GROUP BY std_rollno`,
         {
           replacements: { rollnos: studentRollNos },
@@ -257,7 +257,7 @@ const fetchBulkStudentStatistics = async (students, tb_id, batchEndDate) => {
     const feedbackMap = new Map(feedbackCounts.map(f => [f.std_rollno, f.count]));
     const documentsMap = new Map();
     const profilesMap = new Map();
-    
+
     // Group documents by CNIC
     documents.forEach(doc => {
       if (!documentsMap.has(doc.std_cnic)) {
@@ -265,7 +265,7 @@ const fetchBulkStudentStatistics = async (students, tb_id, batchEndDate) => {
       }
       documentsMap.get(doc.std_cnic).push(doc);
     });
-    
+
     // Group profiles by CNIC
     professionalProfiles.forEach(profile => {
       if (!profilesMap.has(profile.std_cnic)) {
@@ -273,7 +273,7 @@ const fetchBulkStudentStatistics = async (students, tb_id, batchEndDate) => {
       }
       profilesMap.get(profile.std_cnic).push(profile);
     });
-    
+
     // Attendance percentages come from the shared calculator so this table
     // agrees with the dashboard, the attendance history and the student's own
     // calendar. This function used to run its own formula - counting every
@@ -346,7 +346,7 @@ const fetchBulkStudentStatistics = async (students, tb_id, batchEndDate) => {
         professionalProfiles: profilesMap.get(student.std_cnic) || [],
       };
     });
-    
+
     return statsMap;
   } catch (error) {
     console.error("Error fetching bulk student statistics:", error);
@@ -479,7 +479,7 @@ exports.getStudentProfile = async (req, res) => {
   let t_center_ids = [];
   let t_course_ids = [];
   let whereClause;
-  
+
   // Validate required parameters
   if (!tb_id) {
     return res.status(400).json({
@@ -583,7 +583,7 @@ exports.getStudentProfile = async (req, res) => {
 
     // Query to fetch student data - ENSURE tb_id is included
     const query = `
-      SELECT 
+      SELECT
         u.user_id,
         u.user_name,
         u.user_username,
@@ -616,26 +616,26 @@ exports.getStudentProfile = async (req, res) => {
         e.latest_earning_date,
         e.earning_platforms,
         e.earning_statuses,
-       CASE 
+       CASE
       WHEN sl.sl_date = CURDATE() AND sl.sl_status = 1 THEN TRUE
       ELSE FALSE
     END AS has_leave_today,
-    CASE 
+    CASE
       WHEN sl.sl_date = CURDATE() THEN sl.sl_date
       ELSE NULL
     END AS leave_date
-      FROM 
+      FROM
         user AS u
-      LEFT JOIN 
+      LEFT JOIN
         students AS s ON u.user_id = s.user_id
-      LEFT JOIN 
+      LEFT JOIN
         courses AS c ON s.course_id = c.course_id
-      LEFT JOIN 
+      LEFT JOIN
         centers AS ce ON s.center_id = ce.center_id
-      LEFT JOIN 
+      LEFT JOIN
         students_leaves AS sl ON s.std_cnic = sl.std_cnic AND sl.sl_date = CURDATE()
       LEFT JOIN (
-        SELECT 
+        SELECT
           std_id,
           SUM(earning_amount) as total_earnings,
           MAX(earning_date) as latest_earning_date,
@@ -658,10 +658,10 @@ exports.getStudentProfile = async (req, res) => {
     }
 
     // Fetch training batch details once (including tb_end date)
-    const trainingBatch = await TrainingBatch.findOne({ 
+    const trainingBatch = await TrainingBatch.findOne({
       where: { tb_id },
       attributes: ["tb_id", "tb_name", "tb_end"],
-      raw: true 
+      raw: true
     });
 
     const batchEndDate = trainingBatch ? trainingBatch.tb_end : null;
@@ -711,6 +711,11 @@ exports.getStudentProfile = async (req, res) => {
         center_name: student.center_name,
         std_added_on: student.std_added_on,
         std_lms_status: student.std_lms_status,
+        // Whether the student has a password at all. Stored as a one-way hash,
+        // so this is the whole of what can honestly be said about it: an
+        // account showing "no password" has never been signed into, which is
+        // usually the reason somebody is looking.
+        account_setup: Boolean(student.user_password),
         t_name: trainingBatch ? trainingBatch.tb_name : null,
         student_cnic: student.std_cnic,
         ...studentStats, // Add all the statistics from the helper function
@@ -745,7 +750,7 @@ const getStudentProfileByField = async (res, fieldClause, replacements) => {
   try {
     const [student] = await sequelize.query(
       `
-      SELECT 
+      SELECT
         u.user_id,
         u.user_name,
         u.user_username,
@@ -773,15 +778,15 @@ const getStudentProfileByField = async (res, fieldClause, replacements) => {
         c.course_full_name,
         c.course_status,
         ce.center_name
-      FROM 
+      FROM
         user AS u
-      INNER JOIN 
+      INNER JOIN
         students AS s ON u.user_id = s.user_id
-      LEFT JOIN 
+      LEFT JOIN
         courses AS c ON s.course_id = c.course_id
-      LEFT JOIN 
+      LEFT JOIN
         centers AS ce ON s.center_id = ce.center_id
-      WHERE 
+      WHERE
         LOWER(u.user_type) = 'student'
         AND ${fieldClause}
       LIMIT 1

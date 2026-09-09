@@ -1,7 +1,11 @@
 const express = require("express");
 const router = express.Router();
 const adminController = require("../controllers/adminController");
-const { isAdminAuthenticated } = require("../middleware/authMiddleware");
+const {
+  isAdminAuthenticated,
+  requireRoles,
+  ROLES,
+} = require("../middleware/authMiddleware");
 const {
   validatePasswordChange,
   validateUserLogin: validateAdminLogin,
@@ -54,9 +58,14 @@ router.put(
   adminController.changeUserPassword
 );
 router.put("/change-student-password", adminController.changeUserPassword);
+// Setting somebody else's password without knowing their old one is the
+// strongest thing an account can do to another account, so it is the Super
+// Admin's alone - the same line already drawn around reviewing M&E reports
+// and purging a student.
 router.put(
   "/reset-student-password",
   isAdminAuthenticated,
+  requireRoles(ROLES.SUPER_ADMIN),
   adminController.resetStudentPasswordByAdmin
 );
 router.get(

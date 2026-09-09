@@ -22,6 +22,8 @@ import {
 import { toast } from "sonner";
 import StudentForm from "./StudentForm";
 import StudentSendMail from "./StudentSendMail";
+import StudentPassword from "./StudentPassword";
+import { ROLE, isRole } from "../../utils/roles";
 import { useBatch } from "../../context/BatchContext";
 
 export interface AssignmentProgress {
@@ -87,6 +89,11 @@ export interface StudentData {
   std_lms_status: number;
   std_forum_status: number;
   std_rollno: string;
+  /**
+   * Whether the student has a password. Absent where whatever supplied this
+   * record could not say - the panel simply shows no status then.
+   */
+  account_setup?: boolean;
   assignments?: {
     received: Assignment[];
     completed: Assignment[];
@@ -122,6 +129,9 @@ const StudentProfile: React.FC<StudentProfileProps> = ({
   const [editData, setEditData] = useState<any>(null);
   const [showSendMail, setShowSendMail] = useState(false);
   const { selectedBatchId, userType } = useBatch();
+  // Setting somebody's password is the Super Admin's alone, enforced on the
+  // server too - a control that is merely hidden is not a restriction.
+  const canSetPassword = isRole(userType, ROLE.SUPER_ADMIN);
 
   const BACKEND_URL = import.meta.env.VITE_BACKEND_URL;
 
@@ -388,7 +398,7 @@ const StudentProfile: React.FC<StudentProfileProps> = ({
               <Edit className="w-4 h-4" />
               Edit
             </button>
-            
+
             <button
               onClick={handleLogin}
               className="px-4 py-2 bg-[hsl(var(--secondary))] text-[hsl(var(--secondary-foreground))] rounded-md hover:bg-[hsl(var(--accent))] transition-colors flex items-center gap-2"
@@ -396,8 +406,8 @@ const StudentProfile: React.FC<StudentProfileProps> = ({
               <LogIn className="w-4 h-4" />
               Login as Student
             </button>
-            
-           
+
+
             <button
               className="px-4 py-2 bg-[hsl(var(--pink))] text-[hsl(var(--primary-foreground))] rounded-md hover:bg-[hsl(var(--accent))] transition-colors flex items-center gap-2"
               onClick={() => setShowSendMail(true)}
@@ -408,6 +418,16 @@ const StudentProfile: React.FC<StudentProfileProps> = ({
           </div>
           )}
         </div>
+
+        {canSetPassword && studentData && (
+          <StudentPassword
+            userId={studentData.user_id}
+            name={studentData.user_name}
+            email={studentData.user_email}
+            accountSetup={studentData.account_setup}
+            onChanged={refreshStudentData}
+          />
+        )}
 
         <div className="header-gradient-student rounded-lg p-6 mb-8 flex items-center transform hover:scale-[1.02] transition-all duration-300 bg-[hsl(var(--sidebar-bg))] text-[hsl(var(--sidebar-fg))]">
           <div className="flex-shrink-0">

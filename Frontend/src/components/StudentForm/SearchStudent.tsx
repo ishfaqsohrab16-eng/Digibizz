@@ -11,7 +11,6 @@ import {
   MessageSquare,
   ExternalLink,
   Loader2,
-  LockKeyhole,
   Trash2,
 } from "lucide-react";
 import { useBatch } from "../../context/BatchContext";
@@ -21,12 +20,12 @@ import {
   updateStudentDocuments,
   updateFreelancerProfiles,
   loginAsSubUser,
-  resetStudentPasswordByAdmin,
 } from "../../services/api";
 import { toast } from "sonner";
 import Loader from "../Loader";
 import StudentForm from "./StudentForm";
 import StudentSendMail from "./StudentSendMail";
+import StudentPassword from "./StudentPassword";
 import DeleteStudentDialog from "./DeleteStudentDialog";
 import { isRole, ROLE } from "../../utils/roles";
 
@@ -94,6 +93,11 @@ interface StudentData {
   std_lms_status: number;
   std_forum_status: number;
   std_rollno: string;
+  /**
+   * Whether the student has a password. A one-way hash, so this is all that
+   * can honestly be reported about it - never the password itself.
+   */
+  account_setup?: boolean;
   attendanceProgress?: number;
   assignments?: {
     received: Assignment[];
@@ -133,17 +137,14 @@ const SearchStudent = () => {
   const [isEditMode, setIsEditMode] = useState(false);
   const [editData, setEditData] = useState<any>(null);
   const [showSendMail, setShowSendMail] = useState(false);
-  const [showPasswordReset, setShowPasswordReset] = useState(false);
-  const [passwordResetData, setPasswordResetData] = useState({
-    newPassword: "",
-    confirmPassword: "",
-  });
-  const [isPasswordResetting, setIsPasswordResetting] = useState(false);
   const [showDeleteDialog, setShowDeleteDialog] = useState(false);
 
   // Same rule as the enrolled-student table: permanent deletion is SuperAdmin
   // only, and the server enforces it independently of this flag.
   const canDeleteStudents = isRole(userType, ROLE.SUPER_ADMIN);
+  // Setting somebody's password is the Super Admin's alone, enforced on the
+  // server too - a control that is merely hidden is not a restriction.
+  const canSetPassword = isRole(userType, ROLE.SUPER_ADMIN);
 
   const handleChange = (e: React.ChangeEvent<HTMLInputElement>) => {
     const { value } = e.target;
@@ -299,43 +300,6 @@ const SearchStudent = () => {
     }
   };
 
-  const handleResetPassword = async () => {
-    if (!studentData) return;
-
-    if (passwordResetData.newPassword.length < 6) {
-      toast.error("Password must be at least 6 characters");
-      return;
-    }
-
-    if (passwordResetData.newPassword !== passwordResetData.confirmPassword) {
-      toast.error("Passwords do not match");
-      return;
-    }
-
-    setIsPasswordResetting(true);
-    try {
-      const response = await resetStudentPasswordByAdmin(
-        studentData.user_id,
-        passwordResetData.newPassword
-      );
-
-      if (response.success) {
-        toast.success("Student password reset successfully");
-        setPasswordResetData({ newPassword: "", confirmPassword: "" });
-        setShowPasswordReset(false);
-        void handleSearch();
-      } else {
-        toast.error(response.message || "Failed to reset password");
-      }
-    } catch (error) {
-      toast.error(
-        error instanceof Error ? error.message : "Failed to reset password"
-      );
-    } finally {
-      setIsPasswordResetting(false);
-    }
-  };
-
   const handleDeleted = () => {
     setShowDeleteDialog(false);
     setShowProfile(false);
@@ -344,10 +308,6 @@ const SearchStudent = () => {
     setSearchEmail("");
   };
 
-  const closePasswordReset = () => {
-    setShowPasswordReset(false);
-    setPasswordResetData({ newPassword: "", confirmPassword: "" });
-  };
   // Get document status badge
   const getDocStatusBadge = (status: number) => {
     switch (status) {
@@ -503,13 +463,6 @@ const SearchStudent = () => {
                   <MessageSquare className="w-4 h-4" />
                   Send Message
                 </button>
-                <button
-                  className="px-4 py-2 bg-[hsl(var(--warning))] text-[hsl(var(--warning-foreground))] rounded-md hover:bg-[hsl(var(--accent))] transition-colors flex items-center gap-2"
-                  onClick={() => setShowPasswordReset(true)}
-                >
-                  <LockKeyhole className="w-4 h-4" />
-                  Reset Password
-                </button>
                 {canDeleteStudents && (
                   <button
                     className="px-4 py-2 bg-[hsl(var(--destructive))] text-[hsl(var(--destructive-foreground))] rounded-md hover:opacity-90 transition-colors flex items-center gap-2"
@@ -521,81 +474,16 @@ const SearchStudent = () => {
                 )}
               </div>
             )}
-              {showPasswordReset && (
-                <div className="mb-6 bg-[hsl(var(--card))] rounded-lg border border-[hsl(var(--border))] shadow-sm p-6">
-                  <div className="flex items-start justify-between gap-4 mb-4">
-                    <div>
-                      <h3 className="text-lg font-semibold text-[hsl(var(--foreground))]">
-                        Reset Student Password
-                      </h3>
-                      <p className="text-sm text-[hsl(var(--muted-foreground))] mt-1">
-                        Setting a new password for {studentData.user_name} (
-                        {studentData.user_email}).
-                      </p>
-                    </div>
-                    <button
-                      type="button"
-                      onClick={closePasswordReset}
-                      className="text-sm text-[hsl(var(--muted-foreground))] hover:text-[hsl(var(--foreground))]"
-                    >
-                      Cancel
-                    </button>
-                  </div>
-
-                  <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-                    <div>
-                      <label className="block text-sm font-medium text-[hsl(var(--foreground))] mb-2">
-                        New Password
-                      </label>
-                      <input
-                        type="password"
-                        value={passwordResetData.newPassword}
-                        onChange={(e) =>
-                          setPasswordResetData((prev) => ({
-                            ...prev,
-                            newPassword: e.target.value,
-                          }))
-                        }
-                        className="w-full px-3 py-2 border border-[hsl(var(--border))] rounded-md bg-[hsl(var(--card))] text-[hsl(var(--foreground))]"
-                        placeholder="Enter new password"
-                        disabled={isPasswordResetting}
-                      />
-                    </div>
-                    <div>
-                      <label className="block text-sm font-medium text-[hsl(var(--foreground))] mb-2">
-                        Confirm Password
-                      </label>
-                      <input
-                        type="password"
-                        value={passwordResetData.confirmPassword}
-                        onChange={(e) =>
-                          setPasswordResetData((prev) => ({
-                            ...prev,
-                            confirmPassword: e.target.value,
-                          }))
-                        }
-                        className="w-full px-3 py-2 border border-[hsl(var(--border))] rounded-md bg-[hsl(var(--card))] text-[hsl(var(--foreground))]"
-                        placeholder="Confirm new password"
-                        disabled={isPasswordResetting}
-                      />
-                    </div>
-                  </div>
-
-                  <div className="flex justify-end mt-4">
-                    <button
-                      type="button"
-                      onClick={handleResetPassword}
-                      disabled={isPasswordResetting}
-                      className="px-4 py-2 bg-[hsl(var(--primary))] text-[hsl(var(--primary-foreground))] rounded-md hover:bg-[hsl(var(--accent))] transition-colors flex items-center gap-2 disabled:opacity-50"
-                    >
-                      {isPasswordResetting && (
-                        <Loader2 className="w-4 h-4 animate-spin" />
-                      )}
-                      {isPasswordResetting ? "Resetting..." : "Save Password"}
-                    </button>
-                  </div>
-                </div>
+              {canSetPassword && (
+                <StudentPassword
+                  userId={studentData.user_id}
+                  name={studentData.user_name}
+                  email={studentData.user_email}
+                  accountSetup={studentData.account_setup}
+                  onChanged={() => void handleSearch()}
+                />
               )}
+
               <div className="header-gradient-student rounded-lg p-6 mb-8 flex items-center transform hover:scale-[1.02] transition-all duration-300 bg-[hsl(var(--sidebar-bg))] text-[hsl(var(--sidebar-fg))]">
                 <div className="flex-shrink-0">
                   <img
