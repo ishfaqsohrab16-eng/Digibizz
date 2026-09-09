@@ -840,6 +840,13 @@ const getStudentProfileByField = async (res, fieldClause, replacements) => {
       std_lms_status: student.std_lms_status,
       std_forum_status: student.std_forum_status,
       std_rollno: student.std_rollno,
+      // Whether a password has been set yet. Signup looks a student up by
+      // CNIC before asking for a new one, and needs this to tell a genuine
+      // first login from somebody returning to an account they already have -
+      // otherwise it walks them to a password screen that can only refuse
+      // them. The hash itself is read by the query above and deliberately not
+      // returned.
+      account_setup: Boolean(student.user_password),
       ...studentStats,
     };
     return res.status(200).json({

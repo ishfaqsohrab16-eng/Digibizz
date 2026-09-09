@@ -387,7 +387,7 @@ exports.loginAsSubUser = async (req, res) => {
     let center_id = 0;
     let course_id = 0;
     let batch_id = tb_id;
-    
+
     let std_cnic = "";
     if (!trainingBatch) {
       return res.status(400).json({
@@ -571,7 +571,7 @@ exports.loginAsSubUser = async (req, res) => {
 exports.getAdminsProfile = async (req, res) => {
   try {
     const query = `
-    SELECT 
+    SELECT
       u.user_id,
       u.user_name,
       u.user_username,
@@ -580,11 +580,11 @@ exports.getAdminsProfile = async (req, res) => {
       u.user_password,
       u.user_type,
       u.user_status
-    FROM 
+    FROM
       user AS u
-    LEFT JOIN 
+    LEFT JOIN
       admins AS ad ON u.user_id = ad.user_id
-    WHERE 
+    WHERE
       u.user_type IN ('SuperAdmin', 'ContentAdmin');
     `;
 
@@ -699,6 +699,15 @@ exports.changeUserPassword = async (req, res) => {
 
     const { currentPassword, newPassword, user_id } = req.body;
 
+    // The signup route carries no validator of its own, and a missing new
+    // password would be stored as nothing while still reporting success.
+    if (!newPassword) {
+      return res.status(400).json({
+        success: false,
+        message: "A new password is required",
+      });
+    }
+
     const existingUser = await User.findOne({
       where: { user_id: user_id },
     });
@@ -714,13 +723,41 @@ exports.changeUserPassword = async (req, res) => {
         user_id: user_id,
       },
     });
-    if (!existingUser.user_password) {
+    /**
+     * FIRST LOGIN: this account has never had a password.
+     *
+     * Students are created with a blank one and choose their own on the signup
+     * screen, which asks for a CNIC and then a new password. There is no
+     * current password to give, so the screen does not ask for one and sends
+     * it empty.
+     *
+     * Signup reaches this without a session, so an empty current password is
+     * accepted on two conditions and no others: the account has no password
+     * yet, and it belongs to a student. Anything looser turns a guessed
+     * user_id into a way to claim somebody's account. An account that already
+     * has a password - chosen at signup, reset by an admin, or set in a first
+     * attempt the student has since forgotten - goes through Forgot Password
+     * instead, which proves the email.
+     *
+     * The student condition is lifted for /admin/change-password, which sits
+     * behind a session: that route reaches staff accounts too, and its own
+     * validation requires a current password before this runs.
+     */
+    const signedIn = Boolean(req.user);
+    const firstLogin = !existingUser.user_password && (signedIn || Boolean(student));
+
+    if (firstLogin) {
       existingUser.user_password = newPassword;
       existingUser.user_status = 1;
       await existingUser.save();
 
       if (student) {
-        student.std_rollno = generateRollNumber(student.tb_id);
+        // Enrolment issues a roll number of its own, checked for uniqueness.
+        // Only mint one for a student who arrived without, rather than
+        // overwriting a number already printed on their record.
+        if (!student.std_rollno) {
+          student.std_rollno = generateRollNumber(student.tb_id);
+        }
         student.std_lms_status = 1;
         await student.save();
       }
@@ -730,6 +767,24 @@ exports.changeUserPassword = async (req, res) => {
         message: "Password set successfully",
       });
     }
+
+    /**
+     * Not a first login, and no current password offered - the signup screen
+     * has reached an account that is already set up.
+     *
+     * Saying "current password is incorrect" here describes something that did
+     * not happen and sends people hunting for a typing mistake they did not
+     * make. Say what is actually true and point at the two ways forward.
+     */
+    if (!currentPassword) {
+      return res.status(409).json({
+        success: false,
+        code: "ALREADY_SET",
+        message:
+          "This account already has a password. Sign in with it, or use Forgot Password if you do not remember it.",
+      });
+    }
+
     // Verify current password using the validPassword method
     const isValidPassword = await existingUser.validPassword(currentPassword);
 

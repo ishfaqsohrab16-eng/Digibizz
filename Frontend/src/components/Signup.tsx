@@ -10,7 +10,6 @@ interface SignupFormData {
   user_id: number;
   password: string;
   confirmPassword: string;
-  currentPassword?: string;
 }
 
 export default function Signup() {
@@ -21,16 +20,23 @@ export default function Signup() {
   const [showPassword, setShowPassword] = useState(false);
   const [showConfirmPassword, setShowConfirmPassword] = useState(false);
   const [cnic, setCnic] = useState<string>("");
+  // Set when the account turns out to already have a password, so the screen
+  // can offer the reset rather than leaving somebody stuck on a form that
+  // will refuse them however carefully they retype it.
+  const [alreadySet, setAlreadySet] = useState(false);
   const [formData, setFormData] = useState<SignupFormData>({
     user_id: 0,
     password: "",
     confirmPassword: "",
-    currentPassword: "",
   });
+
+  const ALREADY_SET_MESSAGE =
+    "You have already set a password for this account. Sign in with it, or reset it if you do not remember it.";
 
   const handleCnicSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
     setError("");
+    setAlreadySet(false);
 
     if (cnic?.length !== 15) {
       setError("Please enter a valid 13-digit CNIC number");
@@ -43,14 +49,20 @@ export default function Signup() {
       const response = await getStudentsByCNIC(cnic);
 
       if (response.success) {
-        if(response.message === "Student profile is Already available") {
-          setError("Student profile already exists");
-          toast.error(`Student profile already exists ${response.data.user_email}`);
-          
-          setTimeout(() => {
-            navigate("/login");
-          }, 2000);
+        /**
+         * Signing up is for choosing a first password, and this account
+         * already has one. Stop here rather than at the next screen: the
+         * password step cannot accept anyone who is not on a first login, so
+         * carrying on would only produce a refusal two fields later that
+         * reads like the new password was somehow wrong.
+         */
+        if (response.data?.account_setup) {
+          setError(ALREADY_SET_MESSAGE);
+          setAlreadySet(true);
+          toast.error(ALREADY_SET_MESSAGE);
+          return;
         }
+
         if (response.data.user_id) {
           setFormData((prev) => ({
             ...prev,
@@ -94,8 +106,9 @@ export default function Signup() {
 
     setLoading(true);
     try {
+      // No current password: this is the student's first, which is the only
+      // thing this screen is for.
       const response = await changeStudentPassword({
-        currentPassword: formData.currentPassword || "",
         newPassword: formData.password,
         user_id: formData.user_id,
       });
@@ -112,6 +125,12 @@ export default function Signup() {
       }
     } catch (err) {
       const errorMessage = err instanceof Error ? err.message : "Signup failed";
+      // The account was claimed between the two steps, or it was already set
+      // up and the CNIC lookup could not say so. Either way the way forward
+      // is the reset, not another attempt at this form.
+      if ((err as { code?: string })?.code === "ALREADY_SET") {
+        setAlreadySet(true);
+      }
       setError(errorMessage);
       toast.error(errorMessage);
       setLoading(false);
@@ -143,7 +162,24 @@ export default function Signup() {
           </div>
         )}
 
-        {step === 1 ? (
+        {alreadySet ? (
+          <div className="space-y-4">
+            <button
+              type="button"
+              onClick={() => navigate("/login")}
+              className="w-full flex justify-center py-2 px-4 border border-transparent rounded-md shadow-sm text-sm font-medium text-white bg-emerald-600 hover:bg-emerald-700 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-emerald-500"
+            >
+              Sign In
+            </button>
+            <button
+              type="button"
+              onClick={() => navigate("/forgot-password")}
+              className="w-full flex justify-center py-2 px-4 border-2 border-emerald-600 rounded-md shadow-sm text-sm font-medium text-emerald-600 bg-white hover:bg-emerald-50 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-emerald-500 transition-colors duration-200"
+            >
+              Reset My Password
+            </button>
+          </div>
+        ) : step === 1 ? (
           <form onSubmit={handleCnicSubmit} className="space-y-6">
             <div>
               <label
@@ -293,7 +329,8 @@ export default function Signup() {
           </form>
         )}
 
-        <div className="mt-6">
+        {/* Already offered above, alongside the reset - not twice. */}
+        <div className={`mt-6${alreadySet ? " hidden" : ""}`}>
           <div className="relative">
             <div className="absolute inset-0 flex items-center">
               <div className="w-full border-t border-gray-300" />

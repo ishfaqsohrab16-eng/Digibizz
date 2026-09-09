@@ -118,7 +118,9 @@ interface AdminResponse {
 }
 
 interface ChangeStudentPasswordData {
-  currentPassword: string;
+  // Absent on first login: a student setting their password for the first
+  // time has no current one to give.
+  currentPassword?: string;
   newPassword: string;
   user_id: number;
 }
@@ -278,6 +280,20 @@ export const changeAdminPassword = async (data: ChangeStudentPasswordData) => {
   }
 };
 
+/**
+ * The server's refusal, kept whole.
+ *
+ * Turning a response into an Error normally leaves only the message, and the
+ * signup screen has to tell "this account is already set up" from any other
+ * failure so it can offer the password reset. The code has to survive the
+ * conversion for that.
+ */
+const asCodedError = (body?: { message?: string; code?: string }) => {
+  const error = new Error(body?.message || "Password change failed");
+  (error as Error & { code?: string }).code = body?.code;
+  return error;
+};
+
 export const changeStudentPassword = async (
   data: ChangeStudentPasswordData
 ) => {
@@ -292,15 +308,13 @@ export const changeStudentPassword = async (
     );
 
     if (!response.data.success) {
-      throw new Error(response.data.message || "Password change failed");
+      throw asCodedError(response.data);
     }
 
     return response.data;
   } catch (error) {
     if (axios.isAxiosError(error)) {
-      const errorMessage =
-        error.response?.data?.message || "Password change failed";
-      throw new Error(errorMessage);
+      throw asCodedError(error.response?.data);
     }
     throw error;
   }
@@ -4700,6 +4714,11 @@ export interface VisitCenter {
   medium: string;
   /** True for the single virtual centre covering online and hybrid. */
   online_cell: boolean;
+  /**
+   * The centres the Online Cell stands for, by name. Empty on a physical
+   * centre, which stands for itself.
+   */
+  covers?: string[];
   dates: { start: string; end: string } | null;
   visit: {
     cv_id: number;
@@ -4827,16 +4846,33 @@ export const getVisit = async (cv_id: number) => {
   };
 };
 
-export interface VisitOverviewRow {
-  center_id: number;
-  center_name: string;
-  online_cell: boolean;
-  status: "draft" | "submitted" | "reviewed" | "missing";
-  cv_id: number | null;
+/** One report, by one Master Trainer, about one centre. */
+export interface VisitOverviewEntry {
+  cv_id: number;
+  status: "draft" | "submitted" | "reviewed";
   by: string | null;
   visit_date: string | null;
   visit_time: string | null;
   media: number;
+}
+
+/**
+ * One centre for one week, and everything filed about it.
+ *
+ * A physical centre expects a report from every Master Trainer, so it is
+ * counted rather than given a single status: "3 of 5" is the fact somebody
+ * chasing them needs, and one status would hide the other four. The Online
+ * Cell expects exactly one, however many Master Trainers there are.
+ */
+export interface VisitOverviewRow {
+  center_id: number;
+  center_name: string;
+  online_cell: boolean;
+  covers: string[];
+  expected: number;
+  done: number;
+  status: "missing" | "partial" | "complete";
+  visits: VisitOverviewEntry[];
 }
 
 /** Every centre for one week, visited or not. The unvisited rows are the point. */
@@ -4850,12 +4886,15 @@ export const getVisitOverview = async (tb_id: number, week?: string) => {
     week: EvalWeek;
     weeks: EvalWeek[];
     chased: boolean;
+    masterTrainers: number;
     rows: VisitOverviewRow[];
     summary: {
       centers: number;
-      submitted: number;
-      reviewed: number;
-      draft: number;
+      // Reports rather than centres: the unit being counted is the visit.
+      expected: number;
+      done: number;
+      complete: number;
+      partial: number;
       missing: number;
     };
   };
