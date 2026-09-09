@@ -9,6 +9,7 @@ import {
   ClipboardList,
   FileEdit,
   Globe,
+  Globe2,
   Loader2,
   Lock,
 } from "lucide-react";
@@ -302,6 +303,21 @@ const MyVisits: React.FC = () => {
             );
           })}
       </div>
+
+      {/*
+        The Online Cell is offered only while an online or hybrid centre has a
+        class running. Saying so beats an empty space, which cannot distinguish
+        "nothing to visit" from "something is wrong".
+      */}
+      {!loading && !error && centers.length > 0 && !centers.some((c) => c.online_cell) && (
+        <p className="mt-3 flex items-start gap-1.5 px-1 text-xs text-slate-500">
+          <Globe2 className="mt-0.5 h-3.5 w-3.5 shrink-0" />
+          <span>
+            No Online Cell this week — no centre in this batch is set to Online or Hybrid
+            with a class running. It appears here on its own as soon as one is.
+          </span>
+        </p>
+      )}
     </div>
   );
 };

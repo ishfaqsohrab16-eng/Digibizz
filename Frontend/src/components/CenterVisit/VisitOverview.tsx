@@ -10,6 +10,7 @@ import {
   ChevronRight,
   FileEdit,
   Globe,
+  Globe2,
   Loader2,
   ShieldAlert,
   Users,
@@ -41,6 +42,24 @@ import VisitReport from "./VisitReport";
  * Opening a centre lists them by name. The Online Cell is the exception -
  * nobody travels to it, one report covers it, and its count is one.
  */
+
+/**
+ * Why the Online Cell is not in the list.
+ *
+ * It appears only while an online or hybrid centre has a class running, which
+ * means its absence is usually correct and occasionally a data problem - and
+ * an empty space says neither. Somebody looking for it should not have to
+ * decide between "the rule" and "the bug" by reading the source.
+ */
+const NoOnlineCell: React.FC = () => (
+  <p className="mt-3 flex items-start gap-1.5 px-1 text-xs text-slate-500">
+    <Globe2 className="mt-0.5 h-3.5 w-3.5 shrink-0" />
+    <span>
+      No Online Cell this week — no centre in this batch is set to Online or Hybrid with
+      a class running. It appears here on its own as soon as one is.
+    </span>
+  </p>
+);
 
 /** How a centre is doing: what came in against what was expected. */
 const CENTER_LOOK = {
@@ -510,6 +529,10 @@ const VisitOverview: React.FC = () => {
             );
           })}
         </div>
+      )}
+
+      {!loading && !error && rows.length > 0 && !rows.some((row) => row.online_cell) && (
+        <NoOnlineCell />
       )}
     </div>
   );

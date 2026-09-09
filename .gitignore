@@ -57,6 +57,9 @@ uploads/
 # Database dumps/backups
 *.sql
 !migration/*.sql
+# Read-only diagnostics, not dumps - they answer "why is this row not showing"
+# without anyone having to reconstruct the query from the source.
+!scripts/*.sql
 migration/database/
 
 # Frontend source should be versioned
