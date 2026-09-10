@@ -149,6 +149,29 @@ const getCurrentUserToken = () => {
   // correctly as no session at all.
   return "";
 };
+/**
+ * What to say when the server did not say anything useful.
+ *
+ * Most of the API answers a failure with a message written for the person
+ * reading it, and that message is always preferred. These are for the cases
+ * where there is no body to read: a proxy rejecting an upload before it
+ * reaches the application, a gateway timing out, a 500 with an empty reply.
+ * "An error occurred during the operation" describes all of those equally
+ * badly and tells nobody what to do next.
+ */
+const STATUS_FALLBACK: Record<number, string> = {
+  400: "That request was not accepted. Please check the form and try again.",
+  403: "You do not have permission to do that.",
+  404: "That could not be found. It may have been deleted.",
+  409: "That conflicts with something already saved.",
+  413: "That file is too large to upload.",
+  429: "Too many attempts. Please wait a moment and try again.",
+  500: "The server ran into a problem. Please try again.",
+  502: "The server is not responding. Please try again in a minute.",
+  503: "The server is busy or restarting. Please try again in a minute.",
+  504: "The server took too long to answer. Please try again.",
+};
+
 const handleApiError = (error: unknown) => {
   if (axios.isAxiosError(error)) {
     if (error.response?.status === 401) {
@@ -157,12 +180,33 @@ const handleApiError = (error: unknown) => {
       throw new Error("Session expired. Please log in again.");
     }
     if (error.response) {
-      throw new Error(
-        (error.response.data as any).message ||
+      const status = error.response.status;
+      const body = error.response.data as any;
+
+      // A failed file upload can answer with HTML from a proxy rather than
+      // JSON, in which case `message` is not a string and rendering it puts
+      // "[object Object]" in front of somebody.
+      const fromServer =
+        typeof body?.message === "string" && body.message.trim()
+          ? body.message.trim()
+          : null;
+
+      const thrown = new Error(
+        fromServer ||
+          STATUS_FALLBACK[status] ||
           "An error occurred during the operation"
       );
+
+      // Carried through so a screen can react to the KIND of failure - the
+      // signup form offers a password reset on ALREADY_SET, for instance -
+      // rather than matching on the text of the message.
+      (thrown as Error & { code?: string; status?: number }).code = body?.code;
+      (thrown as Error & { code?: string; status?: number }).status = status;
+      throw thrown;
     } else if (error.request) {
-      throw new Error("No response from server. Please try again later.");
+      throw new Error(
+        "No response from the server. Check your connection and try again."
+      );
     }
   }
   throw new Error("Error setting up the request. Please try again.");

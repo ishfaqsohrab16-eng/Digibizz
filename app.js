@@ -1,8 +1,34 @@
 process.env.TZ = "Asia/Karachi";
+
+/**
+ * Turn certificate checking back on.
+ *
+ * NODE_TLS_REJECT_UNAUTHORIZED=0 is still set on the deployment, and it does
+ * not mean "be lenient with our mail server" - it disables TLS verification
+ * for the WHOLE process. Every outbound connection, to the database, to
+ * Brevo, to anything, stops checking who it is talking to, which is the exact
+ * protection TLS exists to provide.
+ *
+ * It was needed once, for a self-signed SMTP certificate. It is not needed
+ * now: servec/emailConfig.js relaxes verification for that one transport and
+ * nothing else in the codebase depends on the global switch. Node prints a
+ * warning about it on every boot; a warning nobody can act on is noise, so
+ * this removes the variable instead - before anything opens a connection.
+ *
+ * Deleting it here is a stopgap. It should also come off the deployment's
+ * environment, which is why this says so rather than doing it quietly.
+ */
+if (process.env.NODE_TLS_REJECT_UNAUTHORIZED === "0") {
+  delete process.env.NODE_TLS_REJECT_UNAUTHORIZED;
+  console.warn(
+    "[tls] NODE_TLS_REJECT_UNAUTHORIZED=0 was set and has been ignored - " +
+      "certificate verification is ON. Remove it from the deployment environment."
+  );
+}
+
 const express = require("express");
 const cors = require("cors");
 const helmet = require("helmet");
-const session = require("express-session");
 const path = require("path");
 require("dotenv").config();
 const { sequelize, testConnection } = require("./config/db");
@@ -146,19 +172,19 @@ app.get("/healthz", (req, res) => {
   res.status(200).json({ status: "ok" });
 });
 
-// Session Configuration
-app.use(
-  session({
-    secret: process.env.SESSION_SECRET,
-    resave: false,
-    saveUninitialized: false,
-    cookie: {
-      secure: process.env.NODE_ENV === "production",
-      httpOnly: true,
-      sameSite: "none", // Use "none" if frontend is on a different origin
-    },
-  })
-);
+/*
+ * Sessions are gone.
+ *
+ * express-session defaults to MemoryStore, which warns on every boot that it
+ * "will leak memory, and will not scale past a single process" - and it was
+ * right: every visitor got an entry that nothing ever removed.
+ *
+ * It was paying that cost for nothing. Authentication is JWT throughout; the
+ * only line in the codebase that touched req.session was logout calling
+ * destroy() on it, already guarded with `if (req.session)` for the case
+ * where there is none. Now there is never one, that guard is simply always
+ * false, and the cookie is still cleared.
+ */
 
 // Serve Static Files (Uploads)
 app.use(

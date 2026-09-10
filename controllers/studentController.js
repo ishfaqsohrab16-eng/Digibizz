@@ -62,6 +62,36 @@ exports.registerStudent = async (req, res) => {
       });
     }
 
+    /**
+     * The CNIC, which is the one field that identifies the person.
+     *
+     * It has a unique index and was not checked before the insert, so
+     * registering somebody who is already on the system threw
+     * ER_DUP_ENTRY out of the database. That reached the catch as an
+     * unrecognised failure and came back as a 500 with a stack trace, when
+     * what happened is a fact worth telling plainly: this person already has
+     * a record, and here is their roll number.
+     */
+    const cnic = String(std_cnic || "").trim();
+    if (cnic) {
+      const already = await Student.findOne({
+        where: { std_cnic: cnic },
+        attributes: ["std_rollno", "tb_id"],
+        raw: true,
+      });
+
+      if (already) {
+        await safeRollback(transaction);
+        return res.status(409).json({
+          success: false,
+          field: "std_cnic",
+          message: already.std_rollno
+            ? `That CNIC is already registered as ${already.std_rollno}. Search for the student rather than adding them again.`
+            : "That CNIC is already registered. Search for the student rather than adding them again.",
+        });
+      }
+    }
+
     // Enrolled students only, per the same rule the enrolment path follows.
     // The phone was not checked here at all.
     const { conflicts, fields, message } = await studentContactConflicts({
@@ -151,14 +181,27 @@ exports.registerStudent = async (req, res) => {
     });
   } catch (error) {
     await safeRollback(transaction);
-    console.error("Student registration error:", error);
 
     if (error.name === "SequelizeUniqueConstraintError") {
-      return res.status(400).json({
+      // Somebody already on the system, not a fault. One line naming the
+      // field, rather than the whole Sequelize error - which printed the
+      // failing INSERT, every parameter and two copies of the stack for what
+      // amounts to "that CNIC is taken".
+      const field = error.errors?.[0]?.path || "a unique field";
+      console.warn(`[student] registration refused: ${field} already exists`);
+
+      return res.status(409).json({
         status: "error",
-        message: "A student with this information already exists",
+        success: false,
+        field,
+        message:
+          field === "std_cnic"
+            ? "That CNIC is already registered. Search for the student rather than adding them again."
+            : `A student with that ${field.replace(/^(std|user)_/, "")} already exists.`,
       });
     }
+
+    console.error("Student registration error:", error);
 
     if (error.name === "SequelizeValidationError") {
       return res.status(400).json({

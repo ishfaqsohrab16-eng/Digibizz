@@ -1,4 +1,5 @@
 const multer = require("multer");
+const { filterFor, handleUploadError } = require("./uploadErrors");
 const path = require("path");
 const fs = require("fs");
 
@@ -41,43 +42,26 @@ const storage = multer.diskStorage({
   },
 });
 
-// Updated file filter for multiple file types
-const fileFilter = (req, file, cb) => {
-  if (ALLOWED_FILE_TYPES.hasOwnProperty(file.mimetype)) {
-    cb(null, true);
-  } else {
-    cb(
-      new Error(
-        "Invalid file type. Only JPG, PNG, WEBP, DOCX, XLSX, PDF, and ZIP files are allowed."
-      ),
-      false
-    );
-  }
-};
+/**
+ * 10MB, not 5.
+ *
+ * These are photographs of identity documents, taken on a phone. A modern
+ * phone camera clears 5MB without trying, and the log showed people hitting
+ * the limit over and over with no idea what the limit was - each attempt a
+ * scan re-taken, and the reply saying only "file size too large".
+ */
+const FILE_SIZE_LIMIT = 10 * 1024 * 1024;
 
 const upload = multer({
   storage: storage,
-  fileFilter: fileFilter,
+  fileFilter: filterFor(ALLOWED_FILE_TYPES, "Student documents"),
   limits: {
-    fileSize: 5 * 1024 * 1024, // 5MB limit
+    fileSize: FILE_SIZE_LIMIT,
   },
 });
 
-// Error handling middleware
-const handleUploadError = (err, req, res, next) => {
-  if (err instanceof multer.MulterError) {
-    if (err.code === "LIMIT_FILE_SIZE") {
-      return res.status(400).json({
-        success: false,
-        message: "File size too large. Maximum size is 5MB.",
-      });
-    }
-    return res.status(400).json({
-      success: false,
-      message: err.message,
-    });
-  }
-  next(err);
+module.exports = {
+  upload,
+  handleUploadError: handleUploadError(FILE_SIZE_LIMIT),
+  FILE_SIZE_LIMIT,
 };
-
-module.exports = { upload, handleUploadError };

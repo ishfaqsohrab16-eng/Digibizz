@@ -61,7 +61,6 @@ exports.deleteReport = async (req, res) => {
 exports.markTopicCompleted = async (req, res) => {
   try {
     const { trainer_id, tb_id, course_id, center_id, module_id, topic_id, remarks } = req.body;
-    console.log(req.body)
     // Check if report already exists
     const existingReport = await TrainerTopicReport.findOne({
       where: {

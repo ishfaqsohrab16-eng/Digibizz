@@ -2,7 +2,7 @@ const express = require("express");
 const router = express.Router();
 const studentsDocsController = require("../controllers/studentsDocsController"); // Adjust the path as necessary
 const { isAdminAuthenticated } = require("../middleware/authMiddleware");
-const { upload } = require("../middleware/uploadsDoc");
+const { upload, handleUploadError } = require("../middleware/uploadsDoc");
 // Get all student documents
 router.get("/", isAdminAuthenticated, studentsDocsController.getAllStudentDocs);
 
@@ -18,6 +18,7 @@ router.post(
   "/",
   isAdminAuthenticated,
   upload.single("student_docs"),
+  handleUploadError,
   studentsDocsController.createStudentDoc
 );
 

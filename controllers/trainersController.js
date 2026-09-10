@@ -158,22 +158,33 @@ exports.getTrainerProfile = async (req, res) => {
   }
   try {
     let conditions = { tb_id };
-    const mt = await MasterTrainer.findOne({
-      where: {
-        user_id: user_id,
-      },
-    });
-    if (mt) {
-      conditions.course_id = mt.mt_course_id;
-    }
-    if (user_type === "Center Manager") {
-      const centerUser = await CenterUser.findOne({
-        where: {
-          user_id: user_id,
-        },
-      });
-      if (centerUser) {
-        conditions.center_id = centerUser.center_id;
+
+    /**
+     * Both lookups below need a user id, and the query string does not always
+     * carry one - the trainer list is opened from screens that do not pass it.
+     * Sequelize refuses an undefined value in a WHERE rather than treating it
+     * as "match anything", so this threw
+     *
+     *   WHERE parameter "user_id" has invalid "undefined" value
+     *
+     * and the whole list answered 500. Nobody is filtered by a viewer who was
+     * never named, so the correct behaviour is to skip the narrowing.
+     */
+    const viewerId = user_id ? Number(user_id) : null;
+
+    if (viewerId) {
+      const mt = await MasterTrainer.findOne({ where: { user_id: viewerId } });
+      if (mt) {
+        conditions.course_id = mt.mt_course_id;
+      }
+
+      if (user_type === "Center Manager") {
+        const centerUser = await CenterUser.findOne({
+          where: { user_id: viewerId },
+        });
+        if (centerUser) {
+          conditions.center_id = centerUser.center_id;
+        }
       }
     }
     const trainer = await TrainerCenterAllocation.findAll({

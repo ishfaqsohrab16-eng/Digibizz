@@ -29,7 +29,41 @@ const {
 } = require("../utils/appSettings");
 
 // In-memory store for verification codes
+/**
+ * Password-reset codes, held in memory until they are used or expire.
+ *
+ * PRUNED, because nothing removed an expired entry. Every address that ever
+ * asked for a code stayed in this object for the life of the process, so a
+ * busy month was a slow leak of email addresses in memory.
+ */
 const verificationCodes = {};
+
+/**
+ * How often one address may ask for a code.
+ *
+ * The log showed a single address sent eight codes in forty minutes, and
+ * several others three or four - people pressing the button again because the
+ * first mail had not arrived yet. Every press spends one of a few hundred
+ * daily sends, and the last code invalidates the one they are probably about
+ * to type in, so pressing again actively hurts them.
+ *
+ * A code stays valid for fifteen minutes; re-sending inside a minute of the
+ * last one achieves nothing that waiting would not.
+ */
+const CODE_RESEND_MS = 60 * 1000;
+
+/** Codes one address may request per hour, however patiently spaced. */
+const CODE_HOURLY_LIMIT = 6;
+
+const pruneVerificationCodes = () => {
+  const now = Date.now();
+  for (const [address, entry] of Object.entries(verificationCodes)) {
+    // Kept a while past expiry so the hourly count still sees recent requests.
+    if (now - (entry.firstRequestedAt || 0) > 60 * 60 * 1000) {
+      delete verificationCodes[address];
+    }
+  }
+};
 
 // Register Admin
 exports.registerAdmin = async (req, res) => {
@@ -983,13 +1017,46 @@ exports.forgotPassword = async (req, res) => {
       });
     }
 
+    pruneVerificationCodes();
+
+    const now = Date.now();
+    const previous = verificationCodes[user_email];
+
+    /**
+     * Refuse a second code within the minute, and cap the hour.
+     *
+     * The answer is deliberately the same as success. Whether an address has
+     * recently asked for a reset is not something an unauthenticated caller
+     * should be able to find out, and the person legitimately waiting is
+     * helped more by "check your email" than by being told off.
+     */
+    if (previous && now - previous.sentAt < CODE_RESEND_MS) {
+      console.warn(`[reset] code re-requested within the minute for ${user_email}`);
+      return res.json({
+        message:
+          "A code has already been sent. Please check your email, including the spam folder, before asking for another.",
+      });
+    }
+
+    if (previous && previous.count >= CODE_HOURLY_LIMIT) {
+      console.warn(`[reset] hourly cap reached for ${user_email}`);
+      return res.status(429).json({
+        message:
+          "Too many reset codes have been requested for this address. Please wait an hour, or contact support.",
+      });
+    }
+
     // Generate verification code
     const verificationCode = crypto.randomInt(100000, 999999).toString();
 
     // Store the code in memory with expiry
     verificationCodes[user_email] = {
       code: verificationCode,
-      expiry: Date.now() + 15 * 60 * 1000, // 15 minutes expiry
+      expiry: now + 15 * 60 * 1000, // 15 minutes expiry
+      sentAt: now,
+      // Kept across re-issues so the hourly cap counts requests, not codes.
+      firstRequestedAt: previous?.firstRequestedAt || now,
+      count: (previous?.count || 0) + 1,
     };
 
     // This is a time-sensitive, user-visible action. If Brevo is at quota,
