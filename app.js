@@ -33,6 +33,7 @@ const path = require("path");
 require("dotenv").config();
 const { sequelize, testConnection } = require("./config/db");
 const { ensureSchema } = require("./utils/ensureSchema");
+const { repairLegacyOptions } = require("./utils/repairLegacyOptions");
 
 // Import routes
 const adminRoutes = require("./routes/adminRoutes");
@@ -437,6 +438,11 @@ const initializeDatabase = async () => {
         "[boot] ===================================================================\n"
     );
   }
+
+  // Data, not schema: district and qualification values an old form stored
+  // as dropdown positions. Exact, idempotent and never fatal - see
+  // utils/repairLegacyOptions.js.
+  await repairLegacyOptions();
 
   // Installed whatever happened above, so changes to the tables that ARE
   // correct still reach the audit log. Its own failures are already non-fatal.

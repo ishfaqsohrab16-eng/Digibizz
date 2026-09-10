@@ -52,12 +52,18 @@ const StudentFormFields = ({
    * The student's current value stays on the list even when it is not one of
    * the recognised ones. An unmatched select renders as "Please Select", and
    * saving from there writes that blank back - so a district spelled
-   * differently in an older record, or one of the indexes this form used to
-   * store, must remain selectable rather than quietly disappear.
+   * differently in an older record must remain selectable rather than
+   * quietly disappear.
    */
   const textOptions = (names: string[], current?: string): Option[] => {
     const value = String(current ?? "").trim();
-    const list = value && !names.includes(value) ? [value, ...names] : names;
+    // A bare number is not an unfamiliar spelling to preserve - it is a
+    // dropdown POSITION the old form stored in place of the words. Offering
+    // it kept "1" and "2" selectable and saved them straight back, which is
+    // why editing a student never repaired them. The server now translates
+    // these at boot and on every write; here they are simply not offered.
+    const keep = value && !/^\d+$/.test(value) && !names.includes(value);
+    const list = keep ? [value, ...names] : names;
     return list.map((name) => ({ id: name, name }));
   };
   return (

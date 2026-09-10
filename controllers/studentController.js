@@ -26,6 +26,15 @@ const {
 } = require("../utils/attendanceCalculator");
 const { allocationSqlScope } = require("../utils/trainerScope");
 const { safeRollback } = require("../utils/safeRollback");
+/**
+ * Decoded on every write, not just repaired once. A browser still running the
+ * cached old form posts dropdown positions, and the boot-time repair cannot
+ * catch a row written after it ran.
+ */
+const {
+  decodeQualification,
+  decodeDistrict,
+} = require("../utils/legacyStudentOptions");
 exports.registerStudent = async (req, res) => {
   const transaction = await sequelize.transaction(); // Initialize transaction
   try {
@@ -128,8 +137,8 @@ exports.registerStudent = async (req, res) => {
         std_cnic,
         std_fathername,
         std_gender,
-        std_qualification,
-        std_district,
+        std_qualification: decodeQualification(std_qualification),
+        std_district: decodeDistrict(std_district),
         std_phone,
         user_id: newUser.user_id,
         course_id,
@@ -1009,8 +1018,8 @@ exports.updateStudentProfile = async (req, res) => {
       {
         std_fathername,
         std_gender,
-        std_qualification,
-        std_district,
+        std_qualification: decodeQualification(std_qualification),
+        std_district: decodeDistrict(std_district),
         std_cnic,
         std_phone,
         course_id: course_id || student.course_id,
