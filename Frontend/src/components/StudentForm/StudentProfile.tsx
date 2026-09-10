@@ -23,6 +23,7 @@ import { toast } from "sonner";
 import StudentForm from "./StudentForm";
 import StudentSendMail from "./StudentSendMail";
 import StudentPassword from "./StudentPassword";
+import StudentAttendanceCard from "./StudentAttendanceCard";
 import PersonAvatar from "../ui/PersonAvatar";
 import { ROLE, isRole } from "../../utils/roles";
 import { useBatch } from "../../context/BatchContext";
@@ -132,6 +133,14 @@ const StudentProfile: React.FC<StudentProfileProps> = ({
   // Setting somebody's password is the Super Admin's alone, enforced on the
   // server too - a control that is merely hidden is not a restriction.
   const canSetPassword = isRole(userType, ROLE.SUPER_ADMIN);
+  // The day-by-day register, for the admins who oversee students rather than
+  // teach them. The server independently limits who may read it.
+  const canSeeAttendance = isRole(
+    userType,
+    ROLE.SUPER_ADMIN,
+    ROLE.CONTENT_ADMIN,
+    ROLE.READONLY_ADMIN
+  );
 
   const BACKEND_URL = import.meta.env.VITE_BACKEND_URL;
 
@@ -564,6 +573,10 @@ const StudentProfile: React.FC<StudentProfileProps> = ({
             </div>
           </div>
         </div>
+
+        {canSeeAttendance && studentData?.std_cnic && (
+          <StudentAttendanceCard stdCnic={studentData.std_cnic} />
+        )}
 
         <div className="mt-8 bg-[hsl(var(--card))] rounded-lg shadow-sm overflow-hidden hover:shadow-md transition-shadow">
           <div className="bg-[hsl(var(--green-light))] px-6 py-4">
