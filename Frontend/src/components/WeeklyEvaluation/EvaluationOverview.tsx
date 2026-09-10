@@ -22,6 +22,8 @@ import {
 import WeekPicker, { describeWeek } from "./WeekPicker";
 import ReportCard from "./ReportCard";
 import { useBatch } from "../../context/BatchContext";
+import { PrintButton } from "../print/PrintSheet";
+import EvaluationPrint from "./EvaluationPrint";
 
 /**
  * Every trainer in the programme for one week, reported on or not.
@@ -126,6 +128,8 @@ const EvaluationOverview: React.FC = () => {
     report: EvalReport;
     week: EvalWeek | null;
     reviewable: boolean;
+    /** Who filed it - the printed report's signature line needs a name. */
+    filedBy: string | null;
   } | null>(null);
   const [opening, setOpening] = useState(false);
   const [reviewing, setReviewing] = useState(false);
@@ -189,7 +193,12 @@ const EvaluationOverview: React.FC = () => {
     setOpening(true);
     try {
       const data = await getEvaluation(we_id);
-      setOpen({ report: data.report, week: data.week, reviewable: data.reviewable });
+      setOpen({
+        report: data.report,
+        week: data.week,
+        reviewable: data.reviewable,
+        filedBy: data.filed_by,
+      });
       setNote("");
     } catch {
       setError("Could not open that report.");
@@ -227,10 +236,23 @@ const EvaluationOverview: React.FC = () => {
           <ArrowLeft className="h-4 w-4" />
           Back to the week
         </button>
-        <div className="mb-3">
+        <div className="mb-3 flex flex-wrap items-center justify-between gap-2">
           <h1 className="text-lg font-bold text-slate-900">
             {open.report.trainer?.user?.user_name || `Trainer ${open.report.t_id}`}
           </h1>
+          <PrintButton
+            render={() => (
+              <EvaluationPrint
+                report={open.report}
+                criteria={CRITERIA}
+                week={open.week}
+                trainerName={
+                  open.report.trainer?.user?.user_name || `Trainer ${open.report.t_id}`
+                }
+                filedBy={open.filedBy}
+              />
+            )}
+          />
         </div>
         <ReportCard report={open.report} criteria={CRITERIA} week={open.week} />
 

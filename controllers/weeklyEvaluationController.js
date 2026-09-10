@@ -13,6 +13,7 @@ const {
   classesInBatch,
   teachingWindow,
   classesActiveIn,
+  physicalOnly,
   weeksInWindow,
   isInWindow,
 } = require("../utils/evaluationScope");
@@ -157,6 +158,27 @@ const resolveWeek = (raw) => {
   if (!isReportable(week)) return { error: "That week has not happened yet" };
 
   return { week };
+};
+
+/**
+ * The Master Trainers who filed some reports, by id.
+ *
+ * For the printed report's signature line, which needs a name: the report
+ * row only knows the id.
+ */
+const mtNames = async (ids) => {
+  const unique = [...new Set((ids || []).filter(Boolean).map(Number))];
+  if (unique.length === 0) return {};
+
+  const rows = await MasterTrainer.findAll({
+    where: { mt_id: unique },
+    attributes: ["mt_id"],
+    include: [{ model: User, as: "user", attributes: ["user_name"] }],
+  });
+
+  return Object.fromEntries(
+    rows.map((row) => [row.mt_id, row.user?.user_name || `Master Trainer ${row.mt_id}`])
+  );
 };
 
 /**
@@ -585,7 +607,15 @@ exports.history = async (req, res) => {
       order: [["we_week_start", "DESC"]],
     });
 
-    return res.json({ success: true, reports });
+    const names = await mtNames(reports.map((report) => report.mt_id));
+
+    return res.json({
+      success: true,
+      reports: reports.map((report) => ({
+        ...report.get({ plain: true }),
+        filed_by: names[report.mt_id] || null,
+      })),
+    });
   } catch (error) {
     console.error("[evaluation] history failed:", error);
     return res.status(500).json({ success: false, message: "Could not load that history" });
@@ -617,6 +647,8 @@ exports.show = async (req, res) => {
       return res.status(404).json({ success: false, message: "No such report" });
     }
 
+    const names = await mtNames([report.mt_id]);
+
     return res.json({
       success: true,
       report,
@@ -624,6 +656,7 @@ exports.show = async (req, res) => {
       week: weekFromKey(report.we_week_key) || weekOf(new Date(report.we_week_start)),
       editable: canEdit(req.user, report, mt?.mt_id),
       reviewable: canReview(req.user) && report.we_status !== "draft",
+      filed_by: names[report.mt_id] || null,
     });
   } catch (error) {
     console.error("[evaluation] show failed:", error);
@@ -652,11 +685,15 @@ exports.overview = async (req, res) => {
     // Only trainers with a class in this batch. A trainer without one has
     // nothing to be evaluated on and never appears - which is also what keeps
     // the outstanding count meaningful.
-    const allocations = await TrainerCenterAllocation.findAll({
-      where: { tb_id },
-      attributes: ["t_id", "center_id", "course_id"],
-      raw: true,
-    });
+    // Physical centres only: online and hybrid ones have their own report,
+    // per centre, and are not owed one per trainer as well.
+    const allocations = await physicalOnly(
+      await TrainerCenterAllocation.findAll({
+        where: { tb_id },
+        attributes: ["t_id", "center_id", "course_id"],
+        raw: true,
+      })
+    );
 
     if (allocations.length === 0) {
       return res.json({
@@ -860,11 +897,15 @@ exports.pending = async (req, res) => {
     // reminder spans batches deliberately: an MT running two at once is owed
     // reports for both, and a nudge that only knew about one would be wrong
     // in the quietest possible way.
-    const allocations = await TrainerCenterAllocation.findAll({
-      where: { course_id: mt.mt_course_id },
-      attributes: ["t_id", "tb_id", "center_id"],
-      raw: true,
-    });
+    // Physical centres only - see physicalOnly. A reminder for a trainer
+    // report that is not owed would be a reminder nobody can clear.
+    const allocations = await physicalOnly(
+      await TrainerCenterAllocation.findAll({
+        where: { course_id: mt.mt_course_id },
+        attributes: ["t_id", "tb_id", "center_id"],
+        raw: true,
+      })
+    );
 
     if (allocations.length === 0) return res.json({ success: true, pending: [] });
 

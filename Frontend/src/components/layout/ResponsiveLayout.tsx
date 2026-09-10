@@ -43,6 +43,7 @@ import DailyLectureReportTable from "../DailyLectureReport/DailyLectureReportTab
 import DailyLectureReportForm from "../DailyLectureReport/DailyLectureReportForm";
 import MyTrainers from "../WeeklyEvaluation/MyTrainers";
 import EvaluationOverview from "../WeeklyEvaluation/EvaluationOverview";
+import MEHub from "../WeeklyEvaluation/MEHub";
 import MyVisits from "../CenterVisit/MyVisits";
 import VisitOverview from "../CenterVisit/VisitOverview";
 import QuizStudentTable from "../Quiz/QuizStudentTable";
@@ -343,10 +344,12 @@ const ResponsiveLayout: React.FC = () => {
       // Two screens behind one idea. A Master Trainer sees the trainers who
       // report to them and fills reports in; an admin sees every trainer in
       // the programme and, more usefully, which reports are missing.
+      // Physical centres are reported per trainer; online and hybrid centres
+      // per centre, on the Online Classes Report. Both live in this module.
       case "WeeklyEvaluations":
-        return <MyTrainers />;
+        return <MEHub physical={<MyTrainers />} />;
       case "WeeklyEvaluationOverview":
-        return <EvaluationOverview />;
+        return <MEHub physical={<EvaluationOverview />} />;
       // The weekly centre visit. Same two audiences as the M&E report: a
       // Master Trainer sees the centres they still have to reach, an admin
       // sees which ones nobody reached.

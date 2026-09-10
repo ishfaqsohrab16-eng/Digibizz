@@ -26,6 +26,8 @@ import {
   removeVisitMedia,
   saveVisit,
 } from "../../services/api";
+import { PrintButton } from "../print/PrintSheet";
+import VisitPrint from "./VisitPrint";
 
 /**
  * The Visit Report Proforma, for one centre.
@@ -512,6 +514,16 @@ const VisitForm: React.FC<Props> = ({ tb_id, centerId, weekKey, onBack }) => {
             )}
             Submit visit
           </button>
+        </div>
+      )}
+
+      {!editable && visit && visit.cv_status !== "draft" && (
+        <div className="mt-4 flex justify-center">
+          <PrintButton
+            render={() => (
+              <VisitPrint visit={visit} questions={questions} filedBy={filedBy} />
+            )}
+          />
         </div>
       )}
 

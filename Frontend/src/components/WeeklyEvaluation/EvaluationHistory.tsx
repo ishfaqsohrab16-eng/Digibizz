@@ -2,6 +2,8 @@ import React, { useEffect, useState } from "react";
 import { ArrowLeft, FileEdit, History, Loader2 } from "lucide-react";
 import { EvalCriterion, EvalReport, getEvaluationHistory } from "../../services/api";
 import ReportCard from "./ReportCard";
+import { PrintButton } from "../print/PrintSheet";
+import EvaluationPrint from "./EvaluationPrint";
 
 /**
  * Every report written about one trainer, newest week first.
@@ -92,6 +94,18 @@ const EvaluationHistory: React.FC<Props> = ({ t_id, trainerName, onBack }) => {
                 Draft — not yet submitted
               </p>
             )}
+            <div className="mb-1.5 flex justify-end">
+              <PrintButton
+                render={() => (
+                  <EvaluationPrint
+                    report={report}
+                    criteria={CRITERIA}
+                    trainerName={trainerName}
+                    filedBy={report.filed_by}
+                  />
+                )}
+              />
+            </div>
             <ReportCard report={report} criteria={CRITERIA} />
           </div>
         ))}

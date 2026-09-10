@@ -4538,6 +4538,8 @@ export interface EvalReport {
   we_reviewed_on: string | null;
   we_review_note: string | null;
   trainer?: { t_id: number; t_cnic: string; user?: { user_name: string } };
+  /** Who filed it, by name - for the printed report's signature line. */
+  filed_by?: string | null;
 }
 
 export interface EvalTrainerRow {
@@ -4653,6 +4655,7 @@ export const getEvaluation = async (we_id: number) => {
     week: EvalWeek;
     editable: boolean;
     reviewable: boolean;
+    filed_by: string | null;
   };
 };
 
@@ -4960,4 +4963,149 @@ export const reviewVisit = async (
 export const getVisitsPending = async () => {
   const response = await axios.get(`${API_URL}/center-visits/pending`, evalAuth());
   return response.data as { success: boolean; pending: number; week?: EvalWeek };
+};
+
+// ---------------------------------------------------------------------------
+// Online Classes Report - the M&E report for online and hybrid centres.
+// One report per centre per week, filed by whichever Master Trainer starts it.
+// ---------------------------------------------------------------------------
+
+export interface OnlineQuestion {
+  key: string;
+  label: string;
+  kind: "text" | "yesno";
+  hint?: string;
+}
+
+export type OnlineAnswers = Record<string, string | null>;
+
+export interface OnlineAttendanceDay {
+  P: number;
+  A: number;
+  L: number;
+  /** False when no register was taken that day - not the same as nobody came. */
+  marked: boolean;
+}
+
+export interface OnlineCourseAttendance {
+  course_id: number;
+  course_name: string;
+  days: Record<string, OnlineAttendanceDay>;
+}
+
+export interface OnlineCenter {
+  center_id: number;
+  center_name: string;
+  medium: string;
+  dates: { start: string; end: string } | null;
+  courses: Array<{ course_id: number; course_name: string }>;
+}
+
+export interface OnlineClassReport {
+  ocr_id: number;
+  mt_id: number;
+  ocr_center_id: number;
+  ocr_center_name: string;
+  ocr_medium: string | null;
+  tb_id: number;
+  ocr_week_key: string;
+  ocr_week_start: string;
+  ocr_week_end: string;
+  ocr_answers: OnlineAnswers;
+  /** Snapshotted on submission; null on a draft. */
+  ocr_attendance: OnlineCourseAttendance[] | null;
+  ocr_remarks: string | null;
+  ocr_status: "draft" | "submitted" | "reviewed";
+  ocr_submitted_on: string | null;
+  ocr_reviewed_by_name: string | null;
+  ocr_reviewed_on: string | null;
+  ocr_review_note: string | null;
+}
+
+export interface OnlineReportRow {
+  center_id: number;
+  center_name: string;
+  medium: string;
+  courses: string[];
+  status: "missing" | "draft" | "submitted" | "reviewed";
+  /** Null when there is nothing this viewer may open - including a colleague's draft. */
+  ocr_id: number | null;
+  filed_by: string | null;
+  mine: boolean;
+  submitted_on: string | null;
+  reviewed_by: string | null;
+}
+
+/** Every online and hybrid centre for one week, and where each report stands. */
+export const getOnlineReports = async (tb_id: number, week?: string) => {
+  const response = await axios.get(`${API_URL}/online-class-reports`, {
+    ...evalAuth(),
+    params: { tb_id, ...(week ? { week } : {}) },
+  });
+  return response.data as {
+    success: boolean;
+    week: EvalWeek;
+    weeks: EvalWeek[];
+    chased: boolean;
+    startWeek: string;
+    isMasterTrainer: boolean;
+    rows: OnlineReportRow[];
+    summary: { centers: number; submitted: number; reviewed: number; draft: number; missing: number };
+  };
+};
+
+/** The form for one centre and one week, with the register's counts. */
+export const prepareOnlineReport = async (tb_id: number, center_id: number, week?: string) => {
+  const response = await axios.get(`${API_URL}/online-class-reports/prepare`, {
+    ...evalAuth(),
+    params: { tb_id, center_id, ...(week ? { week } : {}) },
+  });
+  return response.data as {
+    success: boolean;
+    center: OnlineCenter;
+    week: EvalWeek;
+    questions: OnlineQuestion[];
+    attendance: OnlineCourseAttendance[];
+    report: OnlineClassReport | null;
+    filed_by: string | null;
+    editable: boolean;
+    claimed: boolean;
+  };
+};
+
+export const saveOnlineReport = async (payload: {
+  tb_id: number;
+  center_id: number;
+  week_key: string;
+  answers: OnlineAnswers;
+  remarks: string;
+  status: "draft" | "submitted";
+}) => {
+  const response = await axios.post(`${API_URL}/online-class-reports`, payload, evalAuth());
+  return response.data as { success: boolean; message: string; report: OnlineClassReport };
+};
+
+export const getOnlineReport = async (ocr_id: number) => {
+  const response = await axios.get(`${API_URL}/online-class-reports/${ocr_id}`, evalAuth());
+  return response.data as {
+    success: boolean;
+    report: OnlineClassReport;
+    questions: OnlineQuestion[];
+    attendance: OnlineCourseAttendance[];
+    filed_by: string | null;
+    week: EvalWeek | null;
+    reviewable: boolean;
+  };
+};
+
+export const reviewOnlineReport = async (
+  ocr_id: number,
+  options: { reviewed?: boolean; note?: string } = {}
+) => {
+  const response = await axios.post(
+    `${API_URL}/online-class-reports/${ocr_id}/review`,
+    { reviewed: options.reviewed !== false, note: options.note ?? null },
+    evalAuth()
+  );
+  return response.data as { success: boolean; message: string; report: OnlineClassReport };
 };

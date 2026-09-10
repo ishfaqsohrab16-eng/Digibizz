@@ -2,6 +2,43 @@ const { Op } = require("sequelize");
 const TrainerCenterAllocation = require("../models/trainersCenterAllocationModel");
 const CentersDates = require("../models/centersDatesModel");
 const { weekOf, isoDate, recentWeeks } = require("./evaluationWeek");
+const Center = require("../models/center");
+const { isOnlineMedium } = require("./centerMedium");
+
+/**
+ * Only the allocations at PHYSICAL centres.
+ *
+ * The per-trainer M&E report is for classes a Master Trainer can walk into.
+ * Online and hybrid centres are reported once per CENTRE instead, on the
+ * Online Classes Report (utils/onlineReportScope.js). So a trainer who teaches
+ * only online classes is not owed a trainer report at all, and one who teaches
+ * both is reported on for their physical classes alone. Without this an
+ * online centre would be reported twice, by two different forms.
+ *
+ * Applied everywhere the M&E module reads allocations - the list, the form,
+ * the overview and the reminders - so they all agree about who is owed a
+ * report. A centre whose medium cannot be found is kept: physical is the
+ * default, and dropping a real class over a missing row is the worse mistake.
+ */
+const physicalOnly = async (rows) => {
+  const list = rows || [];
+  const ids = [...new Set(list.map((row) => Number(row.center_id)))];
+  if (ids.length === 0) return list;
+
+  const centers = await Center.findAll({
+    where: { center_id: { [Op.in]: ids } },
+    attributes: ["center_id", "center_medium"],
+    raw: true,
+  });
+
+  const online = new Set(
+    centers
+      .filter((center) => isOnlineMedium(center.center_medium))
+      .map((center) => Number(center.center_id))
+  );
+
+  return list.filter((row) => !online.has(Number(row.center_id)));
+};
 
 /**
  * Who a Master Trainer reports on, and over which weeks.
@@ -43,7 +80,7 @@ const trainersForCourse = async (courseId, tb_id) => {
   });
 
   const byTrainer = new Map();
-  for (const row of rows) {
+  for (const row of await physicalOnly(rows)) {
     if (!byTrainer.has(row.t_id)) byTrainer.set(row.t_id, []);
     byTrainer.get(row.t_id).push({
       center_id: Number(row.center_id),
@@ -65,7 +102,7 @@ const classesInBatch = async (t_id, tb_id) => {
     raw: true,
   });
 
-  return rows.map((row) => ({
+  return (await physicalOnly(rows)).map((row) => ({
     center_id: Number(row.center_id),
     course_id: Number(row.course_id),
     tb_id: Number(row.tb_id),
@@ -183,6 +220,7 @@ const isInWindow = (week, window) => {
 };
 
 module.exports = {
+  physicalOnly,
   trainersForCourse,
   classesInBatch,
   teachingWindow,

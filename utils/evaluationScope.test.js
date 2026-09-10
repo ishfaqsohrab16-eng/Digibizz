@@ -18,6 +18,7 @@ const stub = (request, exports) => {
 
 stub("../models/trainersCenterAllocationModel", {});
 stub("../models/centersDatesModel", {});
+stub("../models/center", {});
 
 const { weeksInWindow, isInWindow, classesActiveIn } = require("./evaluationScope");
 const { weekOf } = require("./evaluationWeek");

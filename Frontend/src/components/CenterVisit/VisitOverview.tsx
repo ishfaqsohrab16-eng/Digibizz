@@ -29,6 +29,8 @@ import {
 import { useBatch } from "../../context/BatchContext";
 import WeekPicker, { describeWeek } from "../WeeklyEvaluation/WeekPicker";
 import VisitReport from "./VisitReport";
+import { PrintButton } from "../print/PrintSheet";
+import VisitPrint from "./VisitPrint";
 
 /**
  * Every centre for one week, and how much of it has come in.
@@ -301,6 +303,18 @@ const VisitOverview: React.FC = () => {
           <ArrowLeft className="h-4 w-4" />
           Back to the week
         </button>
+
+        <div className="mb-3 flex justify-end">
+          <PrintButton
+            render={() => (
+              <VisitPrint
+                visit={open.visit}
+                questions={open.questions}
+                filedBy={open.filedBy}
+              />
+            )}
+          />
+        </div>
 
         <VisitReport
           visit={open.visit}

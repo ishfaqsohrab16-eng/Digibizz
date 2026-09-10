@@ -68,6 +68,7 @@ const quizRoutes = require("./routes/quizRouter");
 const dailyLectureReportRoutes = require("./routes/dailyLectureReport");
 const weeklyEvaluationRoutes = require("./routes/weeklyEvaluationRoutes");
 const centerVisitRoutes = require("./routes/centerVisitRoutes");
+const onlineClassReportRoutes = require("./routes/onlineClassReportRoutes");
 const dashboardRoutes = require("./routes/dashboardRoutes");
 const classAnnouncementsRoutes = require("./routes/classAnnouncementsRoutes");
 const ticketRoutes = require("./routes/ticketRoutes");
@@ -91,6 +92,7 @@ require("./models/emailOutboxModel");
 require("./models/classScheduleModel");
 require("./models/weeklyEvaluationModel");
 require("./models/centerVisitModel");
+require("./models/onlineClassReportModel");
 const app = express();
 
 // Security Middleware
@@ -249,6 +251,7 @@ app.use("/api/quiz", quizRoutes);
 app.use("/api/dailyLectureReport", dailyLectureReportRoutes);
 app.use("/api/weekly-evaluations", weeklyEvaluationRoutes);
 app.use("/api/center-visits", centerVisitRoutes);
+app.use("/api/online-class-reports", onlineClassReportRoutes);
 app.use("/api/dashboard", dashboardRoutes);
 app.use("/api/announcements", classAnnouncementsRoutes);
 app.use("/api/tickets", ticketRoutes);
