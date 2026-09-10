@@ -1,6 +1,7 @@
 const DailyLectureReport = require("../models/dailyLectureReport");
 const Trainer = require("../models/trainersModel");
 const TrainerCenterAllocation = require("../models/trainersCenterAllocationModel");
+const { distinctClasses } = require("../utils/trainerScope");
 const MasterTrainerModel = require("../models/masterTrainersModel");
 const User = require("../models/userModel");
 const Center = require("../models/center");
@@ -60,14 +61,7 @@ const createReport = async (req, res) => {
 
     // De-duplicated: the same class allocated twice must not produce two
     // identical reports for one lecture.
-    const classes = [];
-    const seen = new Set();
-    for (const allocation of allocations) {
-      const key = `${allocation.center_id}|${allocation.course_id}`;
-      if (seen.has(key)) continue;
-      seen.add(key);
-      classes.push(allocation);
-    }
+    const classes = distinctClasses(allocations);
 
     // Already-submitted classes are skipped rather than failing the whole
     // request: a trainer who added a center mid-batch, or whose first attempt

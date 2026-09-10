@@ -852,7 +852,12 @@ exports.getMasterTrainerDashoard = async (req, res) => {
       ],
     });
 
-    const totalCenters = trainerCenters.length;
+    // Centres, not allocation rows. Two trainers teaching this Master
+    // Trainer's course at one centre made it count twice, and so did a class
+    // allocated twice - the trainer count beside it already knew to do this.
+    const totalCenters = new Set(
+      trainerCenters.map((allocation) => allocation.center_id)
+    ).size;
     const uniqueTrainerIds = new Set(
       trainerCenters.map((allocation) => allocation.t_id)
     );

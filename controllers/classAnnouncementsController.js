@@ -1,6 +1,7 @@
 const ClassAnnouncements = require("../models/classAnnouncementsModel");
 const Trainer = require("../models/trainersModel");
 const TrainerCenterAllocation = require("../models/trainersCenterAllocationModel");
+const { distinctClasses } = require("../utils/trainerScope");
 const TrainingBatch = require("../models/trainingBatcheModel");
 const Course = require("../models/course");
 const Center = require("../models/center");
@@ -45,14 +46,8 @@ exports.createAnnouncement = async (req, res) => {
     }
 
     // De-duplicated so a class allocated twice does not show the same
-    // announcement twice.
-    const seen = new Set();
-    const classes = allocations.filter((allocation) => {
-      const key = `${allocation.center_id}|${allocation.course_id}`;
-      if (seen.has(key)) return false;
-      seen.add(key);
-      return true;
-    });
+    // announcement twice. See distinctClasses for why the table allows it.
+    const classes = distinctClasses(allocations);
 
     const addedOn = new Date().toISOString().split("T")[0];
 

@@ -8,6 +8,7 @@ const Course = require("../models/course");
 const TrainingBatch = require("../models/trainingBatcheModel");
 const Trainer = require("../models/trainersModel");
 const trainers_center_allocation = require("../models/trainersCenterAllocationModel");
+const { distinctClasses } = require("../utils/trainerScope");
 const User = require("../models/userModel");
 const Student = require("../models/studentModel");
 const AssignmentSubmission = require("../models/assignmentSubmissionModel");
@@ -117,6 +118,17 @@ exports.createAssignment = async (req, res) => {
       });
     }
 
+    /**
+     * One row per CLASS, not per allocation row.
+     *
+     * A class can be allocated to the same trainer twice - the table has no
+     * unique key on it - and this loop wrote one assignment per row it was
+     * handed. That is why setting one piece of work produced two identical
+     * entries in the list, and why deleting one removed both: they share an
+     * as_group_id, and deleting an assignment deletes the whole set.
+     */
+    const classes = distinctClasses(trainerAllocations);
+
     const as_attachment = req.file
       ? `/uploads/user-assignments/${req.file.filename}`
       : "";
@@ -130,7 +142,7 @@ exports.createAssignment = async (req, res) => {
       // into, so a rolled-back attempt left its rows in the array and the
       // response reported assignments that do not exist.
       const rows = [];
-      for (const allocation of trainerAllocations) {
+      for (const allocation of classes) {
         rows.push(
           await Assignment.create(
             {

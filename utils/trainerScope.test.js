@@ -11,6 +11,7 @@
  */
 const { Op } = require("sequelize");
 const {
+  distinctClasses,
   allocationScope,
   withAllocationScope,
   allocationCenterIds,
@@ -111,6 +112,32 @@ check("course ids are de-duplicated", allocationCourseIds([alloc(1, 10), alloc(2
 check("teachesClass accepts a real pair", teachesClass(twoClasses, 2, 20), true);
 check("teachesClass rejects a cross-product pair", teachesClass(twoClasses, 2, 10), false);
 check("teachesClass tolerates string ids from route params", teachesClass(twoClasses, "1", "10"), true);
+
+// One entry per CLASS, however many allocation rows say so.
+//
+// The table has no unique key, so the same pair can sit on it twice. Every
+// feature that writes a row per allocation then wrote two: assignments did,
+// and one piece of work became two entries in the list that deleted together.
+const twice = [alloc(1, 10), alloc(1, 10), alloc(2, 20)];
+check("a class allocated twice is one class", distinctClasses(twice).length, 2);
+check(
+  "and the first row is the one kept, so it carries a real id",
+  distinctClasses(twice),
+  (rows) => rows[0] === twice[0]
+);
+check("order is preserved", distinctClasses(twice), (rows) => rows[1] === twice[2]);
+check(
+  "two different classes are both kept",
+  distinctClasses([alloc(1, 10), alloc(1, 20)]).length,
+  2
+);
+check(
+  "one centre with two courses is two classes, not one",
+  distinctClasses([alloc(3, 10), alloc(3, 11)]).length,
+  2
+);
+check("nothing in, nothing out", distinctClasses([]).length, 0);
+check("and undefined does not throw", distinctClasses(undefined).length, 0);
 
 console.log(`\n${passed} passed, ${failed} failed`);
 process.exit(failed > 0 ? 1 : 0);

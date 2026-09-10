@@ -24,6 +24,41 @@ const Trainer = require("../models/trainersModel");
  * Both are avoided by asking for the pairs and nothing else.
  */
 
+/**
+ * One entry per class the trainer actually teaches.
+ *
+ * THE ALLOCATION TABLE HAS NO UNIQUE KEY, so the same (center, course) pair
+ * can appear on it more than once. Anything that writes a row PER ALLOCATION
+ * then writes it twice, and anything that counts allocations counts the class
+ * twice.
+ *
+ * That has already bitten three features. Announcements and daily lecture
+ * reports each grew their own copy of this loop after somebody reported
+ * seeing everything twice; assignments did not get one, and a trainer setting
+ * one piece of work got two identical rows in the list - which then deleted
+ * together, because deleting an assignment removes the whole set it was
+ * created with.
+ *
+ * So it lives here now, and the next feature that fans out over allocations
+ * has something to reach for.
+ *
+ * Order is preserved and the FIRST of each pair is kept, so the row a caller
+ * gets is a real allocation with its own id, not a synthesised one.
+ */
+const distinctClasses = (allocations) => {
+  const seen = new Set();
+  const classes = [];
+
+  for (const allocation of allocations || []) {
+    const key = `${allocation.center_id}|${allocation.course_id}`;
+    if (seen.has(key)) continue;
+    seen.add(key);
+    classes.push(allocation);
+  }
+
+  return classes;
+};
+
 /** Allocations for one trainer in one batch, by their user id. */
 const getTrainerAllocations = async (user_id, tb_id) => {
   const trainer = await Trainer.findOne({ where: { user_id } });
@@ -138,6 +173,7 @@ const allocationSqlScope = (allocations, alias = "s") => {
 };
 
 module.exports = {
+  distinctClasses,
   getTrainerAllocations,
   allocationSqlScope,
   allocationScope,
